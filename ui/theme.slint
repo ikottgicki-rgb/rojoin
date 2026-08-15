@@ -1,0 +1,96 @@
+// RoJoin v4 design tokens.
+//
+// Rules this file encodes:
+//   - Monochrome base. The ONE accent (#4C8DFF) is reserved for *state*:
+//     presence, unread, selection, primary action. Never decoration.
+//   - Flat. No gradients. Radius is a token and defaults to 0, carrying the
+//     v2/v3 discipline forward while staying one line away from soft corners.
+//   - No hardcoded colours anywhere else in the codebase. If a screen needs a
+//     value that is not here, the token set is wrong — extend it here.
+//
+// Naming: underscores only. Slint treats `a-b` as subtraction in enough
+// contexts that hyphenated token names cost more than they are worth.
+
+export global Theme {
+    in-out property <bool> dark: true;
+
+    // ---- Surfaces: deepest to highest elevation -------------------------
+    out property <color> bg_0: root.dark ? #0A0A0B : #FFFFFF;  // window
+    out property <color> bg_1: root.dark ? #101012 : #F7F7F8;
+    out property <color> bg_2: root.dark ? #17171A : #F0F0F2;  // cards
+    out property <color> bg_3: root.dark ? #1F1F23 : #E7E7EA;  // hover
+    out property <color> bg_4: root.dark ? #2A2A30 : #DADADE;  // pressed
+
+    // ---- Lines ----------------------------------------------------------
+    out property <color> line: root.dark ? #2E2E34 : #DFDFE3;
+    out property <color> line_strong: root.dark ? #3D3D45 : #C4C4CB;
+
+    // ---- Text: three levels, no more --------------------------------------
+    out property <color> text: root.dark ? #F2F2F3 : #16161A;
+    out property <color> text_dim: root.dark ? #A0A0A8 : #5A5A64;
+    out property <color> text_mute: root.dark ? #6E6E78 : #8A8A94;
+
+    // ---- The one accent --------------------------------------------------
+    out property <color> accent: #4C8DFF;
+    out property <color> accent_hover: #6BA0FF;
+    out property <color> accent_press: #3A78E6;
+    out property <color> accent_soft: root.dark ? #4C8DFF26 : #4C8DFF1F;
+    out property <color> on_accent: #FFFFFF;
+
+    // ---- Status ----------------------------------------------------------
+    // Deliberately desaturated so they never out-shout the accent.
+    out property <color> danger: #E5484D;
+    out property <color> warn: #E0A82E;
+    out property <color> ok: #3DAA6E;
+
+    // ---- Shape -----------------------------------------------------------
+    out property <length> radius: 0px;
+    out property <length> radius_pill: 999px;
+    out property <length> hairline: 1px;
+}
+
+export global Space {
+    out property <length> xxs: 2px;
+    out property <length> xs: 4px;
+    out property <length> sm: 8px;
+    out property <length> md: 12px;
+    out property <length> lg: 16px;
+    out property <length> xl: 24px;
+    out property <length> xxl: 32px;
+    out property <length> huge: 48px;
+}
+
+export global Type {
+    // A 7-step scale. Anything outside it is a mistake, not a design choice.
+    out property <length> micro: 10px;
+    out property <length> caption: 11px;
+    out property <length> small: 12px;
+    out property <length> body: 13px;
+    out property <length> lead: 15px;
+    out property <length> title: 19px;
+    out property <length> display: 26px;
+
+    out property <int> w_regular: 400;
+    out property <int> w_medium: 500;
+    out property <int> w_bold: 700;
+}
+
+export global Motion {
+    out property <duration> instant: 90ms;
+    out property <duration> fast: 140ms;
+    out property <duration> normal: 200ms;
+    out property <duration> slow: 320ms;
+    out property <easing> ease: ease-in-out;
+}
+
+export global Layout {
+    out property <length> sidebar_w: 208px;
+    out property <length> topbar_h: 52px;
+    out property <length> row_h: 44px;
+    out property <length> content_max: 1400px;
+
+    // Responsive grid: Slint has no grid-span, so every grid computes its own
+    // column count from available width. One helper, used everywhere.
+    out property <length> tile_min: 168px;
+    out property <length> tile_gap: 12px;
+}

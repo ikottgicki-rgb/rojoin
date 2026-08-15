@@ -1,0 +1,248 @@
+//! The HTTP client every Roblox call goes through.
+//!
+//! Everything Roblox-specific and annoying lives here so the endpoint modules
+//! stay boring:
+//!   * the `.ROBLOSECURITY` cookie header,
+//!   * the CSRF dance (403 + `x-csrf-token`, retry once),
+//!   * backoff on 429 and 5xx,
+//!   * mapping a 401 to `Error::Expired` so the UI can raise a sign-in banner
+//!     instead of a toast.
+//!
+//! Rate limiting is the defining constraint. v2 got the *account* throttled by
+//! resolving usernames on demand, which surfaced as friends rendering as
+//! "User 12345" and, worse, as friends vanishing when a throttled page was
+//! cached as a complete list. Batch, cache, and back off — always.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde::de::DeserializeOwned;
+use tokio::sync::RwLock;
+
+use crate::{Error, Result, CSRF_HEADER, USER_AGENT};
+
+/// Retry schedule for 429/5xx. Deliberately patient — being slow beats being
+/// throttled, because a throttle affects the user's whole account, not just us.
+const BACKOFF: [Duration; 4] = [
+    Duration::from_millis(400),
+    Duration::from_millis(1200),
+    Duration::from_millis(3000),
+    Duration::from_millis(7000),
+];
+
+#[derive(Clone)]
+pub struct Client {
+    http: reqwest::Client,
+    inner: Arc<Inner>,
+}
+
+struct Inner {
+    cookie: RwLock<Option<String>>,
+    csrf: RwLock<Option<String>>,
+}
+
+impl Client {
+    pub fn new() -> Result<Self> {
+        let http = reqwest::Client::builder()
+            .user_agent(USER_AGENT)
+            .timeout(Duration::from_secs(20))
+            .build()?;
+
+        Ok(Self {
+            http,
+            inner: Arc::new(Inner {
+                cookie: RwLock::new(None),
+                csrf: RwLock::new(None),
+            }),
+        })
+    }
+
+    /// Raw reqwest client, for the auth flow (which runs before any cookie
+    /// exists) and for image fetches.
+    pub fn raw(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    pub async fn set_cookie(&self, cookie: Option<String>) {
+        *self.inner.cookie.write().await = cookie;
+        // The CSRF token is bound to the session; a new cookie invalidates it.
+        *self.inner.csrf.write().await = None;
+    }
+
+    pub async fn has_cookie(&self) -> bool {
+        self.inner.cookie.read().await.is_some()
+    }
+
+    // --- verbs -------------------------------------------------------------
+
+    pub async fn get_json<T: DeserializeOwned>(&self, url: &str) -> Result<T> {
+        let bytes = self.send(Method::Get, url, None).await?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    pub async fn post_json<T: DeserializeOwned>(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+    ) -> Result<T> {
+        let bytes = self.send(Method::Post, url, Some(body.clone())).await?;
+        // Some Roblox write endpoints answer 200 with an empty body.
+        if bytes.is_empty() {
+            return Ok(serde_json::from_str("null")?);
+        }
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    /// A write with no meaningful response — join group, accept friend, etc.
+    pub async fn post_action(&self, url: &str) -> Result<()> {
+        self.send(Method::Post, url, Some(serde_json::json!({})))
+            .await
+            .map(|_| ())
+    }
+
+    pub async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        let resp = self.http.get(url).send().await?;
+        if !resp.status().is_success() {
+            return Err(Error::Api(format!("{} for {url}", resp.status())));
+        }
+        Ok(resp.bytes().await?.to_vec())
+    }
+
+    // --- the actual request loop -------------------------------------------
+
+    async fn send(
+        &self,
+        method: Method,
+        url: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<Vec<u8>> {
+        let mut attempt = 0usize;
+
+        loop {
+            let resp = self.build(method, url, body.as_ref()).await?.send().await?;
+            let status = resp.status();
+
+            // CSRF: Roblox rejects the first write and hands back the token.
+            if status == reqwest::StatusCode::FORBIDDEN {
+                let fresh = resp
+                    .headers()
+                    .get(CSRF_HEADER)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned);
+
+                if let Some(token) = fresh {
+                    let had_one = self.inner.csrf.read().await.is_some();
+                    *self.inner.csrf.write().await = Some(token);
+                    // Retry once with the new token. If we already had a token
+                    // and still got 403, retrying again would loop forever.
+                    if !had_one || attempt == 0 {
+                        attempt += 1;
+                        continue;
+                    }
+                }
+                return Err(Error::Api("forbidden".into()));
+            }
+
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(Error::Expired);
+            }
+
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+                if let Some(wait) = BACKOFF.get(attempt) {
+                    tracing::warn!(%status, url, attempt, "backing off");
+                    tokio::time::sleep(*wait).await;
+                    attempt += 1;
+                    continue;
+                }
+                return Err(if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    Error::RateLimited
+                } else {
+                    Error::Api(format!("{status} for {url}"))
+                });
+            }
+
+            if !status.is_success() {
+                let text = resp.text().await.unwrap_or_default();
+                return Err(Error::Api(format!("{status}: {}", first_message(&text))));
+            }
+
+            return Ok(resp.bytes().await?.to_vec());
+        }
+    }
+
+    async fn build(
+        &self,
+        method: Method,
+        url: &str,
+        body: Option<&serde_json::Value>,
+    ) -> Result<reqwest::RequestBuilder> {
+        let mut req = match method {
+            Method::Get => self.http.get(url),
+            Method::Post => self.http.post(url),
+        };
+
+        if let Some(cookie) = self.inner.cookie.read().await.as_ref() {
+            req = req.header(reqwest::header::COOKIE, format!(".ROBLOSECURITY={cookie}"));
+        }
+        if let Some(token) = self.inner.csrf.read().await.as_ref() {
+            req = req.header(CSRF_HEADER, token);
+        }
+        if let Some(b) = body {
+            req = req.json(b);
+        }
+
+        Ok(req)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Method {
+    Get,
+    Post,
+}
+
+/// Roblox errors come back as `{"errors":[{"code":0,"message":"..."}]}`.
+/// Surfacing that message beats surfacing a status code.
+fn first_message(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.get("errors")?
+                .as_array()?
+                .first()?
+                .get("message")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| {
+            let trimmed = body.trim();
+            if trimmed.is_empty() {
+                "no detail".into()
+            } else {
+                trimmed.chars().take(160).collect()
+            }
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_roblox_error_message() {
+        let body = r#"{"errors":[{"code":9,"message":"The specified user does not exist!"}]}"#;
+        assert_eq!(first_message(body), "The specified user does not exist!");
+    }
+
+    #[test]
+    fn falls_back_to_raw_body() {
+        assert_eq!(first_message("upstream exploded"), "upstream exploded");
+        assert_eq!(first_message("   "), "no detail");
+    }
+
+    #[test]
+    fn truncates_a_huge_html_error_page() {
+        let body = "x".repeat(5000);
+        assert_eq!(first_message(&body).len(), 160);
+    }
+}

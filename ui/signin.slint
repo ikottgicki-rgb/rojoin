@@ -1,0 +1,244 @@
+import { Theme, Space, Type, Motion, Layout } from "theme.slint";
+import { Btn, IconBtn, Spinner, EmptyState } from "components.slint";
+
+// Sign-in via Roblox's cross-device quick-login.
+//
+// This is a real browser login — the user approves in their own signed-in
+// browser or the Roblox mobile app — but nothing is embedded in our process.
+// No WebKitGTK, no WebView2, and the binary stays a single small executable.
+
+export enum SignInPhase {
+    idle,
+    requesting,
+    waiting,
+    approved,
+    failed,
+}
+
+export component SignInScreen inherits Rectangle {
+    in property <SignInPhase> phase: SignInPhase.idle;
+    in property <string> code;
+    in property <image> qr;
+    in property <string> error;
+    in property <string> account_name;
+    in property <int> accounts_count: 0;
+
+    callback request_code();
+    callback open_browser();
+    callback cancel();
+    callback back();
+
+    background: Theme.bg_0;
+
+    VerticalLayout {
+        alignment: center;
+
+        HorizontalLayout {
+            alignment: center;
+
+            Rectangle {
+                width: 460px;
+                background: Theme.bg_1;
+                border-radius: Theme.radius;
+                border-width: Theme.hairline;
+                border-color: Theme.line;
+
+                VerticalLayout {
+                    padding: Space.xxl;
+                    spacing: Space.lg;
+                    alignment: start;
+
+                    // --- heading ---------------------------------------------
+                    VerticalLayout {
+                        spacing: Space.xs;
+                        Text {
+                            text: "ROJOIN";
+                            color: Theme.text;
+                            font-size: Type.lead;
+                            font-weight: Type.w_bold;
+                            letter-spacing: 2px;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: root.accounts_count > 0 ? "Add another account" : "Sign in to Roblox";
+                            color: Theme.text_dim;
+                            font-size: Type.small;
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    // --- idle ------------------------------------------------
+                    if root.phase == SignInPhase.idle: VerticalLayout {
+                        spacing: Space.lg;
+
+                        Text {
+                            text: "RoJoin signs you in through your own browser. Nothing is typed into this app, and no password is ever stored here.";
+                            color: Theme.text_mute;
+                            font-size: Type.small;
+                            wrap: word-wrap;
+                            horizontal-alignment: center;
+                        }
+
+                        HorizontalLayout {
+                            alignment: center;
+                            Btn {
+                                label: "Get a sign-in code";
+                                primary: true;
+                                pad_h: Space.xl;
+                                clicked => { root.request_code(); }
+                            }
+                        }
+                    }
+
+                    // --- requesting ------------------------------------------
+                    if root.phase == SignInPhase.requesting: VerticalLayout {
+                        spacing: Space.lg;
+                        HorizontalLayout {
+                            alignment: center;
+                            Spinner { size_px: 20px; }
+                        }
+                        Text {
+                            text: "Asking Roblox for a code…";
+                            color: Theme.text_mute;
+                            font-size: Type.small;
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    // --- waiting for approval --------------------------------
+                    if root.phase == SignInPhase.waiting: VerticalLayout {
+                        spacing: Space.lg;
+
+                        // The code, made big enough to read off the screen while
+                        // typing it on a phone.
+                        Rectangle {
+                            height: 76px;
+                            background: Theme.bg_2;
+                            border-radius: Theme.radius;
+                            border-width: Theme.hairline;
+                            border-color: Theme.line;
+                            Text {
+                                text: root.code;
+                                color: Theme.accent;
+                                font-size: 38px;
+                                font-weight: Type.w_bold;
+                                letter-spacing: 6px;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                        }
+
+                        if root.qr.width > 0: HorizontalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 132px;
+                                height: 132px;
+                                background: #FFFFFF;
+                                border-radius: Theme.radius;
+                                Image {
+                                    width: 116px;
+                                    height: 116px;
+                                    source: root.qr;
+                                    image-fit: contain;
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: Space.xs;
+                            Text {
+                                text: "Enter this code on Roblox, or scan the square with the Roblox app.";
+                                color: Theme.text_dim;
+                                font-size: Type.small;
+                                wrap: word-wrap;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: "The code expires in a few minutes.";
+                                color: Theme.text_mute;
+                                font-size: Type.caption;
+                                horizontal-alignment: center;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: Space.sm;
+                            Btn {
+                                label: "Open Roblox";
+                                primary: true;
+                                clicked => { root.open_browser(); }
+                            }
+                            Btn {
+                                label: "Cancel";
+                                clicked => { root.cancel(); }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: Space.sm;
+                            VerticalLayout {
+                                alignment: center;
+                                Spinner { size_px: 12px; }
+                            }
+                            Text {
+                                text: "Waiting for you to approve…";
+                                color: Theme.text_mute;
+                                font-size: Type.caption;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    // --- approved --------------------------------------------
+                    if root.phase == SignInPhase.approved: VerticalLayout {
+                        spacing: Space.md;
+                        Text {
+                            text: "✓";
+                            color: Theme.accent;
+                            font-size: 40px;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: "Signed in as " + root.account_name;
+                            color: Theme.text;
+                            font-size: Type.body;
+                            font-weight: Type.w_medium;
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    // --- failed ----------------------------------------------
+                    if root.phase == SignInPhase.failed: VerticalLayout {
+                        spacing: Space.lg;
+                        Text {
+                            text: root.error;
+                            color: Theme.text_dim;
+                            font-size: Type.small;
+                            wrap: word-wrap;
+                            horizontal-alignment: center;
+                        }
+                        HorizontalLayout {
+                            alignment: center;
+                            Btn {
+                                label: "Try again";
+                                primary: true;
+                                clicked => { root.request_code(); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.accounts_count > 0: HorizontalLayout {
+            alignment: center;
+            padding-top: Space.lg;
+            Btn {
+                label: "Back";
+                clicked => { root.back(); }
+            }
+        }
+    }
+}

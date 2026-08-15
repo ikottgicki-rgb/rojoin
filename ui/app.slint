@@ -1,0 +1,269 @@
+import { Theme, Space, Type, Motion, Layout } from "theme.slint";
+import { Btn, IconBtn, Segmented, Spinner, EmptyState } from "components.slint";
+import { GameTile, ChatConv, ChatMsg, WearItem, SubPlace, ServerRow, DetailItem, GameDetailData } from "types.slint";
+import { Sidebar, TopBar, NavEntry, ExpiredBanner } from "shell.slint";
+import { SignInScreen, SignInPhase } from "signin.slint";
+import { HomeScreen, PlayScreen } from "screens.slint";
+import { GameScreen } from "game.slint";
+
+export { Theme, SignInPhase }
+
+export component MainWindow inherits Window {
+    title: "RoJoin";
+    background: Theme.bg_0;
+    preferred-width: 1280px;
+    preferred-height: 820px;
+    min-width: 900px;
+    min-height: 580px;
+
+    // === session ===========================================================
+    in property <bool> signed_in: false;
+    in property <bool> session_expired: false;
+    in property <string> account_name;
+    in property <image> account_avatar;
+    in property <int> accounts_count: 0;
+    in property <string> app_version: "0.1.0";
+
+    // === sign-in ===========================================================
+    in property <SignInPhase> signin_phase: SignInPhase.idle;
+    in property <string> signin_code;
+    in property <image> signin_qr;
+    in property <string> signin_error;
+
+    callback signin_start();
+    callback signin_open_browser();
+    callback signin_cancel();
+    callback signin_back();
+
+    // === navigation ========================================================
+    in property <[NavEntry]> nav;
+    in-out property <int> section: 0;
+    /// 0 = the current section, 1 = a pushed game detail page.
+    in property <int> view_kind: 0;
+    in property <bool> can_back: false;
+    in property <bool> busy: false;
+    in-out property <string> top_query;
+
+    callback navigate(int);
+    callback nav_back();
+    callback open_settings();
+    callback open_account();
+    callback top_submit(string);
+    callback top_live_search(string);
+    callback dismiss_expired();
+
+    // === home ==============================================================
+    in property <string> greeting;
+    in property <string> date_label;
+    in property <bool> home_loading: false;
+    in property <GameTile> hero;
+    in property <bool> has_hero: false;
+    in property <[GameTile]> recent;
+    in property <[GameTile]> favorites;
+    in property <int> friends_online: 0;
+    in property <int> friend_requests: 0;
+
+    // === play / search =====================================================
+    in-out property <string> play_query;
+    in property <bool> play_searching: false;
+    in property <string> play_last_query;
+    in property <[GameTile]> play_games;
+    in property <[DetailItem]> play_players;
+    in property <[DetailItem]> play_groups;
+    in property <[string]> play_recents;
+
+    callback play_search(string);
+    callback clear_recents();
+
+    // === game detail =======================================================
+    in property <GameDetailData> game;
+    in property <bool> game_loading: false;
+    in property <bool> launching: false;
+    in property <[SubPlace]> sub_places;
+    in property <[ServerRow]> servers;
+    in property <bool> servers_loading: false;
+    in property <[DetailItem]> passes;
+    in property <[DetailItem]> badges;
+    in property <[GameTile]> related;
+    in-out property <int> game_tab: 0;
+    in-out property <int> server_sort: 0;
+
+    callback open_game(string);
+    callback play_game(string);
+    callback play_sub_place(string);
+    callback join_server(string);
+    callback toggle_favorite(string);
+    callback toggle_notify();
+    callback copy_link();
+    callback open_browser();
+    callback set_server_sort(int);
+    callback open_player(string);
+    callback open_group(string);
+    callback open_creator();
+
+    // --- signed out --------------------------------------------------------
+    if !root.signed_in: SignInScreen {
+        width: 100%;
+        height: 100%;
+        phase: root.signin_phase;
+        code: root.signin_code;
+        qr: root.signin_qr;
+        error: root.signin_error;
+        account_name: root.account_name;
+        accounts_count: root.accounts_count;
+        request_code => { root.signin_start(); }
+        open_browser => { root.signin_open_browser(); }
+        cancel => { root.signin_cancel(); }
+        back => { root.signin_back(); }
+    }
+
+    // --- signed in ---------------------------------------------------------
+    //
+    // The keyboard scope lives inside this branch rather than wrapping the
+    // whole window: Slint cannot resolve an id across a conditional subtree,
+    // so a FocusScope at the top level cannot reach `topbar` down here.
+    if root.signed_in: keys := FocusScope {
+        init => { self.focus(); }
+
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.nav_back();
+                return accept;
+            }
+            if (e.modifiers.control && e.text == "l") {
+                topbar.focus_search();
+                return accept;
+            }
+            // A focused TextInput consumes printable keys before this runs, so
+            // "/" never steals a keystroke while the user is typing.
+            if (e.text == "/") {
+                topbar.focus_search();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            spacing: 0;
+
+            if root.session_expired: ExpiredBanner {
+                sign_in => { root.signin_start(); }
+                dismiss => { root.dismiss_expired(); }
+            }
+
+            HorizontalLayout {
+                spacing: 0;
+
+                Sidebar {
+                    entries: root.nav;
+                    active: root.section;
+                    app_version: root.app_version;
+                    navigate(i) => { root.navigate(i); }
+                    open_settings => { root.open_settings(); }
+                }
+                Rectangle { width: Theme.hairline; background: Theme.line; }
+
+                VerticalLayout {
+                    spacing: 0;
+                    horizontal-stretch: 1;
+
+                    topbar := TopBar {
+                        can_back: root.can_back;
+                        busy: root.busy;
+                        account_name: root.account_name;
+                        account_avatar: root.account_avatar;
+                        query <=> root.top_query;
+                        back => { root.nav_back(); }
+                        submit(q) => { root.top_submit(q); }
+                        live_search(q) => { root.top_live_search(q); }
+                        open_account => { root.open_account(); }
+                    }
+                    Rectangle { height: Theme.hairline; background: Theme.line; }
+
+                    // --- content host ------------------------------------
+                    Rectangle {
+                        vertical-stretch: 1;
+                        clip: true;
+
+                        // Game detail is a pushed view: it covers whichever
+                        // section you were in, and Back returns you there.
+                        if root.view_kind == 1: GameScreen {
+                            width: 100%;
+                            height: 100%;
+                            game: root.game;
+                            loading: root.game_loading;
+                            launching: root.launching;
+                            sub_places: root.sub_places;
+                            servers: root.servers;
+                            servers_loading: root.servers_loading;
+                            passes: root.passes;
+                            badges: root.badges;
+                            related: root.related;
+                            tab <=> root.game_tab;
+                            server_sort <=> root.server_sort;
+                            play => { root.play_game(root.game.root_place_id); }
+                            play_sub_place(id) => { root.play_sub_place(id); }
+                            join_server(id) => { root.join_server(id); }
+                            toggle_favorite => { root.toggle_favorite(root.game.universe_id); }
+                            toggle_notify => { root.toggle_notify(); }
+                            copy_link => { root.copy_link(); }
+                            open_browser => { root.open_browser(); }
+                            set_server_sort(s) => { root.set_server_sort(s); }
+                            open_related(id) => { root.open_game(id); }
+                            favorite_related(id) => { root.toggle_favorite(id); }
+                            open_creator => { root.open_creator(); }
+                        }
+
+                        if root.view_kind == 0 && root.section == 0: HomeScreen {
+                            width: 100%;
+                            height: 100%;
+                            greeting: root.greeting;
+                            date_label: root.date_label;
+                            loading: root.home_loading;
+                            launching: root.launching;
+                            hero: root.hero;
+                            has_hero: root.has_hero;
+                            recent: root.recent;
+                            favorites: root.favorites;
+                            friends_online: root.friends_online;
+                            friend_requests: root.friend_requests;
+                            open(id) => { root.open_game(id); }
+                            play(id) => { root.play_game(id); }
+                            favorite(id) => { root.toggle_favorite(id); }
+                            play_hero => { root.play_game(root.hero.id); }
+                            go_friends => { root.navigate(2); }
+                            go_play => { root.navigate(1); }
+                        }
+
+                        if root.view_kind == 0 && root.section == 1: PlayScreen {
+                            width: 100%;
+                            height: 100%;
+                            query <=> root.play_query;
+                            searching: root.play_searching;
+                            last_query: root.play_last_query;
+                            games: root.play_games;
+                            players: root.play_players;
+                            groups: root.play_groups;
+                            recents: root.play_recents;
+                            search(q) => { root.play_search(q); }
+                            open(id) => { root.open_game(id); }
+                            play(id) => { root.play_game(id); }
+                            favorite(id) => { root.toggle_favorite(id); }
+                            open_player(id) => { root.open_player(id); }
+                            open_group(id) => { root.open_group(id); }
+                            clear_recents => { root.clear_recents(); }
+                        }
+
+                        // Sections still to be built out in later milestones.
+                        if root.view_kind == 0 && root.section > 1: EmptyState {
+                            width: 100%;
+                            height: 100%;
+                            title: root.nav[root.section].label;
+                            hint: "Coming in a later milestone.";
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

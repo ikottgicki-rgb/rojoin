@@ -1,0 +1,415 @@
+import { Theme, Space, Type, Motion, Layout } from "theme.slint";
+import { Thumb, Avatar, Btn, IconBtn, Chip, Badge, Skeleton, EmptyState, Spinner, MetaStat, Segmented } from "components.slint";
+import { GameGrid, GameListRow, ItemGrid } from "cards.slint";
+import { GameTile, DetailItem } from "types.slint";
+import { ScrollView } from "std-widgets.slint";
+
+component SectionHead inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> count_label;
+    spacing: Space.sm;
+
+    Text {
+        text: root.title;
+        color: Theme.text;
+        font-size: Type.title;
+        font-weight: Type.w_bold;
+    }
+    if root.count_label != "": VerticalLayout {
+        alignment: center;
+        Text {
+            text: root.count_label;
+            color: Theme.text_mute;
+            font-size: Type.small;
+        }
+    }
+    Rectangle { horizontal-stretch: 1; }
+}
+
+// ===========================================================================
+// Home
+//
+// Personal only. No algorithmic recommendation shelves: this app exists partly
+// to get away from Roblox pushing things at you, so Home shows what *you*
+// have played and pinned, and nothing it decided you should see.
+// ===========================================================================
+
+export component HomeScreen inherits Rectangle {
+    in property <string> greeting;
+    in property <string> date_label;
+    in property <bool> loading: false;
+    in property <bool> launching: false;
+
+    in property <GameTile> hero;
+    in property <bool> has_hero: false;
+    in property <[GameTile]> recent;
+    in property <[GameTile]> favorites;
+    in property <int> friends_online: 0;
+    in property <int> friend_requests: 0;
+
+    callback open(string);
+    callback play(string);
+    callback favorite(string);
+    callback play_hero();
+    callback go_friends();
+    callback go_play();
+
+    background: Theme.bg_0;
+
+    ScrollView {
+        VerticalLayout {
+            alignment: start;
+            padding: Space.xl;
+            spacing: Space.xl;
+
+            // --- greeting ------------------------------------------------
+            VerticalLayout {
+                spacing: Space.xxs;
+                Text {
+                    text: root.greeting;
+                    color: Theme.text;
+                    font-size: Type.display;
+                    font-weight: Type.w_bold;
+                }
+                Text {
+                    text: root.date_label;
+                    color: Theme.text_mute;
+                    font-size: Type.small;
+                }
+            }
+
+            // --- quick status strip ---------------------------------------
+            HorizontalLayout {
+                spacing: Space.md;
+                alignment: start;
+
+                Rectangle {
+                    width: 190px;
+                    height: 62px;
+                    background: fta.has-hover ? Theme.bg_3 : Theme.bg_2;
+                    border-radius: Theme.radius;
+                    border-width: Theme.hairline;
+                    border-color: Theme.line;
+                    animate background { duration: Motion.fast; easing: Motion.ease; }
+
+                    HorizontalLayout {
+                        padding: Space.md;
+                        spacing: Space.sm;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 1px;
+                            Text {
+                                text: root.friends_online + "";
+                                color: root.friends_online > 0 ? Theme.accent : Theme.text_dim;
+                                font-size: Type.title;
+                                font-weight: Type.w_bold;
+                            }
+                            Text {
+                                text: "friends online";
+                                color: Theme.text_mute;
+                                font-size: Type.caption;
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        if root.friend_requests > 0: VerticalLayout {
+                            alignment: center;
+                            Badge { count: root.friend_requests; }
+                        }
+                    }
+                    fta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.go_friends(); }
+                    }
+                }
+            }
+
+            // --- hero: jump back in ---------------------------------------
+            if root.has_hero: VerticalLayout {
+                spacing: Space.md;
+                SectionHead { title: "Jump back in"; }
+
+                Rectangle {
+                    height: 168px;
+                    background: Theme.bg_2;
+                    border-radius: Theme.radius;
+                    border-width: Theme.hairline;
+                    border-color: Theme.line;
+                    clip: true;
+
+                    HorizontalLayout {
+                        spacing: 0;
+                        Rectangle {
+                            width: 298px;
+                            Thumb { width: 100%; height: 100%; source: root.hero.thumb; radius: 0px; }
+                        }
+                        VerticalLayout {
+                            padding: Space.lg;
+                            spacing: Space.sm;
+                            alignment: center;
+
+                            Text {
+                                text: root.hero.name;
+                                color: Theme.text;
+                                font-size: Type.title;
+                                font-weight: Type.w_bold;
+                                overflow: elide;
+                                wrap: no-wrap;
+                            }
+                            Text {
+                                text: root.hero.creator;
+                                color: Theme.text_mute;
+                                font-size: Type.small;
+                            }
+                            HorizontalLayout {
+                                spacing: Space.lg;
+                                alignment: start;
+                                MetaStat { glyph: "●"; value: root.hero.playing; }
+                                if root.hero.rating >= 0: MetaStat {
+                                    glyph: "▲";
+                                    value: root.hero.rating + "%";
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: Space.sm;
+                                alignment: start;
+                                Rectangle {
+                                    width: 116px;
+                                    height: 34px;
+                                    background: root.launching ? Theme.bg_4
+                                                : hta.pressed ? Theme.accent_press
+                                                : hta.has-hover ? Theme.accent_hover : Theme.accent;
+                                    border-radius: Theme.radius;
+                                    animate background { duration: Motion.instant; easing: Motion.ease; }
+                                    Text {
+                                        text: root.launching ? "Launching…" : "Play";
+                                        color: root.launching ? Theme.text_dim : Theme.on_accent;
+                                        font-size: Type.body;
+                                        font-weight: Type.w_bold;
+                                        vertical-alignment: center;
+                                        horizontal-alignment: center;
+                                    }
+                                    hta := TouchArea {
+                                        enabled: !root.launching;
+                                        mouse-cursor: pointer;
+                                        clicked => { root.play_hero(); }
+                                    }
+                                }
+                                Btn {
+                                    label: "Details";
+                                    clicked => { root.open(root.hero.id); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- recent ----------------------------------------------------
+            if root.recent.length > 0 || root.loading: VerticalLayout {
+                spacing: Space.md;
+                SectionHead { title: "Recently played"; }
+                GameGrid {
+                    games: root.recent;
+                    loading: root.loading;
+                    open(id) => { root.open(id); }
+                    play(id) => { root.play(id); }
+                    favorite(id) => { root.favorite(id); }
+                }
+            }
+
+            // --- favourites -------------------------------------------------
+            if root.favorites.length > 0: VerticalLayout {
+                spacing: Space.md;
+                SectionHead {
+                    title: "Favourites";
+                    count_label: root.favorites.length + "";
+                }
+                GameGrid {
+                    games: root.favorites;
+                    open(id) => { root.open(id); }
+                    play(id) => { root.play(id); }
+                    favorite(id) => { root.favorite(id); }
+                }
+            }
+
+            // --- first run ---------------------------------------------------
+            if !root.loading && !root.has_hero && root.recent.length == 0 && root.favorites.length == 0:
+            Rectangle {
+                height: 230px;
+                VerticalLayout {
+                    alignment: center;
+                    spacing: Space.lg;
+                    EmptyState {
+                        title: "Nothing played yet";
+                        hint: "Find a game and it will show up here.";
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        Btn {
+                            label: "Find something to play";
+                            primary: true;
+                            pad_h: Space.xl;
+                            clicked => { root.go_play(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ===========================================================================
+// Play — search
+// ===========================================================================
+
+export component PlayScreen inherits Rectangle {
+    in-out property <string> query;
+    in property <bool> searching: false;
+    in property <string> last_query;
+
+    in property <[GameTile]> games;
+    in property <[DetailItem]> players;
+    in property <[DetailItem]> groups;
+    in property <[string]> recents;
+
+    callback search(string);
+    callback open(string);
+    callback play(string);
+    callback favorite(string);
+    callback open_player(string);
+    callback open_group(string);
+    callback clear_recents();
+
+    property <bool> has_results:
+        root.games.length > 0 || root.players.length > 0 || root.groups.length > 0;
+
+    background: Theme.bg_0;
+
+    ScrollView {
+        VerticalLayout {
+            alignment: start;
+            padding: Space.xl;
+            spacing: Space.xl;
+
+            // --- search field ------------------------------------------------
+            Rectangle {
+                height: 42px;
+                background: Theme.bg_2;
+                border-radius: Theme.radius;
+                border-width: Theme.hairline;
+                border-color: field.has-focus ? Theme.accent : Theme.line;
+                animate border-color { duration: Motion.fast; easing: Motion.ease; }
+
+                HorizontalLayout {
+                    padding-left: Space.md;
+                    padding-right: Space.sm;
+                    spacing: Space.sm;
+
+                    VerticalLayout {
+                        alignment: center;
+                        Text { text: "⌕"; color: Theme.text_mute; font-size: Type.title; }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        field := TextInput {
+                            width: 100%;
+                            height: 100%;
+                            text <=> root.query;
+                            color: Theme.text;
+                            font-size: Type.lead;
+                            vertical-alignment: center;
+                            single-line: true;
+                            accepted => { root.search(self.text); }
+                        }
+                        if root.query == "": Text {
+                            text: "Search games, people, groups — or paste a Roblox link";
+                            color: Theme.text_mute;
+                            font-size: Type.lead;
+                            vertical-alignment: center;
+                            height: 100%;
+                        }
+                    }
+                    if root.searching: VerticalLayout {
+                        alignment: center;
+                        Spinner { size_px: 16px; }
+                    }
+                }
+            }
+
+            // --- recent searches (idle state) ---------------------------------
+            if !root.has_results && !root.searching && root.last_query == "" && root.recents.length > 0:
+            VerticalLayout {
+                spacing: Space.md;
+                HorizontalLayout {
+                    spacing: Space.sm;
+                    Text {
+                        text: "Recent searches";
+                        color: Theme.text_dim;
+                        font-size: Type.small;
+                        font-weight: Type.w_medium;
+                        vertical-alignment: center;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    IconBtn { glyph: "×"; clicked => { root.clear_recents(); } }
+                }
+                HorizontalLayout {
+                    spacing: Space.sm;
+                    alignment: start;
+                    for r in root.recents: Chip {
+                        label: r;
+                        clicked => { root.query = r; root.search(r); }
+                    }
+                }
+            }
+
+            // --- initial state --------------------------------------------------
+            if !root.has_results && !root.searching && root.last_query == "" && root.recents.length == 0:
+            EmptyState {
+                height: 200px;
+                title: "Search Roblox";
+                hint: "Type a game name, a username, or paste a link to jump straight there.";
+            }
+
+            // --- no results ------------------------------------------------------
+            if !root.has_results && !root.searching && root.last_query != "": EmptyState {
+                height: 200px;
+                title: "No results for \"" + root.last_query + "\"";
+                hint: "Try a different spelling, or paste the game's link instead.";
+            }
+
+            // --- games -------------------------------------------------------------
+            if root.games.length > 0: VerticalLayout {
+                spacing: Space.md;
+                SectionHead { title: "Games"; count_label: root.games.length + ""; }
+                GameGrid {
+                    games: root.games;
+                    open(id) => { root.open(id); }
+                    play(id) => { root.play(id); }
+                    favorite(id) => { root.favorite(id); }
+                }
+            }
+
+            // --- players ------------------------------------------------------------
+            if root.players.length > 0: VerticalLayout {
+                spacing: Space.md;
+                SectionHead { title: "People"; count_label: root.players.length + ""; }
+                ItemGrid {
+                    items: root.players;
+                    tile_min: 132px;
+                    open(id, kind) => { root.open_player(id); }
+                }
+            }
+
+            // --- groups --------------------------------------------------------------
+            if root.groups.length > 0: VerticalLayout {
+                spacing: Space.md;
+                SectionHead { title: "Groups"; count_label: root.groups.length + ""; }
+                ItemGrid {
+                    items: root.groups;
+                    tile_min: 132px;
+                    open(id, kind) => { root.open_group(id); }
+                }
+            }
+        }
+    }
+}

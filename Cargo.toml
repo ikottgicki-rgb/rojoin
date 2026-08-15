@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/roblox",
+    "crates/store",
+    "crates/launcher",
+    "crates/app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+
+[workspace.dependencies]
+rojoin-roblox = { path = "crates/roblox" }
+rojoin-store = { path = "crates/store" }
+rojoin-launcher = { path = "crates/launcher" }
+
+slint = { version = "1.17", default-features = false, features = [
+    "compat-1-2",
+    "renderer-femtovg",
+    "backend-winit",
+    "std",
+] }
+slint-build = "1.17"
+
+# rustls, never native-tls: OpenSSL does not cross-compile cleanly to
+# x86_64-pc-windows-gnu, and a single self-contained .exe is a hard requirement.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "gzip",
+    "cookies",
+    "stream",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+directories = "6"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+# The release profile stays deliberately light. v2 taught us that lto + codegen-units=1
+# makes iteration painful for no user-visible benefit at this size.
+[profile.release]
+opt-level = 2
+debug = false
+strip = true
+panic = "abort"

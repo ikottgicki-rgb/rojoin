@@ -1,0 +1,36 @@
+[package]
+name = "rojoin-v4"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "RoJoin v4 — native Roblox client"
+
+[[bin]]
+name = "rojoin-v4"
+path = "src/main.rs"
+
+[dependencies]
+rojoin-roblox.workspace = true
+rojoin-store.workspace = true
+rojoin-launcher.workspace = true
+
+slint.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+image.workspace = true
+chrono.workspace = true
+webbrowser = "1"
+
+# Cookies live in the OS keyring, never in config.json. The backend is
+# cfg-gated so the Windows cross-build never tries to link secret-service.
+[target.'cfg(unix)'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service"] }
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[build-dependencies]
+slint-build.workspace = true

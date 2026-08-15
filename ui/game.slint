@@ -1,0 +1,542 @@
+import { Theme, Space, Type, Motion, Layout } from "theme.slint";
+import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, MetaStat, Skeleton, EmptyState, Spinner } from "components.slint";
+import { GameGrid, ItemGrid } from "cards.slint";
+import { GameTile, GameDetailData, SubPlace, ServerRow, DetailItem } from "types.slint";
+import { ScrollView } from "std-widgets.slint";
+
+// Game detail.
+//
+// The sub-place section is deliberately placed directly under the action bar
+// rather than buried in a tab. It is the reason this app exists for a lot of
+// games: launching the root place drops you in a lobby, and the thing you
+// actually wanted is a place down the list.
+
+component MetaCell inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+    spacing: 2px;
+
+    Text {
+        text: root.label;
+        color: Theme.text_mute;
+        font-size: Type.micro;
+    }
+    Text {
+        text: root.value;
+        color: Theme.text;
+        font-size: Type.small;
+        font-weight: Type.w_medium;
+        overflow: elide;
+        wrap: no-wrap;
+    }
+}
+
+component SubPlaceRow inherits Rectangle {
+    in property <SubPlace> place;
+    callback play();
+
+    height: 52px;
+    background: ta.has-hover ? Theme.bg_3 : Theme.bg_2;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: ta.has-hover ? Theme.accent : Theme.line;
+    animate background, border-color { duration: Motion.fast; easing: Motion.ease; }
+
+    HorizontalLayout {
+        padding-left: Space.md;
+        padding-right: Space.sm;
+        spacing: Space.md;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 1px;
+            Text {
+                text: root.place.name;
+                color: Theme.text;
+                font-size: Type.body;
+                font-weight: Type.w_medium;
+                overflow: elide;
+                wrap: no-wrap;
+            }
+            if root.place.description != "": Text {
+                text: root.place.description;
+                color: Theme.text_mute;
+                font-size: Type.caption;
+                overflow: elide;
+                wrap: no-wrap;
+            }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 62px;
+                height: 28px;
+                background: pta.pressed ? Theme.accent_press
+                            : pta.has-hover ? Theme.accent_hover : Theme.accent;
+                border-radius: Theme.radius;
+                animate background { duration: Motion.instant; easing: Motion.ease; }
+                Text {
+                    text: "Join";
+                    color: Theme.on_accent;
+                    font-size: Type.small;
+                    font-weight: Type.w_bold;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+                pta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.play(); }
+                }
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.play(); }
+    }
+}
+
+component ServerCard inherits Rectangle {
+    in property <ServerRow> server;
+    callback join();
+
+    height: 76px;
+    background: Theme.bg_2;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: ta.has-hover ? Theme.line_strong : Theme.line;
+    animate border-color { duration: Motion.fast; easing: Motion.ease; }
+
+    VerticalLayout {
+        padding: Space.sm;
+        spacing: Space.sm;
+
+        HorizontalLayout {
+            spacing: Space.sm;
+
+            // Overlapping head shots of who is already in there.
+            Rectangle {
+                width: 4 * 18px;
+                height: 24px;
+                if root.server.p0.width > 0: Avatar { x: 0; source: root.server.p0; size_px: 24px; }
+                if root.server.p1.width > 0: Avatar { x: 18px; source: root.server.p1; size_px: 24px; }
+                if root.server.p2.width > 0: Avatar { x: 36px; source: root.server.p2; size_px: 24px; }
+                if root.server.p3.width > 0: Avatar { x: 54px; source: root.server.p3; size_px: 24px; }
+            }
+
+            if root.server.more > 0: VerticalLayout {
+                alignment: center;
+                Text {
+                    text: "+" + root.server.more;
+                    color: Theme.text_mute;
+                    font-size: Type.caption;
+                }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: root.server.label;
+                    color: Theme.text_dim;
+                    font-size: Type.small;
+                    font-weight: Type.w_medium;
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 54px;
+                    height: 26px;
+                    background: jta.pressed ? Theme.accent_press
+                                : jta.has-hover ? Theme.accent_hover : Theme.accent;
+                    border-radius: Theme.radius;
+                    animate background { duration: Motion.instant; easing: Motion.ease; }
+                    Text {
+                        text: "Join";
+                        color: Theme.on_accent;
+                        font-size: Type.caption;
+                        font-weight: Type.w_bold;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                    jta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.join(); }
+                    }
+                }
+            }
+        }
+
+        // Capacity bar. Monochrome until nearly full, then accent — a signal,
+        // not decoration.
+        Rectangle {
+            height: 3px;
+            background: Theme.bg_4;
+            Rectangle {
+                x: 0;
+                width: parent.width * root.server.fill;
+                height: 100%;
+                background: root.server.fill > 0.85 ? Theme.accent : Theme.text_mute;
+            }
+        }
+    }
+
+    ta := TouchArea { mouse-cursor: pointer; }
+}
+
+export component GameScreen inherits Rectangle {
+    in property <GameDetailData> game;
+    in property <bool> loading: false;
+    in property <bool> launching: false;
+
+    in property <[SubPlace]> sub_places;
+    in property <[ServerRow]> servers;
+    in property <bool> servers_loading: false;
+    in property <[DetailItem]> passes;
+    in property <[DetailItem]> badges;
+    in property <[GameTile]> related;
+
+    in-out property <int> tab: 0;          // 0 About · 1 Servers
+    in-out property <int> server_sort: 0;  // 0 Default · 1 Fullest · 2 Emptiest
+
+    callback play();
+    callback play_sub_place(string);
+    callback join_server(string);
+    callback toggle_favorite();
+    callback toggle_notify();
+    callback copy_link();
+    callback open_browser();
+    callback set_server_sort(int);
+    callback open_related(string);
+    callback favorite_related(string);
+    callback open_creator();
+
+    background: Theme.bg_0;
+
+    if root.loading: VerticalLayout {
+        padding: Space.xl;
+        spacing: Space.lg;
+        alignment: start;
+        Skeleton { height: 190px; }
+        Skeleton { height: 34px; width: 320px; }
+        Skeleton { height: 120px; }
+    }
+
+    if !root.loading: ScrollView {
+        VerticalLayout {
+            alignment: start;
+            spacing: 0;
+
+            // --- hero -------------------------------------------------------
+            Rectangle {
+                height: 210px;
+                clip: true;
+                Thumb { width: 100%; height: 100%; source: root.game.hero; radius: 0px; }
+                Rectangle {
+                    width: 100%;
+                    height: 100%;
+                    background: @linear-gradient(180deg, #00000033 0%, #000000E6 100%);
+                }
+            }
+
+            // --- identity + actions ------------------------------------------
+            Rectangle {
+                background: Theme.bg_1;
+                VerticalLayout {
+                    padding: Space.xl;
+                    spacing: Space.lg;
+
+                    HorizontalLayout {
+                        spacing: Space.lg;
+
+                        Thumb {
+                            width: 84px;
+                            height: 84px;
+                            source: root.game.icon;
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: Space.xs;
+
+                            Text {
+                                text: root.game.name;
+                                color: Theme.text;
+                                font-size: Type.display;
+                                font-weight: Type.w_bold;
+                                overflow: elide;
+                                wrap: no-wrap;
+                            }
+
+                            HorizontalLayout {
+                                spacing: Space.xs;
+                                alignment: start;
+                                Text {
+                                    text: "by";
+                                    color: Theme.text_mute;
+                                    font-size: Type.small;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle {
+                                    width: ctext.preferred-width;
+                                    height: ctext.preferred-height;
+                                    ctext := Text {
+                                        text: root.game.creator;
+                                        color: cta.has-hover ? Theme.accent : Theme.text_dim;
+                                        font-size: Type.small;
+                                        font-weight: Type.w_medium;
+                                        animate color { duration: Motion.fast; easing: Motion.ease; }
+                                    }
+                                    cta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.open_creator(); }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: Space.lg;
+                                alignment: start;
+                                MetaStat { glyph: "●"; value: root.game.playing + " playing"; }
+                                MetaStat { glyph: "◆"; value: root.game.visits + " visits"; }
+                                if root.game.rating >= 0: MetaStat {
+                                    glyph: "▲";
+                                    value: root.game.rating + "% rating";
+                                }
+                            }
+                        }
+
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+
+                    // --- action bar ---------------------------------------
+                    HorizontalLayout {
+                        spacing: Space.sm;
+                        alignment: start;
+
+                        Rectangle {
+                            width: 132px;
+                            height: 38px;
+                            background: root.launching ? Theme.bg_4
+                                        : bigta.pressed ? Theme.accent_press
+                                        : bigta.has-hover ? Theme.accent_hover : Theme.accent;
+                            border-radius: Theme.radius;
+                            animate background { duration: Motion.instant; easing: Motion.ease; }
+
+                            Text {
+                                text: root.launching ? "Launching…" : "Play";
+                                color: root.launching ? Theme.text_dim : Theme.on_accent;
+                                font-size: Type.lead;
+                                font-weight: Type.w_bold;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                            bigta := TouchArea {
+                                enabled: !root.launching;
+                                mouse-cursor: pointer;
+                                clicked => { root.play(); }
+                            }
+                        }
+
+                        Btn {
+                            label: root.game.favorited ? "★ Favourited" : "☆ Favourite";
+                            clicked => { root.toggle_favorite(); }
+                        }
+                        Btn {
+                            label: root.game.notify ? "◉ Notifying" : "○ Notify me";
+                            clicked => { root.toggle_notify(); }
+                        }
+                        IconBtn { glyph: "⧉"; clicked => { root.copy_link(); } }
+                        IconBtn { glyph: "↗"; clicked => { root.open_browser(); } }
+                    }
+                }
+            }
+            Rectangle { height: Theme.hairline; background: Theme.line; }
+
+            // --- sub-places (the headline feature) ---------------------------
+            if root.sub_places.length > 0: VerticalLayout {
+                padding: Space.xl;
+                padding-bottom: 0;
+                spacing: Space.md;
+
+                HorizontalLayout {
+                    spacing: Space.sm;
+                    Text {
+                        text: "Places in this game";
+                        color: Theme.text;
+                        font-size: Type.title;
+                        font-weight: Type.w_bold;
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: root.sub_places.length + "";
+                            color: Theme.text_mute;
+                            font-size: Type.small;
+                        }
+                    }
+                }
+                Text {
+                    text: "Join a specific place directly instead of starting in the main one.";
+                    color: Theme.text_mute;
+                    font-size: Type.small;
+                    wrap: word-wrap;
+                }
+
+                VerticalLayout {
+                    spacing: Space.sm;
+                    for sp in root.sub_places: SubPlaceRow {
+                        place: sp;
+                        play => { root.play_sub_place(sp.id); }
+                    }
+                }
+            }
+
+            // --- tabs --------------------------------------------------------
+            VerticalLayout {
+                padding: Space.xl;
+                spacing: Space.lg;
+                alignment: start;
+
+                HorizontalLayout {
+                    alignment: start;
+                    Segmented {
+                        options: ["About", "Servers"];
+                        current <=> root.tab;
+                    }
+                }
+
+                // --- About ---------------------------------------------------
+                if root.tab == 0: VerticalLayout {
+                    spacing: Space.lg;
+                    alignment: start;
+
+                    if root.game.description != "": Rectangle {
+                        background: Theme.bg_1;
+                        border-radius: Theme.radius;
+                        border-width: Theme.hairline;
+                        border-color: Theme.line;
+                        height: desc.preferred-height + Space.lg * 2;
+                        desc := Text {
+                            x: Space.lg;
+                            y: Space.lg;
+                            width: parent.width - Space.lg * 2;
+                            text: root.game.description;
+                            color: Theme.text_dim;
+                            font-size: Type.body;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    Rectangle {
+                        background: Theme.bg_1;
+                        border-radius: Theme.radius;
+                        border-width: Theme.hairline;
+                        border-color: Theme.line;
+                        height: 62px;
+                        HorizontalLayout {
+                            padding: Space.lg;
+                            spacing: Space.xxl;
+                            alignment: start;
+                            MetaCell { label: "Genre"; value: root.game.genre; }
+                            MetaCell { label: "Max players"; value: root.game.max_players; }
+                            MetaCell { label: "Created"; value: root.game.created; }
+                            MetaCell { label: "Updated"; value: root.game.updated; }
+                            MetaCell { label: "Favourites"; value: root.game.favorites; }
+                        }
+                    }
+
+                    if root.passes.length > 0: VerticalLayout {
+                        spacing: Space.md;
+                        Text {
+                            text: "Passes";
+                            color: Theme.text;
+                            font-size: Type.lead;
+                            font-weight: Type.w_bold;
+                        }
+                        ItemGrid { items: root.passes; }
+                    }
+
+                    if root.badges.length > 0: VerticalLayout {
+                        spacing: Space.md;
+                        Text {
+                            text: "Badges";
+                            color: Theme.text;
+                            font-size: Type.lead;
+                            font-weight: Type.w_bold;
+                        }
+                        ItemGrid { items: root.badges; }
+                    }
+
+                    if root.related.length > 0: VerticalLayout {
+                        spacing: Space.md;
+                        Text {
+                            text: "More like this";
+                            color: Theme.text;
+                            font-size: Type.lead;
+                            font-weight: Type.w_bold;
+                        }
+                        GameGrid {
+                            games: root.related;
+                            open(id) => { root.open_related(id); }
+                            play(id) => { root.open_related(id); }
+                            favorite(id) => { root.favorite_related(id); }
+                        }
+                    }
+                }
+
+                // --- Servers -------------------------------------------------
+                if root.tab == 1: VerticalLayout {
+                    spacing: Space.lg;
+                    alignment: start;
+
+                    HorizontalLayout {
+                        spacing: Space.sm;
+                        alignment: start;
+                        Chip {
+                            label: "Default";
+                            selected: root.server_sort == 0;
+                            clicked => { root.server_sort = 0; root.set_server_sort(0); }
+                        }
+                        Chip {
+                            label: "Fullest";
+                            selected: root.server_sort == 1;
+                            clicked => { root.server_sort = 1; root.set_server_sort(1); }
+                        }
+                        Chip {
+                            label: "Emptiest";
+                            selected: root.server_sort == 2;
+                            clicked => { root.server_sort = 2; root.set_server_sort(2); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        if root.servers_loading: VerticalLayout {
+                            alignment: center;
+                            Spinner { size_px: 14px; }
+                        }
+                    }
+
+                    if !root.servers_loading && root.servers.length == 0: EmptyState {
+                        height: 140px;
+                        title: "No public servers";
+                        hint: "Nobody is playing right now. Hit Play to start a fresh one.";
+                    }
+
+                    VerticalLayout {
+                        spacing: Space.sm;
+                        for s in root.servers: ServerCard {
+                            server: s;
+                            join => { root.join_server(s.id); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

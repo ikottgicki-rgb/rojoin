@@ -1,0 +1,335 @@
+import { Theme, Space, Type, Motion, Layout } from "theme.slint";
+import { Thumb, Avatar, MetaStat, Skeleton, EmptyState } from "components.slint";
+import { GameTile, DetailItem } from "types.slint";
+
+// Reusable game presentation. The responsive grid lives here because Slint has
+// no flow layout and no grid spans — every grid in the app computes its own
+// column count from available width and places children absolutely.
+
+export component GameCard inherits Rectangle {
+    in property <GameTile> game;
+    in property <bool> show_play: true;
+    callback clicked();
+    callback play();
+    callback fav_clicked();
+    callback context_menu(length, length);
+
+    background: ta.has-hover ? Theme.bg_3 : Theme.bg_2;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: ta.has-hover ? Theme.line_strong : Theme.line;
+    animate background, border-color { duration: Motion.fast; easing: Motion.ease; }
+    clip: true;
+
+    VerticalLayout {
+        spacing: 0;
+
+        Rectangle {
+            height: root.width * 9 / 16;
+            Thumb { width: 100%; height: 100%; source: root.game.thumb; }
+
+            if root.show_play: Rectangle {
+                width: 100%;
+                height: 100%;
+                background: #00000099;
+                opacity: ta.has-hover ? 1.0 : 0.0;
+                animate opacity { duration: Motion.fast; easing: Motion.ease; }
+
+                Rectangle {
+                    width: 76px;
+                    height: 30px;
+                    background: pta.pressed ? Theme.accent_press : Theme.accent;
+                    border-radius: Theme.radius;
+                    Text {
+                        text: "Play";
+                        color: Theme.on_accent;
+                        font-size: Type.body;
+                        font-weight: Type.w_bold;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                    pta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.play(); }
+                    }
+                }
+            }
+
+            Rectangle {
+                x: parent.width - self.width - Space.xs;
+                y: Space.xs;
+                width: 26px;
+                height: 26px;
+                background: #00000099;
+                border-radius: Theme.radius;
+                opacity: ta.has-hover || root.game.favorited ? 1.0 : 0.0;
+                animate opacity { duration: Motion.fast; easing: Motion.ease; }
+                Text {
+                    text: root.game.favorited ? "★" : "☆";
+                    color: root.game.favorited ? Theme.accent : #FFFFFF;
+                    font-size: Type.body;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.fav_clicked(); }
+                }
+            }
+        }
+
+        VerticalLayout {
+            padding: Space.sm;
+            spacing: 3px;
+
+            Text {
+                text: root.game.name;
+                color: Theme.text;
+                font-size: Type.body;
+                font-weight: Type.w_medium;
+                overflow: elide;
+                wrap: no-wrap;
+            }
+            Text {
+                text: root.game.creator;
+                color: Theme.text_mute;
+                font-size: Type.caption;
+                overflow: elide;
+                wrap: no-wrap;
+            }
+            HorizontalLayout {
+                spacing: Space.md;
+                MetaStat { glyph: "●"; value: root.game.playing; }
+                if root.game.rating >= 0: MetaStat {
+                    glyph: "▲";
+                    value: root.game.rating + "%";
+                }
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down) {
+                root.context_menu(
+                    self.absolute-position.x + self.mouse-x,
+                    self.absolute-position.y + self.mouse-y
+                );
+            }
+        }
+    }
+}
+
+/// Responsive game grid. Give it a width and it works out the rest.
+export component GameGrid inherits Rectangle {
+    in property <[GameTile]> games;
+    in property <bool> loading: false;
+    in property <int> skeleton_count: 8;
+    in property <length> tile_min: Layout.tile_min;
+
+    callback open(string);
+    callback play(string);
+    callback favorite(string);
+    callback context_menu(string, length, length);
+
+    property <int> cols: Math.max(1, Math.floor((self.width + Layout.tile_gap) / (root.tile_min + Layout.tile_gap)));
+    property <length> cell_w: (self.width - (root.cols - 1) * Layout.tile_gap) / root.cols;
+    property <length> cell_h: root.cell_w * 9 / 16 + 74px;
+    property <int> count: root.loading ? root.skeleton_count : root.games.length;
+    property <int> rows: Math.ceil(root.count / root.cols);
+
+    height: root.rows * root.cell_h + Math.max(0, root.rows - 1) * Layout.tile_gap;
+    vertical-stretch: 0;
+
+    if root.loading: Rectangle {
+        width: 100%;
+        height: 100%;
+        for s[i] in [0, 1, 2, 3, 4, 5, 6, 7]: Skeleton {
+            x: Math.mod(i, root.cols) * (root.cell_w + Layout.tile_gap);
+            y: Math.floor(i / root.cols) * (root.cell_h + Layout.tile_gap);
+            width: root.cell_w;
+            height: root.cell_h;
+        }
+    }
+
+    if !root.loading: Rectangle {
+        width: 100%;
+        height: 100%;
+        for g[i] in root.games: GameCard {
+            game: g;
+            x: Math.mod(i, root.cols) * (root.cell_w + Layout.tile_gap);
+            y: Math.floor(i / root.cols) * (root.cell_h + Layout.tile_gap);
+            width: root.cell_w;
+            height: root.cell_h;
+            clicked => { root.open(g.id); }
+            play => { root.play(g.id); }
+            fav_clicked => { root.favorite(g.id); }
+            context_menu(mx, my) => { root.context_menu(g.id, mx, my); }
+        }
+    }
+}
+
+/// Compact horizontal row — used in Library and Home lists where a grid would
+/// waste vertical space.
+export component GameListRow inherits Rectangle {
+    in property <GameTile> game;
+    callback clicked();
+    callback play();
+    callback favorite();
+
+    height: 64px;
+    background: ta.has-hover ? Theme.bg_2 : transparent;
+    animate background { duration: Motion.instant; easing: Motion.ease; }
+
+    HorizontalLayout {
+        padding-left: Space.md;
+        padding-right: Space.md;
+        spacing: Space.md;
+
+        VerticalLayout {
+            alignment: center;
+            Thumb {
+                width: 80px;
+                height: 45px;
+                source: root.game.thumb;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.game.name;
+                color: Theme.text;
+                font-size: Type.body;
+                font-weight: Type.w_medium;
+                overflow: elide;
+                wrap: no-wrap;
+            }
+            Text {
+                text: root.game.creator;
+                color: Theme.text_mute;
+                font-size: Type.caption;
+                overflow: elide;
+                wrap: no-wrap;
+            }
+            HorizontalLayout {
+                spacing: Space.md;
+                MetaStat { glyph: "●"; value: root.game.playing; }
+                if root.game.rating >= 0: MetaStat { glyph: "▲"; value: root.game.rating + "%"; }
+            }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: Space.sm;
+
+                Rectangle {
+                    width: 26px;
+                    height: 26px;
+                    opacity: ta.has-hover || root.game.favorited ? 1.0 : 0.0;
+                    animate opacity { duration: Motion.fast; easing: Motion.ease; }
+                    Text {
+                        text: root.game.favorited ? "★" : "☆";
+                        color: root.game.favorited ? Theme.accent : Theme.text_dim;
+                        font-size: Type.body;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.favorite(); }
+                    }
+                }
+
+                Rectangle {
+                    width: 68px;
+                    height: 30px;
+                    background: playta.pressed ? Theme.accent_press
+                                : playta.has-hover ? Theme.accent_hover : Theme.accent;
+                    border-radius: Theme.radius;
+                    opacity: ta.has-hover ? 1.0 : 0.0;
+                    animate opacity, background { duration: Motion.fast; easing: Motion.ease; }
+                    Text {
+                        text: "Play";
+                        color: Theme.on_accent;
+                        font-size: Type.small;
+                        font-weight: Type.w_bold;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                    playta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.play(); }
+                    }
+                }
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// Square-ish tile grid for badges, passes, inventory and worn items.
+export component ItemGrid inherits Rectangle {
+    in property <[DetailItem]> items;
+    in property <length> tile_min: 116px;
+    in property <length> label_h: 30px;
+    callback open(string, int);
+
+    property <int> cols: Math.max(1, Math.floor((self.width + Layout.tile_gap) / (root.tile_min + Layout.tile_gap)));
+    property <length> cell_w: (self.width - (root.cols - 1) * Layout.tile_gap) / root.cols;
+    property <length> cell_h: root.cell_w + root.label_h;
+    property <int> rows: Math.ceil(root.items.length / root.cols);
+
+    height: root.rows * root.cell_h + Math.max(0, root.rows - 1) * Layout.tile_gap;
+    vertical-stretch: 0;
+
+    for it[i] in root.items: Rectangle {
+        x: Math.mod(i, root.cols) * (root.cell_w + Layout.tile_gap);
+        y: Math.floor(i / root.cols) * (root.cell_h + Layout.tile_gap);
+        width: root.cell_w;
+        height: root.cell_h;
+        background: ita.has-hover ? Theme.bg_3 : Theme.bg_2;
+        border-radius: Theme.radius;
+        border-width: Theme.hairline;
+        border-color: Theme.line;
+        animate background { duration: Motion.fast; easing: Motion.ease; }
+        clip: true;
+
+        VerticalLayout {
+            spacing: 0;
+            Rectangle {
+                height: root.cell_w;
+                Thumb { width: 100%; height: 100%; source: it.thumb; }
+            }
+            Rectangle {
+                height: root.label_h;
+                Text {
+                    x: Space.sm;
+                    width: parent.width - Space.sm * 2;
+                    height: 100%;
+                    text: it.name;
+                    color: Theme.text_dim;
+                    font-size: Type.caption;
+                    overflow: elide;
+                    wrap: no-wrap;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        ita := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.open(it.id, it.kind); }
+        }
+    }
+}

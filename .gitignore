@@ -1,0 +1,6 @@
+/target
+/dist/AppDir
+/dist/*.AppImage
+/dist/windows
+*.zip
+.DS_Store

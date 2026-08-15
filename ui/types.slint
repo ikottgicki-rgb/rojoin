@@ -1,0 +1,98 @@
+// Shared UI structs.
+//
+// Slint gotcha: a struct is only generated for Rust if it is reachable from the
+// compiled component tree. Declaring one here is not enough — it must actually
+// be used by a component property, or the Rust side will not see it.
+//
+// Roblox IDs travel as `string`. Slint's `int` is i32 and Roblox place/user IDs
+// already exceed that range.
+
+export struct GameTile {
+    id: string,
+    name: string,
+    creator: string,
+    playing: string,
+    rating: int,        // 0-100; -1 means "no votes yet"
+    thumb: image,
+    favorited: bool,
+}
+
+export struct ChatConv {
+    id: string,
+    title: string,
+    preview: string,
+    time: string,
+    unread: int,
+    online: bool,
+    avatar: image,
+}
+
+export struct ChatMsg {
+    id: string,
+    body: string,
+    time: string,
+    mine: bool,
+    sender: string,
+    avatar: image,
+    show_header: bool,  // false when continuing a run from the same sender
+}
+
+export struct WearItem {
+    id: string,
+    name: string,
+    category: string,
+    thumb: image,
+    worn: bool,
+}
+
+/// A place inside a universe other than the root one. Joining these directly
+/// is the feature carried across from v1-v3: many games keep their real
+/// content in a sub-place, and launching the root drops you in a lobby.
+export struct SubPlace {
+    id: string,
+    name: string,
+    description: string,
+}
+
+export struct ServerRow {
+    id: string,
+    playing: int,
+    max: int,
+    label: string,     // "12 / 30"
+    fill: float,       // 0..1, drives the capacity bar
+    p0: image,
+    p1: image,
+    p2: image,
+    p3: image,
+    more: int,         // players beyond the four shown
+}
+
+/// Generic row/tile for the secondary lists on a detail page: passes, badges,
+/// media, related games. `kind` drives what a click does.
+export struct DetailItem {
+    id: string,
+    name: string,
+    subtitle: string,
+    thumb: image,
+    kind: int,
+}
+
+export struct GameDetailData {
+    universe_id: string,
+    root_place_id: string,
+    name: string,
+    creator: string,
+    description: string,
+    playing: string,
+    visits: string,
+    favorites: string,
+    max_players: string,
+    created: string,
+    updated: string,
+    genre: string,
+    rating: int,        // 0-100, -1 = no votes
+    favorited: bool,
+    notify: bool,
+    icon: image,
+    hero: image,
+}

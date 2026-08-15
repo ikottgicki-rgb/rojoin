@@ -1,0 +1,295 @@
+import { Theme, Space, Type, Motion, Layout } from "theme.slint";
+
+// Components must be declared before use within a file. Ordering here is
+// deliberate: primitives first, composites after.
+
+// ---------------------------------------------------------------------------
+// Primitives
+// ---------------------------------------------------------------------------
+
+// Three pulsing squares rather than a rotating arc: `rotation-angle` does not
+// exist on Rectangle, and a staggered opacity animation needs no transform at
+// all. Reads as "working" without drawing attention to itself.
+export component Spinner inherits HorizontalLayout {
+    in property <length> size_px: 16px;
+    in property <color> tint: Theme.text_dim;
+
+    spacing: root.size_px / 8;
+    alignment: center;
+
+    for d[idx] in [0, 1, 2]: Rectangle {
+        width: root.size_px / 4;
+        height: self.width;
+        background: root.tint;
+        border-radius: Theme.radius;
+        opacity: 0.25;
+        animate opacity {
+            duration: 560ms;
+            iteration-count: -1;
+            direction: alternate;
+            easing: ease-in-out;
+            delay: idx * 160ms;
+        }
+        init => { self.opacity = 1.0; }
+    }
+}
+
+export component Skeleton inherits Rectangle {
+    background: Theme.bg_3;
+    border-radius: Theme.radius;
+    opacity: 0.55;
+    animate opacity {
+        duration: 1100ms;
+        iteration-count: -1;
+        direction: alternate;
+        easing: ease-in-out;
+    }
+    init => { self.opacity = 0.9; }
+}
+
+// A thumbnail that fades in once decoded. `source.width > 0` is the only
+// reliable "has it decoded yet" signal Slint gives us.
+export component Thumb inherits Rectangle {
+    in property <image> source;
+    in property <length> radius: Theme.radius;
+    background: Theme.bg_3;
+    border-radius: root.radius;
+    clip: true;
+
+    Image {
+        width: 100%;
+        height: 100%;
+        source: root.source;
+        image-fit: cover;
+        opacity: root.source.width > 0 ? 1.0 : 0.0;
+        animate opacity { duration: Motion.normal; easing: Motion.ease; }
+    }
+}
+
+export component Avatar inherits Rectangle {
+    in property <image> source;
+    in property <length> size_px: 32px;
+    in property <bool> show_presence: false;
+    in property <bool> online: false;
+
+    width: root.size_px;
+    height: root.size_px;
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Theme.bg_3;
+        border-radius: Theme.radius;
+        clip: true;
+        Image {
+            width: 100%;
+            height: 100%;
+            source: root.source;
+            image-fit: cover;
+            opacity: root.source.width > 0 ? 1.0 : 0.0;
+            animate opacity { duration: Motion.normal; easing: Motion.ease; }
+        }
+    }
+
+    // Presence dot: one of the few places the accent is allowed to appear.
+    if root.show_presence: Rectangle {
+        width: root.size_px * 0.3;
+        height: self.width;
+        x: root.width - self.width + 1px;
+        y: root.height - self.height + 1px;
+        border-radius: self.width / 2;
+        background: root.online ? Theme.accent : Theme.text_mute;
+        border-width: 2px;
+        border-color: Theme.bg_0;
+    }
+}
+
+export component Btn inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    in property <length> pad_h: Space.lg;
+    callback clicked();
+
+    height: 32px;
+    width: txt.preferred-width + root.pad_h * 2;
+    border-radius: Theme.radius;
+    opacity: root.enabled ? 1.0 : 0.4;
+
+    background: root.primary
+        ? (!root.enabled ? Theme.accent
+           : ta.pressed ? Theme.accent_press
+           : ta.has-hover ? Theme.accent_hover : Theme.accent)
+        : (ta.pressed ? Theme.bg_4 : ta.has-hover ? Theme.bg_3 : Theme.bg_2);
+    animate background { duration: Motion.instant; easing: Motion.ease; }
+
+    border-width: root.primary ? 0px : Theme.hairline;
+    border-color: Theme.line;
+
+    txt := Text {
+        text: root.label;
+        color: root.primary ? Theme.on_accent : Theme.text;
+        font-size: Type.body;
+        font-weight: Type.w_medium;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component IconBtn inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> active: false;
+    in property <length> size_px: 30px;
+    callback clicked();
+
+    width: root.size_px;
+    height: root.size_px;
+    border-radius: Theme.radius;
+    background: ta.pressed ? Theme.bg_4 : ta.has-hover ? Theme.bg_3 : transparent;
+    animate background { duration: Motion.instant; easing: Motion.ease; }
+
+    Text {
+        text: root.glyph;
+        color: root.active ? Theme.accent : Theme.text_dim;
+        font-size: Type.body;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Chip inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    callback clicked();
+
+    height: 28px;
+    width: t.preferred-width + Space.md * 2;
+    border-radius: Theme.radius;
+    background: root.selected ? Theme.accent_soft
+                : ta.pressed ? Theme.bg_4
+                : ta.has-hover ? Theme.bg_3 : Theme.bg_2;
+    border-width: Theme.hairline;
+    border-color: root.selected ? Theme.accent : Theme.line;
+    animate background, border-color { duration: Motion.instant; easing: Motion.ease; }
+
+    t := Text {
+        text: root.label;
+        color: root.selected ? Theme.accent : Theme.text_dim;
+        font-size: Type.small;
+        font-weight: Type.w_medium;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Badge inherits Rectangle {
+    in property <int> count;
+    height: 17px;
+    width: Math.max(17px, bt.preferred-width + 9px);
+    border-radius: Theme.radius_pill;
+    background: Theme.accent;
+
+    bt := Text {
+        text: root.count > 99 ? "99+" : root.count;
+        color: Theme.on_accent;
+        font-size: Type.micro;
+        font-weight: Type.w_bold;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+
+export component EmptyState inherits VerticalLayout {
+    in property <string> title;
+    in property <string> hint;
+    alignment: center;
+    spacing: Space.sm;
+
+    Text {
+        text: root.title;
+        color: Theme.text_dim;
+        font-size: Type.lead;
+        font-weight: Type.w_medium;
+        horizontal-alignment: center;
+    }
+    Text {
+        text: root.hint;
+        color: Theme.text_mute;
+        font-size: Type.small;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+}
+
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> current: 0;
+    callback changed(int);
+
+    height: 32px;
+    width: lay.preferred-width;
+    background: Theme.bg_2;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: Theme.line;
+
+    lay := HorizontalLayout {
+        padding: 3px;
+        spacing: 2px;
+        for opt[i] in root.options: Rectangle {
+            width: ot.preferred-width + Space.lg;
+            border-radius: Theme.radius;
+            background: root.current == i ? Theme.bg_4
+                        : sta.has-hover ? Theme.bg_3 : transparent;
+            animate background { duration: Motion.instant; easing: Motion.ease; }
+
+            ot := Text {
+                text: opt;
+                color: root.current == i ? Theme.text : Theme.text_dim;
+                font-size: Type.small;
+                font-weight: Type.w_medium;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+            sta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.current = i; root.changed(i); }
+            }
+        }
+    }
+}
+
+export component MetaStat inherits HorizontalLayout {
+    in property <string> glyph;
+    in property <string> value;
+    spacing: 3px;
+
+    Text {
+        text: root.glyph;
+        color: Theme.text_mute;
+        font-size: Type.caption;
+        vertical-alignment: center;
+    }
+    Text {
+        text: root.value;
+        color: Theme.text_mute;
+        font-size: Type.caption;
+        vertical-alignment: center;
+    }
+}
