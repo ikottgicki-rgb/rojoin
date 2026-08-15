@@ -337,21 +337,17 @@ fn play(
 /// Suspend the game, wait, resume. Resumes on every path, including a stop
 /// request landing mid-freeze.
 fn freeze_for(ms: u64, stop: &Arc<AtomicBool>) {
-    let Some(pid) = process::find_game_pid() else {
-        tracing::warn!("freeze: no running game found");
-        return;
-    };
-
-    if let Err(e) = process::suspend(pid) {
-        tracing::warn!(error = %e, pid, "freeze: could not suspend");
-        return;
+    match process::suspend_game() {
+        Ok(n) => tracing::info!(processes = n, ms, "freeze: suspended"),
+        Err(e) => {
+            tracing::warn!(error = %e, "freeze: nothing to suspend");
+            return;
+        }
     }
 
     sleep_interruptible(process::clamp_freeze(ms), stop);
-
-    if let Err(e) = process::resume(pid) {
-        tracing::error!(error = %e, pid, "freeze: could not resume — game may be stopped");
-    }
+    process::resume_all();
+    tracing::info!("freeze: resumed");
 }
 
 /// Sleep in small slices so a stop request lands promptly even mid-wait.

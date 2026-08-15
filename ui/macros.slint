@@ -16,7 +16,7 @@ component MacroCard inherits Rectangle {
     callback edit();
     callback rebind();
 
-    height: 92px;
+    height: 76px;
     background: root.entry.running ? Theme.bg_3 : Theme.bg_2;
     border-radius: Theme.radius;
     border-width: Theme.hairline;
@@ -58,14 +58,6 @@ component MacroCard inherits Rectangle {
                         }
                     }
                 }
-            }
-
-            Text {
-                text: root.entry.description;
-                color: Theme.text_mute;
-                font-size: Type.caption;
-                overflow: elide;
-                wrap: no-wrap;
             }
 
             HorizontalLayout {

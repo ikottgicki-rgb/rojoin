@@ -13,71 +13,7 @@
 use crate::{Key, Macro, Mode, MouseButton, Step};
 
 pub fn all() -> Vec<Macro> {
-    vec![bunnyhop(), wallhop(), wall_walk(), freeze(), key_spam(), auto_clicker()]
-}
-
-/// Repeated jumps while holding forward.
-pub fn bunnyhop() -> Macro {
-    Macro {
-        id: "bunnyhop".into(),
-        name: "Bunnyhop".into(),
-        description: "Holds forward and jumps on a fixed cadence.".into(),
-        mode: Mode::Toggle,
-        hotkey: Some(Key::F1),
-        cycle_gap_ms: 20,
-        steps: vec![
-            Step::KeyDown { key: Key::W },
-            Step::Tap { key: Key::Space, hold_ms: 30 },
-            Step::Wait { ms: 120 },
-        ],
-        ..Default::default()
-    }
-}
-
-/// Jump into a wall while alternating strafe direction.
-pub fn wallhop() -> Macro {
-    Macro {
-        id: "wallhop".into(),
-        name: "Wallhop".into(),
-        description: "Jumps into a wall while alternating strafe direction. \
-                      Timings need tuning for your ping and the game."
-            .into(),
-        mode: Mode::Toggle,
-        hotkey: Some(Key::F2),
-        cycle_gap_ms: 0,
-        steps: vec![
-            Step::KeyDown { key: Key::W },
-            Step::Tap { key: Key::Space, hold_ms: 25 },
-            Step::KeyDown { key: Key::A },
-            Step::Wait { ms: 45 },
-            Step::KeyUp { key: Key::A },
-            Step::KeyDown { key: Key::D },
-            Step::Wait { ms: 45 },
-            Step::KeyUp { key: Key::D },
-            Step::Wait { ms: 60 },
-        ],
-        ..Default::default()
-    }
-}
-
-/// Hold into a wall while nudging the camera along it.
-pub fn wall_walk() -> Macro {
-    Macro {
-        id: "wallwalk".into(),
-        name: "Wall walk".into(),
-        description: "Holds into a wall while nudging the camera along it.".into(),
-        mode: Mode::Hold,
-        hotkey: Some(Key::F4),
-        cycle_gap_ms: 0,
-        steps: vec![
-            Step::KeyDown { key: Key::W },
-            Step::MouseMove { dx: 6, dy: 0 },
-            Step::Wait { ms: 30 },
-            Step::MouseMove { dx: -6, dy: 0 },
-            Step::Wait { ms: 30 },
-        ],
-        ..Default::default()
-    }
+    vec![freeze(), auto_clicker()]
 }
 
 /// Briefly suspend the game process.
@@ -88,28 +24,11 @@ pub fn freeze() -> Macro {
     Macro {
         id: "freeze".into(),
         name: "Freeze".into(),
-        description: "Suspends the game briefly, then resumes it. F8 always releases.".into(),
+        description: String::new(),
         mode: Mode::Once,
         hotkey: Some(Key::F3),
         cycle_gap_ms: 0,
         steps: vec![Step::Freeze { ms: 250 }],
-        ..Default::default()
-    }
-}
-
-/// Repeat one key at a fixed rate.
-pub fn key_spam() -> Macro {
-    Macro {
-        id: "keyspam".into(),
-        name: "Key spam".into(),
-        description: "Repeats a single key. Change the key and rate below.".into(),
-        mode: Mode::Toggle,
-        hotkey: Some(Key::F5),
-        cycle_gap_ms: 0,
-        steps: vec![
-            Step::Tap { key: Key::E, hold_ms: 15 },
-            Step::Wait { ms: 85 },
-        ],
         ..Default::default()
     }
 }
@@ -119,7 +38,7 @@ pub fn auto_clicker() -> Macro {
     Macro {
         id: "autoclick".into(),
         name: "Auto clicker".into(),
-        description: "Clicks at a fixed rate, roughly 10 per second.".into(),
+        description: String::new(),
         mode: Mode::Toggle,
         hotkey: Some(Key::F6),
         cycle_gap_ms: 0,
@@ -156,15 +75,6 @@ mod tests {
                 assert!(keys.insert(k), "duplicate hotkey {:?} on {}", k, m.name);
             }
         }
-    }
-
-    #[test]
-    fn presets_that_hold_movement_keys_are_tracked_for_release() {
-        // Bunnyhop and wallhop hold W without releasing it, on purpose. The
-        // engine must know to release it on stop or the character keeps
-        // walking after the macro ends.
-        assert_eq!(bunnyhop().held_keys(), vec![Key::W]);
-        assert_eq!(wallhop().held_keys(), vec![Key::W]);
     }
 
     #[test]

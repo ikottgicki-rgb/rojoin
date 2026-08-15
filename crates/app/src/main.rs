@@ -84,6 +84,9 @@ pub(crate) struct App {
     /// demand is what gets the *account* rate-limited — not just RoJoin — and
     /// it shows up as friends rendering as "User 12345" or vanishing entirely.
     names: Mutex<rojoin_store::NameCache>,
+    /// Friend requests accepted or declined this session. Roblox keeps
+    /// returning them for a while, so they are filtered out of every refetch.
+    handled_requests: Mutex<std::collections::HashSet<String>>,
     /// Macro currently open in the step editor.
     editing: Mutex<Option<String>>,
     /// True while the editor is waiting for a key to bind. The hotkey listener
@@ -122,6 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         watching: std::sync::atomic::AtomicBool::new(false),
         hotkeys: Mutex::new(None),
         names: Mutex::new(rojoin_store::NameCache::load()),
+        handled_requests: Mutex::new(Default::default()),
         editing: Mutex::new(None),
         capturing: std::sync::atomic::AtomicBool::new(false),
     });
@@ -463,8 +467,16 @@ fn load_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
                 })
                 .collect();
 
+            // Anything already handled this session stays gone, even if
+            // Roblox is still listing it.
+            let handled = app2.handled_requests.lock().unwrap().clone();
+            let requests: Vec<DetailItem> = requests
+                .into_iter()
+                .filter(|r| !handled.contains(&r.id.to_string()))
+                .collect();
+            let count = requests.len() as i32;
             ui.set_requests_list(ad::model(requests));
-            ui.set_friend_requests(load.requests.len() as i32);
+            ui.set_friend_requests(count);
 
             for (i, u) in load.requests.iter().enumerate() {
                 if let Some(url) = load.avatars.get(&u.id).cloned() {
@@ -555,6 +567,27 @@ fn respond_to_request(
     };
     tracing::info!(user_id, accept, "responding to friend request");
 
+    // Drop the row immediately. Roblox keeps returning a handled request for
+    // a while, so waiting for the refetch left it sitting there looking as if
+    // the click had done nothing.
+    {
+        use slint::Model;
+        let model = ui.get_requests_list();
+        if let Some(idx) = (0..model.row_count()).find(|i| {
+            model.row_data(*i).map(|r| r.id == id).unwrap_or(false)
+        }) {
+            let kept: Vec<DetailItem> = model
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != idx)
+                .map(|(_, r)| r)
+                .collect();
+            let remaining = kept.len() as i32;
+            ui.set_requests_list(ad::model(kept));
+            ui.set_friend_requests(remaining);
+        }
+    }
+
     let client = app.client.clone();
     let app2 = app.clone();
     let bridge2 = bridge.clone();
@@ -574,6 +607,7 @@ fn respond_to_request(
                 // the request list and the roster, and the server is the truth.
                 Ok(()) => {
                     tracing::info!(user_id, "friend request handled");
+                    app2.handled_requests.lock().unwrap().insert(user_id.to_string());
                     load_friends(&ui, &app2, &bridge2, &imgs2);
                 }
                 Err(e) => bridge::report(&ui, e),

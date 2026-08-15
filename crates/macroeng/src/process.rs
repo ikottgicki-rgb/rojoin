@@ -13,45 +13,52 @@ use std::sync::Mutex;
 use crate::{Error, Result};
 
 /// Everything currently suspended by us, so it can always be released.
-static SUSPENDED: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+static SUSPENDED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
-/// Find the running game process.
+/// Process names that mean "the game".
 ///
-/// On Linux, Sober runs the engine under bwrap, so the useful match is on the
-/// executable name rather than the full command line.
-#[cfg(unix)]
-pub fn find_game_pid() -> Option<i32> {
-    const NEEDLES: &[&str] = &["sober", "RobloxPlayer"];
+/// Sober runs the engine under bwrap, so several processes share the name and
+/// suspending only one leaves the rest running — hence freezing all matches.
+const NEEDLES: &[&str] = &["sober", "robloxplayerbeta", "robloxplayer", "windowsplayer"];
 
-    let entries = std::fs::read_dir("/proc").ok()?;
+fn is_game(comm: &str) -> bool {
+    let c = comm.trim().trim_end_matches(".exe").to_ascii_lowercase();
+    NEEDLES.iter().any(|n| c == *n)
+}
+
+// ---------------------------------------------------------------------------
+// Linux
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+pub fn find_game_pids() -> Vec<u32> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+
+    let mut pids = Vec::new();
     for entry in entries.flatten() {
-        let name = entry.file_name();
-        let pid: i32 = name.to_str()?.parse().ok()?;
+        // `continue`, never `?`. Using `?` here returned from the whole
+        // function at the first non-numeric /proc entry, so this found
+        // nothing at all — the original freeze bug.
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
+        let Ok(pid) = name.parse::<u32>() else { continue };
 
         // `comm` is the executable name, which survives the bwrap wrapping
         // that makes the cmdline useless here.
-        let comm = std::fs::read_to_string(entry.path().join("comm")).unwrap_or_default();
-        let comm = comm.trim();
-
-        if NEEDLES.iter().any(|n| comm.eq_ignore_ascii_case(n)) {
-            return Some(pid);
+        let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) else { continue };
+        if is_game(&comm) {
+            pids.push(pid);
         }
     }
-    None
-}
-
-#[cfg(not(unix))]
-pub fn find_game_pid() -> Option<i32> {
-    // Windows would use CreateToolhelp32Snapshot plus NtSuspendProcess; not
-    // implemented, and saying so beats pretending to freeze nothing.
-    None
+    pids
 }
 
 #[cfg(unix)]
-fn signal(pid: i32, sig: i32) -> Result<()> {
-    // SAFETY: kill() with a pid we read from /proc; a dead pid returns ESRCH
+fn signal(pid: u32, sig: i32) -> Result<()> {
+    // SAFETY: kill() with a pid read from /proc; a dead pid returns ESRCH
     // rather than doing anything dangerous.
-    let rc = unsafe { libc::kill(pid, sig) };
+    let rc = unsafe { libc::kill(pid as i32, sig) };
     if rc != 0 {
         return Err(Error::Input(format!(
             "could not signal {pid}: {}",
@@ -62,41 +69,157 @@ fn signal(pid: i32, sig: i32) -> Result<()> {
 }
 
 #[cfg(unix)]
-pub fn suspend(pid: i32) -> Result<()> {
-    signal(pid, libc::SIGSTOP)?;
-    if let Ok(mut s) = SUSPENDED.lock() {
-        if !s.contains(&pid) {
-            s.push(pid);
-        }
-    }
-    Ok(())
+fn suspend_one(pid: u32) -> Result<()> {
+    signal(pid, libc::SIGSTOP)
 }
 
 #[cfg(unix)]
-pub fn resume(pid: i32) -> Result<()> {
-    let r = signal(pid, libc::SIGCONT);
-    if let Ok(mut s) = SUSPENDED.lock() {
-        s.retain(|p| *p != pid);
+fn resume_one(pid: u32) -> Result<()> {
+    signal(pid, libc::SIGCONT)
+}
+
+// ---------------------------------------------------------------------------
+// Windows
+// ---------------------------------------------------------------------------
+
+#[cfg(windows)]
+pub fn find_game_pids() -> Vec<u32> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::*;
+
+    let mut pids = Vec::new();
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return pids;
+        }
+
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+
+        if Process32FirstW(snap, &mut entry) != 0 {
+            loop {
+                let len = entry.szExeFile.iter().position(|c| *c == 0).unwrap_or(0);
+                let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+                if is_game(&name) {
+                    pids.push(entry.th32ProcessID);
+                }
+                if Process32NextW(snap, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snap);
     }
-    r
+    pids
 }
 
-#[cfg(not(unix))]
-pub fn suspend(_pid: i32) -> Result<()> {
-    Err(Error::NoBackend("process freeze is not implemented on this platform".into()))
-}
+/// `NtSuspendProcess`/`NtResumeProcess` are undocumented but stable, and are
+/// how every process-freezer on Windows does this. Resolved at runtime so the
+/// binary does not need an import for them.
+#[cfg(windows)]
+unsafe fn ntdll_call(name: &[u8], pid: u32) -> Result<()> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SUSPEND_RESUME};
 
-#[cfg(not(unix))]
-pub fn resume(_pid: i32) -> Result<()> {
+    let module = GetModuleHandleA(b"ntdll.dll\0".as_ptr());
+    if module.is_null() {
+        return Err(Error::Input("could not load ntdll".into()));
+    }
+
+    let Some(proc_addr) = GetProcAddress(module, name.as_ptr()) else {
+        return Err(Error::Input(format!(
+            "ntdll is missing {}",
+            String::from_utf8_lossy(&name[..name.len() - 1])
+        )));
+    };
+
+    let handle = OpenProcess(PROCESS_SUSPEND_RESUME, 0, pid);
+    if handle.is_null() {
+        return Err(Error::Input(format!("could not open process {pid}")));
+    }
+
+    let f: extern "system" fn(isize) -> i32 = std::mem::transmute(proc_addr);
+    let status = f(handle as isize);
+    CloseHandle(handle);
+
+    if status < 0 {
+        return Err(Error::Input(format!("ntdll call failed for {pid}: {status:#x}")));
+    }
     Ok(())
 }
 
-/// Release everything we suspended. Called on engine stop and at shutdown, so
-/// a crash mid-freeze cannot leave the game hung.
-pub fn resume_all() {
-    let pids: Vec<i32> = SUSPENDED.lock().map(|s| s.clone()).unwrap_or_default();
+#[cfg(windows)]
+fn suspend_one(pid: u32) -> Result<()> {
+    unsafe { ntdll_call(b"NtSuspendProcess\0", pid) }
+}
+
+#[cfg(windows)]
+fn resume_one(pid: u32) -> Result<()> {
+    unsafe { ntdll_call(b"NtResumeProcess\0", pid) }
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn find_game_pids() -> Vec<u32> {
+    Vec::new()
+}
+#[cfg(not(any(unix, windows)))]
+fn suspend_one(_pid: u32) -> Result<()> {
+    Err(Error::NoBackend("process freeze is unsupported here".into()))
+}
+#[cfg(not(any(unix, windows)))]
+fn resume_one(_pid: u32) -> Result<()> {
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Shared
+// ---------------------------------------------------------------------------
+
+/// Suspend every process that is the game. Returns how many were stopped.
+///
+/// All of them, not just one: Sober runs several processes under the same
+/// name, and stopping only the first leaves the game running.
+pub fn suspend_game() -> Result<usize> {
+    let pids = find_game_pids();
+    if pids.is_empty() {
+        return Err(Error::Input("no running game found".into()));
+    }
+
+    let mut stopped = Vec::new();
     for pid in pids {
-        let _ = resume(pid);
+        match suspend_one(pid) {
+            Ok(()) => stopped.push(pid),
+            Err(e) => tracing::debug!(pid, error = %e, "could not suspend"),
+        }
+    }
+
+    if stopped.is_empty() {
+        return Err(Error::Input("found the game but could not suspend it".into()));
+    }
+
+    if let Ok(mut s) = SUSPENDED.lock() {
+        for pid in &stopped {
+            if !s.contains(pid) {
+                s.push(*pid);
+            }
+        }
+    }
+    Ok(stopped.len())
+}
+
+/// Release everything we suspended. Called on engine stop, on the panic key,
+/// and at shutdown, so a crash mid-freeze cannot leave the game hung.
+pub fn resume_all() {
+    let pids: Vec<u32> = SUSPENDED.lock().map(|s| s.clone()).unwrap_or_default();
+    for pid in pids {
+        if let Err(e) = resume_one(pid) {
+            tracing::error!(pid, error = %e, "could not resume — the game may be stopped");
+        }
+    }
+    if let Ok(mut s) = SUSPENDED.lock() {
+        s.clear();
     }
 }
 
@@ -126,13 +249,36 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_suspended_to_begin_with() {
-        assert!(!anything_suspended());
+    fn game_process_names_are_recognised_on_both_platforms() {
+        assert!(is_game("sober"));
+        assert!(is_game("sober\n"));
+        assert!(is_game("RobloxPlayerBeta.exe"));
+        assert!(is_game("RobloxPlayerBeta"));
+        assert!(!is_game("bwrap"));
+        assert!(!is_game("rojoin-v4"));
+        assert!(!is_game(""));
+    }
+
+    #[test]
+    fn scanning_processes_does_not_bail_early() {
+        // The original bug: `?` inside the loop returned from the whole
+        // function at the first non-numeric /proc entry, so this always came
+        // back empty. It must at least complete the scan.
+        let _ = find_game_pids();
     }
 
     #[test]
     fn resume_all_is_safe_when_nothing_is_suspended() {
         resume_all();
         assert!(!anything_suspended());
+    }
+
+    #[test]
+    fn suspending_with_no_game_reports_that_clearly() {
+        // Only meaningful when no game is running, which is the CI case.
+        if find_game_pids().is_empty() {
+            let err = suspend_game().unwrap_err();
+            assert!(err.to_string().contains("no running game"));
+        }
     }
 }
