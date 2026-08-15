@@ -178,6 +178,38 @@ pub async fn redeem(
     Ok(Session { cookie, account_name })
 }
 
+/// Mint a single-use authentication ticket.
+///
+/// This is how Windows launches as a chosen account: there is no cookie-swap
+/// equivalent, so the ticket carries the identity into the Roblox client.
+///
+/// Two non-obvious requirements, both enforced here:
+///   * a `Referer` of `https://www.roblox.com/` — Roblox rejects the request
+///     without it,
+///   * the CSRF dance, like every other state-changing call.
+///
+/// The ticket comes back in the `rbx-authentication-ticket` **header**, not
+/// the body, and expires within seconds — mint one per launch.
+pub async fn authentication_ticket(client: &crate::Client) -> Result<String> {
+    const URL: &str = "https://auth.roblox.com/v1/authentication-ticket";
+    const TICKET_HEADER: &str = "rbx-authentication-ticket";
+
+    let bytes = client
+        .post_with_headers(URL, &serde_json::json!({}), &[
+            ("Referer", "https://www.roblox.com/"),
+            ("Origin", "https://www.roblox.com"),
+        ])
+        .await?;
+
+    bytes
+        .headers
+        .get(TICKET_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| Error::Api("Roblox returned no authentication ticket".into()))
+}
+
 // --- helpers ---------------------------------------------------------------
 
 async fn send_with_csrf(

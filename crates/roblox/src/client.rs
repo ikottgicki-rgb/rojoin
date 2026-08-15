@@ -30,6 +30,11 @@ const BACKOFF: [Duration; 4] = [
     Duration::from_millis(7000),
 ];
 
+/// A response reduced to its headers, for calls where the payload is a header.
+pub struct HeaderResponse {
+    pub headers: reqwest::header::HeaderMap,
+}
+
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
@@ -98,6 +103,56 @@ impl Client {
         self.send(Method::Post, url, Some(serde_json::json!({})))
             .await
             .map(|_| ())
+    }
+
+    /// A POST whose *response headers* matter, with extra request headers.
+    ///
+    /// Exists for the authentication-ticket flow, where the ticket comes back
+    /// in a header rather than the body and Roblox requires a `Referer`.
+    pub async fn post_with_headers(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+        headers: &[(&str, &str)],
+    ) -> Result<HeaderResponse> {
+        for attempt in 0..2 {
+            let mut req = self.http.post(url).json(body);
+
+            if let Some(cookie) = self.inner.cookie.read().await.as_ref() {
+                req = req.header(reqwest::header::COOKIE, format!(".ROBLOSECURITY={cookie}"));
+            }
+            if let Some(token) = self.inner.csrf.read().await.as_ref() {
+                req = req.header(CSRF_HEADER, token);
+            }
+            for (k, v) in headers {
+                req = req.header(*k, *v);
+            }
+
+            let resp = req.send().await?;
+
+            if resp.status() == reqwest::StatusCode::FORBIDDEN && attempt == 0 {
+                if let Some(token) = resp
+                    .headers()
+                    .get(CSRF_HEADER)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned)
+                {
+                    *self.inner.csrf.write().await = Some(token);
+                    continue;
+                }
+            }
+
+            if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(Error::Expired);
+            }
+            if !resp.status().is_success() {
+                return Err(Error::Api(format!("{} for {url}", resp.status())));
+            }
+
+            return Ok(HeaderResponse { headers: resp.headers().clone() });
+        }
+
+        Err(Error::Api(format!("{url} kept refusing the CSRF token")))
     }
 
     pub async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {

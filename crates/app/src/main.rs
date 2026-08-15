@@ -17,7 +17,10 @@ mod bridge;
 #[cfg(debug_assertions)]
 mod demo;
 mod images;
+mod linkhandler;
+mod notify;
 mod secrets;
+mod updater;
 
 use adapters as ad;
 use bridge::Bridge;
@@ -44,10 +47,10 @@ const NAV: &[(&str, &str)] = &[
     ("Macros", "⌨"),
 ];
 
-/// UI-thread state. Everything here is touched only from the Slint event loop.
-struct App {
+/// Shared app state. Guarded by mutexes because background tasks touch it too.
+pub(crate) struct App {
     client: Client,
-    config: Mutex<Config>,
+    pub(crate) config: Mutex<Config>,
     /// The universe currently open in the detail view, for follow-up fetches.
     current_universe: Mutex<i64>,
     current_place: Mutex<i64>,
@@ -72,6 +75,13 @@ struct App {
     /// The macro engine, absent when input permission is missing.
     engine: Mutex<Option<Arc<rojoin_macro::Engine>>>,
     macros: Mutex<Vec<rojoin_macro::Macro>>,
+    /// Held so the launch path can mint a Windows auth ticket without every
+    /// caller having to thread the bridge through.
+    bridge: Mutex<Option<Arc<Bridge>>>,
+    /// Guards against spawning a second presence watcher on account switch.
+    watching: std::sync::atomic::AtomicBool,
+    /// Held so the listener threads live as long as the app does.
+    hotkeys: Mutex<Option<rojoin_macro::hotkeys::Listener>>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -102,7 +112,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         worn: Mutex::new(Vec::new()),
         engine: Mutex::new(None),
         macros: Mutex::new(Vec::new()),
+        bridge: Mutex::new(None),
+        watching: std::sync::atomic::AtomicBool::new(false),
+        hotkeys: Mutex::new(None),
     });
+    *app.bridge.lock().unwrap() = Some(bridge.clone());
 
     ui.set_app_version(env!("CARGO_PKG_VERSION").into());
     ui.set_nav(ad::model(
@@ -129,6 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wire_chat(&ui, &app, &bridge, &imgs);
     wire_avatar(&ui, &app, &bridge, &imgs);
     wire_macros(&ui, &app);
+    wire_settings(&ui, &app, &bridge, &imgs);
 
     #[cfg(debug_assertions)]
     let demo_mode = demo::enabled();
@@ -140,6 +155,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         demo::seed(&ui);
     } else {
         restore_session(&ui, &app, &bridge, &imgs);
+    }
+
+    // A `roblox://` link passed on the command line (from the browser, via the
+    // registered handler) launches straight into that place.
+    if let Some((place_id, instance)) = std::env::args()
+        .skip(1)
+        .find_map(|a| linkhandler::parse_uri(&a))
+    {
+        tracing::info!(place_id, "launching from a deep link");
+        let mut req = JoinRequest::place(place_id);
+        if let Some(job) = instance {
+            req = req.server(job);
+        }
+        launch(&ui, &app, req);
     }
 
     ui.run()?;
@@ -214,6 +243,15 @@ fn enter_app(
     load_friends(ui, app, bridge, imgs);
     load_conversations(ui, app, bridge, imgs);
     load_avatar(ui, app, bridge, imgs);
+    render_library(ui, app);
+    render_settings(ui, app);
+
+    // One presence watcher per session. It reads the subscription lists on
+    // every sweep, so toggling a bell takes effect without a restart.
+    if !app.watching.swap(true, Ordering::SeqCst) {
+        let watcher = notify::Watcher::new(app.client.clone(), app.clone());
+        bridge.spawn(async move { watcher.run().await });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -764,9 +802,111 @@ fn wire_nav(ui: &MainWindow, app: &Arc<App>) {
         ui.on_open_settings(move || tracing::info!("settings: milestone 6"));
     }
     ui.on_open_account(|| tracing::info!("account switcher: milestone 6"));
-    ui.on_toggle_notify(|| tracing::info!("game notify: milestone 6"));
-    ui.on_copy_link(|| tracing::info!("copy link: milestone 6"));
-    ui.on_open_browser(|| tracing::info!("open in browser: milestone 6"));
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_toggle_notify(move || {
+            let ui = weak.unwrap();
+            let id = ui.get_game().universe_id.to_string();
+            if id.is_empty() {
+                return;
+            }
+            let mut g = ui.get_game();
+            let on = !g.notify;
+            g.notify = on;
+            ui.set_game(g);
+
+            let mut cfg = app.config.lock().unwrap();
+            if on {
+                if !cfg.settings.notify_games.contains(&id) {
+                    cfg.settings.notify_games.push(id);
+                }
+            } else {
+                cfg.settings.notify_games.retain(|g| *g != id);
+            }
+            let _ = cfg.save();
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_copy_link(move || {
+            let ui = weak.unwrap();
+            let url = current_url(&ui);
+            if !url.is_empty() {
+                // Slint has no clipboard API, so this shells out to whatever
+                // the session provides rather than pulling in a backend crate.
+                copy_to_clipboard(&url);
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_open_browser(move || {
+            let ui = weak.unwrap();
+            let url = current_url(&ui);
+            if !url.is_empty() {
+                let _ = webbrowser::open(&url);
+            }
+        });
+    }
+}
+
+/// The roblox.com URL for whatever is on screen.
+fn current_url(ui: &MainWindow) -> String {
+    match ui.get_view_kind() {
+        1 => {
+            let id = ui.get_game().root_place_id.to_string();
+            (!id.is_empty())
+                .then(|| format!("https://www.roblox.com/games/{id}"))
+                .unwrap_or_default()
+        }
+        2 => {
+            let id = ui.get_profile().id.to_string();
+            (!id.is_empty())
+                .then(|| format!("https://www.roblox.com/users/{id}/profile"))
+                .unwrap_or_default()
+        }
+        3 => {
+            let id = ui.get_group().id.to_string();
+            (!id.is_empty())
+                .then(|| format!("https://www.roblox.com/groups/{id}"))
+                .unwrap_or_default()
+        }
+        _ => String::new(),
+    }
+}
+
+fn copy_to_clipboard(text: &str) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    // Try each tool in turn; the first that accepts the text wins.
+    for (bin, args) in [
+        ("wl-copy", &[][..]),
+        ("xclip", &["-selection", "clipboard"][..]),
+        ("xsel", &["--clipboard", "--input"][..]),
+        ("clip.exe", &[][..]),
+    ] {
+        let Ok(mut child) = Command::new(bin)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            continue;
+        };
+
+        if let Some(stdin) = child.stdin.as_mut() {
+            if stdin.write_all(text.as_bytes()).is_ok() {
+                drop(child.stdin.take());
+                let _ = child.wait();
+                tracing::info!("copied to clipboard");
+                return;
+            }
+        }
+    }
+    tracing::warn!("no clipboard tool available (tried wl-copy, xclip, xsel)");
 }
 
 // ---------------------------------------------------------------------------
@@ -1760,7 +1900,10 @@ fn wire_macros(ui: &MainWindow, app: &Arc<App>) {
 
     if available {
         match rojoin_macro::Engine::new() {
-            Ok(engine) => *app.engine.lock().unwrap() = Some(Arc::new(engine)),
+            Ok(engine) => {
+                *app.engine.lock().unwrap() = Some(Arc::new(engine));
+                spawn_hotkey_listener(ui, app);
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "macro engine unavailable");
                 ui.set_macro_available(false);
@@ -1768,6 +1911,85 @@ fn wire_macros(ui: &MainWindow, app: &Arc<App>) {
             }
         }
     }
+}
+
+/// The key that stops everything, no matter what is bound where.
+const PANIC_KEY: rojoin_macro::Key = rojoin_macro::Key::F8;
+
+/// Watch for hotkeys system-wide and drive the engine from them.
+///
+/// Without this the macro tab would need you to alt-tab out of the game to
+/// press Start, which defeats the point.
+fn spawn_hotkey_listener(ui: &MainWindow, app: &Arc<App>) {
+    use rojoin_macro::hotkeys::{HotkeyEvent, Listener};
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let Some(listener) = Listener::spawn(tx) else {
+        // Output works but input listening does not — say so rather than
+        // leaving the hotkey chips looking functional.
+        ui.set_macro_hint(
+            "Macros work, but RoJoin cannot watch for hotkeys — start them from this screen."
+                .into(),
+        );
+        return;
+    };
+    *app.hotkeys.lock().unwrap() = Some(listener);
+
+    let app = app.clone();
+    let weak = ui.as_weak();
+
+    std::thread::spawn(move || {
+        // Which macros a held key started, so the release stops exactly those.
+        let mut held: std::collections::HashMap<rojoin_macro::Key, Vec<String>> =
+            std::collections::HashMap::new();
+
+        while let Ok(event) = rx.recv() {
+            let Some(engine) = app.engine.lock().unwrap().clone() else { continue };
+
+            match event {
+                HotkeyEvent::Pressed(PANIC_KEY) => {
+                    engine.stop_all();
+                    held.clear();
+                    tracing::info!("panic key: stopped all macros");
+                }
+
+                HotkeyEvent::Pressed(key) => {
+                    let macros = app.macros.lock().unwrap().clone();
+                    for mac in macros.iter().filter(|m| m.enabled && m.hotkey == Some(key)) {
+                        match mac.mode {
+                            rojoin_macro::Mode::Hold => {
+                                if engine.start(mac) {
+                                    held.entry(key).or_default().push(mac.id.clone());
+                                }
+                            }
+                            rojoin_macro::Mode::Toggle => {
+                                if engine.is_running(&mac.id) {
+                                    engine.stop(&mac.id);
+                                } else {
+                                    engine.start(mac);
+                                }
+                            }
+                            rojoin_macro::Mode::Once => {
+                                engine.start(mac);
+                            }
+                        }
+                    }
+                }
+
+                HotkeyEvent::Released(key) => {
+                    if let Some(ids) = held.remove(&key) {
+                        for id in ids {
+                            engine.stop(&id);
+                        }
+                    }
+                }
+            }
+
+            // Reflect the new running state, if the window is still up.
+            let app2 = app.clone();
+            let _ = weak.upgrade_in_event_loop(move |ui| render_macros(&ui, &app2));
+        }
+    });
 }
 
 fn render_macros(ui: &MainWindow, app: &Arc<App>) {
@@ -1805,6 +2027,301 @@ fn persist_macros(app: &Arc<App>) {
     if let Err(e) = cfg.save() {
         tracing::error!(error = %e, "could not save macros");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Library and settings
+// ---------------------------------------------------------------------------
+
+/// Section index for Settings. Deliberately past the end of NAV — Settings is
+/// reached by the gear, not by a sidebar row.
+const SETTINGS_SECTION: i32 = 7;
+
+fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
+    ui.set_data_dir(rojoin_store::config_dir().to_string_lossy().to_string().into());
+
+    {
+        let weak = ui.as_weak();
+        ui.on_open_settings(move || {
+            let ui = weak.unwrap();
+            ui.set_view_kind(0);
+            ui.set_can_back(false);
+            ui.set_section(SETTINGS_SECTION);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_set_dark(move |dark| {
+            let ui = weak.unwrap();
+            ui.set_dark(dark);
+            ui.global::<Theme>().set_dark(dark);
+            let mut cfg = app.config.lock().unwrap();
+            cfg.settings.dark = dark;
+            let _ = cfg.save();
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_set_notify_requests(move |on| {
+            let ui = weak.unwrap();
+            ui.set_notify_requests(on);
+            let mut cfg = app.config.lock().unwrap();
+            cfg.settings.notify_friend_requests = on;
+            let _ = cfg.save();
+        });
+    }
+    {
+        let app = app.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_unsub_friend(move |id| {
+            let ui = weak.unwrap();
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.settings.notify_friends.retain(|f| *f != id.as_str());
+                let _ = cfg.save();
+            }
+            render_settings(&ui, &app);
+            recompute_friends(&ui, &app, &imgs2);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_unsub_game(move |id| {
+            let ui = weak.unwrap();
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.settings.notify_games.retain(|g| *g != id.as_str());
+                let _ = cfg.save();
+            }
+            render_settings(&ui, &app);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_set_link_handler(move |on| {
+            let ui = weak.unwrap();
+            match linkhandler::set_registered(on) {
+                Ok(()) => ui.set_link_handler(linkhandler::is_registered()),
+                Err(e) => {
+                    tracing::error!(error = %e, "could not change the link handler");
+                    ui.set_link_handler(linkhandler::is_registered());
+                }
+            }
+            let _ = &app;
+        });
+    }
+    {
+        ui.on_open_data_dir(move || {
+            let dir = rojoin_store::config_dir();
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = webbrowser::open(&format!("file://{}", dir.display()));
+        });
+    }
+    {
+        let bridge2 = bridge.clone();
+        let weak = ui.as_weak();
+        ui.on_check_update(move || {
+            let ui = weak.unwrap();
+            ui.set_checking_update(true);
+            ui.set_update_status("Checking…".into());
+
+            bridge2.call_res(
+                move || async move { updater::latest_version().await },
+                move |ui, result| {
+                    ui.set_checking_update(false);
+                    match result {
+                        Ok(Some(v)) => ui.set_update_status(
+                            format!("Version {v} is available.").into(),
+                        ),
+                        Ok(None) => ui.set_update_status("You are up to date.".into()),
+                        Err(e) => ui.set_update_status(format!("Check failed: {e}").into()),
+                    }
+                },
+            );
+        });
+    }
+
+    // --- account switching -------------------------------------------------
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_switch_account(move |id| {
+            let ui = weak.unwrap();
+            let Some(cookie) = secrets::load(id.as_str()) else {
+                tracing::warn!(%id, "no stored cookie for that account");
+                return;
+            };
+
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.active_account = Some(id.to_string());
+                let _ = cfg.save();
+            }
+
+            // A switch invalidates every in-flight load and every cached image.
+            SESSION_GEN.fetch_add(1, Ordering::SeqCst);
+            imgs2.clear();
+
+            let client = app.client.clone();
+            let app2 = app.clone();
+            let bridge3 = bridge2.clone();
+            let imgs3 = imgs2.clone();
+            let weak2 = weak.clone();
+
+            bridge2.spawn(async move {
+                client.set_cookie(Some(cookie)).await;
+                let me = users::authenticated(&client).await;
+                let _ = weak2.upgrade_in_event_loop(move |ui| match me {
+                    Ok(me) => enter_app(&ui, &app2, &bridge3, &imgs3, &me.display_name, me.id),
+                    Err(e) => bridge::report(&ui, e),
+                });
+            });
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_remove_account(move |id| {
+            let ui = weak.unwrap();
+            secrets::delete(id.as_str());
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.remove_account(id.as_str());
+                let _ = cfg.save();
+            }
+            render_settings(&ui, &app);
+            ui.set_accounts_count(app.config.lock().unwrap().accounts.len() as i32);
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_add_account(move || {
+            let ui = weak.unwrap();
+            // Reuse the sign-in screen; it knows it is adding rather than
+            // signing in for the first time from accounts_count.
+            ui.set_signed_in(false);
+            ui.set_signin_phase(SignInPhase::Idle);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_open_account(move || {
+            let ui = weak.unwrap();
+            ui.set_view_kind(0);
+            ui.set_can_back(false);
+            ui.set_section(SETTINGS_SECTION);
+            render_settings(&ui, &app);
+        });
+    }
+
+    let dark = app.config.lock().unwrap().settings.dark;
+    ui.set_dark(dark);
+    ui.global::<Theme>().set_dark(dark);
+    ui.set_link_handler(linkhandler::is_registered());
+    render_settings(ui, app);
+}
+
+fn render_settings(ui: &MainWindow, app: &Arc<App>) {
+    let cfg = app.config.lock().unwrap();
+
+    let rows: Vec<AccountRow> = cfg
+        .accounts
+        .iter()
+        .map(|a| AccountRow {
+            id: a.id.clone().into(),
+            name: a.display_name.clone().into(),
+            username: a.username.clone().into(),
+            avatar: slint::Image::default(),
+            active: cfg.active_account.as_deref() == Some(a.id.as_str()),
+        })
+        .collect();
+    ui.set_accounts(ad::model(rows));
+    ui.set_notify_requests(cfg.settings.notify_friend_requests);
+
+    // Watched friends resolve to names from the roster where possible; an id
+    // is still shown for anyone no longer on the list, so they can be removed.
+    let roster = app.roster.lock().unwrap();
+    let friends: Vec<DetailItem> = cfg
+        .settings
+        .notify_friends
+        .iter()
+        .map(|id| {
+            let name = roster
+                .iter()
+                .find(|f| f.id.to_string() == *id)
+                .map(|f| f.name.clone())
+                .unwrap_or_else(|| format!("User {id}"));
+            DetailItem {
+                id: id.clone().into(),
+                name: name.into(),
+                subtitle: slint::SharedString::default(),
+                thumb: slint::Image::default(),
+                kind: 8,
+            }
+        })
+        .collect();
+    ui.set_notify_friends_list(ad::model(friends));
+
+    let games: Vec<DetailItem> = cfg
+        .settings
+        .notify_games
+        .iter()
+        .map(|id| DetailItem {
+            id: id.clone().into(),
+            name: format!("Game {id}").into(),
+            subtitle: slint::SharedString::default(),
+            thumb: slint::Image::default(),
+            kind: 1,
+        })
+        .collect();
+    ui.set_notify_games_list(ad::model(games));
+}
+
+/// Playtime stats, computed from local history.
+fn render_library(ui: &MainWindow, app: &Arc<App>) {
+    let cfg = app.config.lock().unwrap();
+    let Some(data) = cfg.data() else {
+        ui.set_most_played(ad::model(Vec::new()));
+        ui.set_total_playtime("0m".into());
+        return;
+    };
+
+    let mut entries: Vec<_> = data.history.values().collect();
+    entries.sort_by_key(|h| std::cmp::Reverse(h.playtime_secs));
+
+    let total: u64 = entries.iter().map(|h| h.playtime_secs).sum();
+    let launches: u32 = entries.iter().map(|h| h.launches).sum();
+    let top = entries.first().map(|h| h.playtime_secs).unwrap_or(0);
+
+    let stats: Vec<PlayStat> = entries
+        .iter()
+        .filter(|h| h.playtime_secs > 0)
+        .take(10)
+        .map(|h| PlayStat {
+            id: h.place_id.clone().into(),
+            name: if h.name.is_empty() {
+                format!("Place {}", h.place_id).into()
+            } else {
+                h.name.clone().into()
+            },
+            value: ad::fmt_duration(h.playtime_secs).into(),
+            // Guard the divide: every entry can legitimately be zero.
+            fraction: if top > 0 { h.playtime_secs as f32 / top as f32 } else { 0.0 },
+        })
+        .collect();
+
+    ui.set_most_played(ad::model(stats));
+    ui.set_total_playtime(ad::fmt_duration(total).into());
+    ui.set_games_played(entries.len() as i32);
+    ui.set_total_launches(launches as i32);
 }
 
 fn push_view(ui: &MainWindow, app: &Arc<App>, kind: i32) {
@@ -2527,34 +3044,63 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
     let name = ui.get_game().name.to_string();
     {
         let mut cfg = app.config.lock().unwrap();
+        // History is keyed on the ROOT place, so a sub-place launch counts
+        // towards the game rather than creating a separate entry.
         let key = if req.root_place_id != 0 { req.root_place_id } else { req.place_id };
         cfg.record_launch(&key.to_string(), &name, chrono::Utc::now().timestamp());
         let _ = cfg.save();
     }
+    render_library(ui, app);
 
-    let result = match rojoin_launcher::detect() {
-        rojoin_launcher::Backend::Sober => rojoin_launcher::launch_sober(&req),
-        rojoin_launcher::Backend::WindowsClient => {
-            // Windows needs a fresh auth ticket per launch; wired in M1's
-            // Windows pass once there is a machine to test it on.
-            Err(rojoin_launcher::Error::Launch(
-                "Windows launching is not wired up yet".into(),
-            ))
+    match rojoin_launcher::detect() {
+        rojoin_launcher::Backend::Sober => {
+            // Sober reads the cookie from disk, so there is nothing to await.
+            match rojoin_launcher::launch_sober(&req) {
+                Ok(()) => tracing::info!(
+                    place = req.place_id,
+                    sub_place = req.is_sub_place(),
+                    "launched"
+                ),
+                Err(e) => tracing::error!(error = %e, "launch failed"),
+            }
+            ui.set_launching(false);
         }
-    };
 
-    if let Err(e) = result {
-        tracing::error!(error = %e, "launch failed");
-    } else {
-        tracing::info!(
-            place = req.place_id,
-            sub_place = req.is_sub_place(),
-            "launched"
-        );
+        rojoin_launcher::Backend::WindowsClient => {
+            // Windows has no cookie-swap equivalent: identity travels in a
+            // single-use authentication ticket, minted per launch because it
+            // expires within seconds.
+            let Some(bridge) = app.bridge.lock().unwrap().clone() else {
+                tracing::error!("no bridge available to mint a ticket");
+                ui.set_launching(false);
+                return;
+            };
+
+            let client = app.client.clone();
+            let req2 = req.clone();
+
+            bridge.call_res(
+                move || async move { auth::authentication_ticket(&client).await },
+                move |ui, result| {
+                    ui.set_launching(false);
+                    match result {
+                        Ok(ticket) => {
+                            let now = chrono::Utc::now().timestamp_millis();
+                            match rojoin_launcher::launch_windows(&req2, &ticket, now) {
+                                Ok(()) => tracing::info!(
+                                    place = req2.place_id,
+                                    sub_place = req2.is_sub_place(),
+                                    "launched"
+                                ),
+                                Err(e) => tracing::error!(error = %e, "launch failed"),
+                            }
+                        }
+                        Err(e) => bridge::report(&ui, e),
+                    }
+                },
+            );
+        }
     }
-
-    // The launcher hands off to another process; there is nothing to await.
-    ui.set_launching(false);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,359 @@
+import { Theme, Space, Type, Motion, Layout } from "theme.slint";
+import { Avatar, Btn, IconBtn, Chip, Segmented, Badge, EmptyState, Spinner } from "components.slint";
+import { DetailItem } from "types.slint";
+import { ScrollView } from "std-widgets.slint";
+
+export struct AccountRow {
+    id: string,
+    name: string,
+    username: string,
+    avatar: image,
+    active: bool,
+}
+
+component Toggle inherits Rectangle {
+    in property <bool> on;
+    in property <bool> enabled: true;
+    callback toggled();
+
+    width: 38px;
+    height: 21px;
+    border-radius: Theme.radius == 0px ? 0px : 11px;
+    background: root.on ? Theme.accent : Theme.bg_4;
+    opacity: root.enabled ? 1.0 : 0.4;
+    animate background { duration: Motion.fast; easing: Motion.ease; }
+
+    Rectangle {
+        width: 15px;
+        height: 15px;
+        y: 3px;
+        x: root.on ? parent.width - self.width - 3px : 3px;
+        background: root.on ? Theme.on_accent : Theme.text_dim;
+        border-radius: Theme.radius == 0px ? 0px : 8px;
+        animate x, background { duration: Motion.fast; easing: Motion.ease; }
+    }
+
+    TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+}
+
+component Row inherits Rectangle {
+    in property <string> title;
+    in property <string> hint;
+    height: Math.max(46px, rlay.preferred-height + Space.sm * 2);
+
+    rlay := HorizontalLayout {
+        padding-left: Space.lg;
+        padding-right: Space.lg;
+        spacing: Space.lg;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: Type.body;
+            }
+            if root.hint != "": Text {
+                text: root.hint;
+                color: Theme.text_mute;
+                font-size: Type.caption;
+                wrap: word-wrap;
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        @children
+    }
+}
+
+component Card inherits Rectangle {
+    in property <string> title;
+    background: Theme.bg_1;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: Theme.line;
+    height: clay.preferred-height;
+
+    clay := VerticalLayout {
+        padding-top: Space.md;
+        padding-bottom: Space.md;
+        spacing: Space.xs;
+
+        Text {
+            x: Space.lg;
+            text: root.title;
+            color: Theme.text_mute;
+            font-size: Type.micro;
+            font-weight: Type.w_bold;
+            letter-spacing: 0.8px;
+        }
+        @children
+    }
+}
+
+export component SettingsScreen inherits Rectangle {
+    in property <[AccountRow]> accounts;
+    in property <[DetailItem]> notify_friends;
+    in property <[DetailItem]> notify_games;
+    in property <bool> dark: true;
+    in property <bool> notify_requests: false;
+    in property <bool> link_handler: false;
+    in property <string> app_version;
+    in property <string> data_dir;
+    in property <string> update_status;
+    in property <bool> checking_update: false;
+
+    callback switch_account(string);
+    callback remove_account(string);
+    callback add_account();
+    callback set_dark(bool);
+    callback set_notify_requests(bool);
+    callback set_link_handler(bool);
+    callback unsub_friend(string);
+    callback unsub_game(string);
+    callback open_data_dir();
+    callback check_update();
+    callback open_credit();
+    callback open_source();
+
+    background: Theme.bg_0;
+
+    VerticalLayout {
+        spacing: 0;
+
+        Rectangle {
+            height: 56px;
+            background: Theme.bg_1;
+            HorizontalLayout {
+                padding-left: Space.lg;
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: "Settings";
+                        color: Theme.text;
+                        font-size: Type.title;
+                        font-weight: Type.w_bold;
+                    }
+                }
+            }
+        }
+        Rectangle { height: Theme.hairline; background: Theme.line; }
+
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                padding: Space.xl;
+                spacing: Space.lg;
+                alignment: start;
+
+                // --- accounts ------------------------------------------
+                Card {
+                    title: "ACCOUNTS";
+                    for a in root.accounts: Rectangle {
+                        height: 52px;
+                        background: ata.has-hover ? Theme.bg_2 : transparent;
+                        animate background { duration: Motion.instant; easing: Motion.ease; }
+
+                        HorizontalLayout {
+                            padding-left: Space.lg;
+                            padding-right: Space.lg;
+                            spacing: Space.md;
+
+                            VerticalLayout {
+                                alignment: center;
+                                Avatar { source: a.avatar; size_px: 30px; }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 1px;
+                                Text {
+                                    text: a.name;
+                                    color: Theme.text;
+                                    font-size: Type.body;
+                                    font-weight: a.active ? Type.w_bold : Type.w_regular;
+                                }
+                                Text {
+                                    text: "@" + a.username;
+                                    color: Theme.text_mute;
+                                    font-size: Type.caption;
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            if a.active: VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: "ACTIVE";
+                                    color: Theme.accent;
+                                    font-size: Type.micro;
+                                    font-weight: Type.w_bold;
+                                }
+                            }
+                            if !a.active: VerticalLayout {
+                                alignment: center;
+                                HorizontalLayout {
+                                    spacing: Space.xs;
+                                    Btn {
+                                        label: "Switch";
+                                        clicked => { root.switch_account(a.id); }
+                                    }
+                                    IconBtn {
+                                        glyph: "×";
+                                        clicked => { root.remove_account(a.id); }
+                                    }
+                                }
+                            }
+                        }
+
+                        ata := TouchArea { mouse-cursor: pointer; }
+                    }
+
+                    Row {
+                        title: "Add another account";
+                        hint: "Signs in through your browser, same as the first time.";
+                        VerticalLayout {
+                            alignment: center;
+                            Btn { label: "Add"; primary: true; clicked => { root.add_account(); } }
+                        }
+                    }
+                }
+
+                // --- appearance -----------------------------------------
+                Card {
+                    title: "APPEARANCE";
+                    Row {
+                        title: "Dark theme";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle { on: root.dark; toggled => { root.set_dark(!root.dark); } }
+                        }
+                    }
+                }
+
+                // --- notifications ---------------------------------------
+                Card {
+                    title: "NOTIFICATIONS";
+                    Row {
+                        title: "Friend requests";
+                        hint: "Notify when someone sends you a request.";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.notify_requests;
+                                toggled => { root.set_notify_requests(!root.notify_requests); }
+                            }
+                        }
+                    }
+
+                    Row {
+                        title: "Watched friends";
+                        hint: root.notify_friends.length == 0
+                              ? "None. Use the bell on a friend to watch them."
+                              : root.notify_friends.length + " watched";
+                    }
+                    for f in root.notify_friends: Rectangle {
+                        height: 36px;
+                        HorizontalLayout {
+                            padding-left: Space.xxl;
+                            padding-right: Space.lg;
+                            spacing: Space.sm;
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: f.name;
+                                    color: Theme.text_dim;
+                                    font-size: Type.small;
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            VerticalLayout {
+                                alignment: center;
+                                IconBtn { glyph: "×"; clicked => { root.unsub_friend(f.id); } }
+                            }
+                        }
+                    }
+
+                    Row {
+                        title: "Watched games";
+                        hint: root.notify_games.length == 0
+                              ? "None. Use the bell on a game page to watch it."
+                              : root.notify_games.length + " watched";
+                    }
+                    for g in root.notify_games: Rectangle {
+                        height: 36px;
+                        HorizontalLayout {
+                            padding-left: Space.xxl;
+                            padding-right: Space.lg;
+                            spacing: Space.sm;
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: g.name;
+                                    color: Theme.text_dim;
+                                    font-size: Type.small;
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            VerticalLayout {
+                                alignment: center;
+                                IconBtn { glyph: "×"; clicked => { root.unsub_game(g.id); } }
+                            }
+                        }
+                    }
+                }
+
+                // --- system ------------------------------------------------
+                Card {
+                    title: "SYSTEM";
+                    Row {
+                        title: "Open roblox:// links with RoJoin";
+                        hint: "Roblox links from your browser launch through RoJoin.";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.link_handler;
+                                toggled => { root.set_link_handler(!root.link_handler); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Data folder";
+                        hint: root.data_dir;
+                        VerticalLayout {
+                            alignment: center;
+                            Btn { label: "Open"; clicked => { root.open_data_dir(); } }
+                        }
+                    }
+                }
+
+                // --- about --------------------------------------------------
+                Card {
+                    title: "ABOUT";
+                    Row {
+                        title: "RoJoin " + root.app_version;
+                        hint: root.update_status;
+                        VerticalLayout {
+                            alignment: center;
+                            if root.checking_update: Spinner { size_px: 16px; }
+                            if !root.checking_update: Btn {
+                                label: "Check for updates";
+                                clicked => { root.check_update(); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Macro utilities";
+                        hint: "An independent implementation, inspired by Spencer Macro Utilities. No shared code.";
+                        VerticalLayout {
+                            alignment: center;
+                            Btn { label: "Credit"; clicked => { root.open_credit(); } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

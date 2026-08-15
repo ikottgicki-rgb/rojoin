@@ -48,6 +48,24 @@ pub fn greeting(hour: u32) -> &'static str {
     }
 }
 
+/// Seconds -> "4h 20m" / "45m" / "30s". Never renders "0h 0m".
+pub fn fmt_duration(secs: u64) -> String {
+    match secs {
+        0 => "0m".into(),
+        s if s < 60 => format!("{s}s"),
+        s if s < 3_600 => format!("{}m", s / 60),
+        s => {
+            let hours = s / 3_600;
+            let mins = (s % 3_600) / 60;
+            if mins == 0 {
+                format!("{hours}h")
+            } else {
+                format!("{hours}h {mins}m")
+            }
+        }
+    }
+}
+
 pub fn today_label() -> String {
     chrono::Local::now().format("%A, %-d %B").to_string()
 }
@@ -380,6 +398,16 @@ mod tests {
         assert_eq!(fmt_date("2020-01-02T03:04:05Z"), "2 Jan 2020");
         assert_eq!(fmt_date("garbage"), "");
         assert_eq!(fmt_date(""), "");
+    }
+
+    #[test]
+    fn durations_never_render_a_zero_component() {
+        assert_eq!(fmt_duration(0), "0m");
+        assert_eq!(fmt_duration(30), "30s");
+        assert_eq!(fmt_duration(90), "1m");
+        assert_eq!(fmt_duration(3_600), "1h");
+        assert_eq!(fmt_duration(3_600 + 1_200), "1h 20m");
+        assert_eq!(fmt_duration(86_400), "24h");
     }
 
     #[test]
