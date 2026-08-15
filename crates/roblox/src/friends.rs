@@ -208,6 +208,31 @@ pub async fn presence(client: &Client, user_ids: &[i64]) -> Result<Vec<Presence>
 
 // --- requests ---------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SocialCounts {
+    pub friends: i64,
+    pub followers: i64,
+    pub following: i64,
+}
+
+/// The three counts shown on a profile. Each is fetched independently and a
+/// failure degrades that one number to zero rather than blanking the profile.
+pub async fn counts(client: &Client, user_id: i64) -> SocialCounts {
+    async fn one(client: &Client, url: String) -> i64 {
+        #[derive(Deserialize)]
+        struct Count {
+            count: i64,
+        }
+        client.get_json::<Count>(&url).await.map(|c| c.count).unwrap_or(0)
+    }
+
+    SocialCounts {
+        friends: one(client, format!("{FRIENDS}/users/{user_id}/friends/count")).await,
+        followers: one(client, format!("{FRIENDS}/users/{user_id}/followers/count")).await,
+        following: one(client, format!("{FRIENDS}/users/{user_id}/followings/count")).await,
+    }
+}
+
 pub async fn request_count(client: &Client) -> Result<i64> {
     #[derive(Deserialize)]
     struct Count {

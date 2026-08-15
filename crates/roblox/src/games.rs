@@ -157,6 +157,21 @@ pub async fn game_passes(client: &Client, universe_id: i64) -> Result<Vec<GamePa
     Ok(page.data)
 }
 
+/// Games a user has favourited. Public, so it works for other people's
+/// profiles as well as your own.
+pub async fn user_favorites(client: &Client, user_id: i64, limit: u32) -> Result<Vec<GameDetail>> {
+    let url = format!("{GAMES_V2}/users/{user_id}/favorite/games?limit={limit}&sortOrder=Asc");
+    let page: Page<GameDetail> = client.get_json(&url).await?;
+    Ok(page.data)
+}
+
+/// Games published by a group.
+pub async fn group_games(client: &Client, group_id: i64, limit: u32) -> Result<Vec<GameDetail>> {
+    let url = format!("{GAMES_V2}/groups/{group_id}/games?limit={limit}&sortOrder=Asc");
+    let page: Page<GameDetail> = client.get_json(&url).await?;
+    Ok(page.data)
+}
+
 // --- favourites -------------------------------------------------------------
 
 pub async fn is_favorited(client: &Client, universe_id: i64) -> Result<bool> {

@@ -6,8 +6,11 @@ import { SignInScreen, SignInPhase } from "signin.slint";
 import { HomeScreen, PlayScreen } from "screens.slint";
 import { GameScreen } from "game.slint";
 import { FriendsScreen } from "friends.slint";
+import { ProfileScreen, ProfileData } from "profile.slint";
+import { GroupScreen, GroupData } from "group.slint";
+import { ChatScreen } from "chat.slint";
 
-export { Theme, SignInPhase }
+export { Theme, SignInPhase, ProfileData, GroupData }
 
 export component MainWindow inherits Window {
     title: "RoJoin";
@@ -118,6 +121,46 @@ export component MainWindow inherits Window {
     callback open_player(string);
     callback open_group(string);
     callback open_creator();
+
+    // === profile (pushed view) =============================================
+    in property <ProfileData> profile;
+    in property <bool> profile_loading: false;
+    in property <bool> profile_busy: false;
+    in property <[GroupRow]> profile_groups;
+    in property <[DetailItem]> profile_badges;
+    in property <[GameTile]> profile_favorites;
+    in-out property <int> profile_tab: 0;
+
+    callback profile_join();
+    callback profile_add_friend();
+    callback profile_unfriend();
+    callback profile_follow();
+    callback profile_message();
+
+    // === group (pushed view) ===============================================
+    in property <GroupData> group;
+    in property <bool> group_loading: false;
+    in property <bool> group_busy: false;
+    in property <[GameTile]> group_games;
+
+    callback group_join();
+    callback group_leave();
+    callback open_group_owner();
+
+    // === chat ==============================================================
+    in property <[ChatConv]> chat_convs;
+    in property <[ChatMsg]> chat_msgs;
+    in property <int> chat_selected: -1;
+    in property <bool> chat_convs_loading: false;
+    in property <bool> chat_msgs_loading: false;
+    in property <bool> chat_sending: false;
+    in property <string> chat_title;
+    in-out property <string> chat_draft;
+
+    callback chat_select(int);
+    callback chat_send(string);
+    callback chat_refresh();
+    callback chat_open_profile();
 
     // --- signed out --------------------------------------------------------
     if !root.signed_in: SignInScreen {
@@ -232,6 +275,42 @@ export component MainWindow inherits Window {
                             open_creator => { root.open_creator(); }
                         }
 
+                        if root.view_kind == 2: ProfileScreen {
+                            width: 100%;
+                            height: 100%;
+                            profile: root.profile;
+                            loading: root.profile_loading;
+                            busy: root.profile_busy;
+                            groups: root.profile_groups;
+                            badges: root.profile_badges;
+                            favorites: root.profile_favorites;
+                            tab <=> root.profile_tab;
+                            join => { root.profile_join(); }
+                            add_friend => { root.profile_add_friend(); }
+                            unfriend => { root.profile_unfriend(); }
+                            follow => { root.profile_follow(); }
+                            message => { root.profile_message(); }
+                            open_browser => { root.open_browser(); }
+                            copy_link => { root.copy_link(); }
+                            open_group(id) => { root.open_group(id); }
+                            open_game(id) => { root.open_game(id); }
+                        }
+
+                        if root.view_kind == 3: GroupScreen {
+                            width: 100%;
+                            height: 100%;
+                            group: root.group;
+                            loading: root.group_loading;
+                            busy: root.group_busy;
+                            games: root.group_games;
+                            join => { root.group_join(); }
+                            leave => { root.group_leave(); }
+                            open_owner => { root.open_group_owner(); }
+                            open_game(id) => { root.open_game(id); }
+                            open_browser => { root.open_browser(); }
+                            copy_link => { root.copy_link(); }
+                        }
+
                         if root.view_kind == 0 && root.section == 0: HomeScreen {
                             width: 100%;
                             height: 100%;
@@ -292,8 +371,25 @@ export component MainWindow inherits Window {
                             decline(id) => { root.decline_request(id); }
                         }
 
+                        if root.view_kind == 0 && root.section == 3: ChatScreen {
+                            width: 100%;
+                            height: 100%;
+                            convs: root.chat_convs;
+                            msgs: root.chat_msgs;
+                            selected: root.chat_selected;
+                            convs_loading: root.chat_convs_loading;
+                            msgs_loading: root.chat_msgs_loading;
+                            sending: root.chat_sending;
+                            title: root.chat_title;
+                            draft <=> root.chat_draft;
+                            select(i) => { root.chat_select(i); }
+                            send(t) => { root.chat_send(t); }
+                            refresh => { root.chat_refresh(); }
+                            open_profile => { root.chat_open_profile(); }
+                        }
+
                         // Sections still to be built out in later milestones.
-                        if root.view_kind == 0 && root.section > 2: EmptyState {
+                        if root.view_kind == 0 && root.section > 3: EmptyState {
                             width: 100%;
                             height: 100%;
                             title: root.nav[root.section].label;

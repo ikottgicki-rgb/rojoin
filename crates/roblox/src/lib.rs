@@ -14,6 +14,7 @@
 //!     that endpoint needs no auth.
 
 pub mod auth;
+pub mod chat;
 pub mod client;
 pub mod error;
 pub mod friends;

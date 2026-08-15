@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use rojoin_launcher::JoinRequest;
-use rojoin_roblox::{auth, friends, games, search, thumbnails, users, Client};
+use rojoin_roblox::{auth, chat, friends, games, groups, search, thumbnails, users, Client};
 use rojoin_store::Config;
 use slint::ComponentHandle;
 
@@ -63,6 +63,9 @@ struct App {
     /// without another round trip to Roblox.
     roster: Mutex<Vec<ad::FriendInput>>,
     offline_collapsed: Mutex<bool>,
+    /// Conversations as Roblox returned them, so a row index can be mapped
+    /// back to a conversation id and its participants.
+    conversations: Mutex<Vec<chat::Conversation>>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -89,6 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         me: Mutex::new(0),
         roster: Mutex::new(Vec::new()),
         offline_collapsed: Mutex::new(false),
+        conversations: Mutex::new(Vec::new()),
     });
 
     ui.set_app_version(env!("CARGO_PKG_VERSION").into());
@@ -112,6 +116,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wire_game(&ui, &app, &bridge, &imgs);
     wire_launch(&ui, &app, &bridge);
     wire_friends(&ui, &app, &bridge, &imgs);
+    wire_profile(&ui, &app, &bridge, &imgs);
+    wire_chat(&ui, &app, &bridge, &imgs);
 
     #[cfg(debug_assertions)]
     let demo_mode = demo::enabled();
@@ -195,6 +201,7 @@ fn enter_app(
 
     load_home(ui, app, bridge, imgs);
     load_friends(ui, app, bridge, imgs);
+    load_conversations(ui, app, bridge, imgs);
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +322,6 @@ fn wire_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
         });
     }
 
-    ui.on_open_friend(|id| tracing::info!(%id, "friend profile: milestone 2 (profiles)"));
 }
 
 fn load_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
@@ -743,15 +749,819 @@ fn wire_nav(ui: &MainWindow, app: &Arc<App>) {
     }
     {
         let weak = ui.as_weak();
-        ui.on_open_settings(move || weak.unwrap().set_section(NAV.len() as i32 - 1));
+        ui.on_open_settings(move || tracing::info!("settings: milestone 6"));
     }
-    ui.on_open_account(|| tracing::info!("account switcher: milestone 2"));
-    ui.on_open_creator(|| tracing::info!("creator profile: milestone 2"));
-    ui.on_open_player(|id| tracing::info!(%id, "profile: milestone 2"));
-    ui.on_open_group(|id| tracing::info!(%id, "group: milestone 2"));
-    ui.on_toggle_notify(|| tracing::info!("notify: milestone 2"));
+    ui.on_open_account(|| tracing::info!("account switcher: milestone 6"));
+    ui.on_toggle_notify(|| tracing::info!("game notify: milestone 6"));
     ui.on_copy_link(|| tracing::info!("copy link: milestone 6"));
     ui.on_open_browser(|| tracing::info!("open in browser: milestone 6"));
+}
+
+// ---------------------------------------------------------------------------
+// Profiles and groups
+// ---------------------------------------------------------------------------
+
+fn wire_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
+    // Every entry point into a profile funnels through one loader.
+    for hook in ["player", "friend", "creator"] {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        let handler = move |id: slint::SharedString| {
+            if let Ok(uid) = id.parse::<i64>() {
+                open_profile(&weak.unwrap(), &app, &bridge2, &imgs2, uid);
+            }
+        };
+        match hook {
+            "player" => ui.on_open_player(handler),
+            "friend" => ui.on_open_friend(handler),
+            _ => {}
+        }
+    }
+
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_open_creator(move || {
+            let ui = weak.unwrap();
+            // The creator can be a user or a group; the detail screen knows
+            // which because a group creator has no user profile to open.
+            let id = ui.get_game().universe_id.to_string();
+            tracing::debug!(%id, "open creator");
+            if let Ok(uid) = ui.get_game().creator.parse::<i64>() {
+                open_profile(&ui, &app, &bridge2, &imgs2, uid);
+            }
+        });
+    }
+
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_open_group(move |id| {
+            if let Ok(gid) = id.parse::<i64>() {
+                open_group(&weak.unwrap(), &app, &bridge2, &imgs2, gid);
+            }
+        });
+    }
+
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_profile_join(move || {
+            let ui = weak.unwrap();
+            let Ok(place) = ui.get_profile().place_id.parse::<i64>() else { return };
+            launch(&ui, &app, JoinRequest::place(place));
+        });
+    }
+
+    // --- social writes ---------------------------------------------------
+    //
+    // Each flips the button optimistically and reverts if Roblox refuses, so
+    // the UI never sits in a state the server disagrees with.
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let weak = ui.as_weak();
+        ui.on_profile_add_friend(move || {
+            let ui = weak.unwrap();
+            let Ok(uid) = ui.get_profile().id.parse::<i64>() else { return };
+            let client = app.client.clone();
+            ui.set_profile_busy(true);
+            bridge2.call_res(
+                move || async move { friends::send_request(&client, uid).await },
+                move |ui, result| {
+                    ui.set_profile_busy(false);
+                    match result {
+                        Ok(()) => tracing::info!(uid, "friend request sent"),
+                        Err(e) => bridge::report(&ui, e),
+                    }
+                },
+            );
+        });
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let weak = ui.as_weak();
+        ui.on_profile_unfriend(move || {
+            let ui = weak.unwrap();
+            let Ok(uid) = ui.get_profile().id.parse::<i64>() else { return };
+            let client = app.client.clone();
+            ui.set_profile_busy(true);
+
+            let mut p = ui.get_profile();
+            p.is_friend = false;
+            ui.set_profile(p);
+
+            bridge2.call_res(
+                move || async move { friends::unfriend(&client, uid).await },
+                move |ui, result| {
+                    ui.set_profile_busy(false);
+                    if let Err(e) = result {
+                        let mut p = ui.get_profile();
+                        p.is_friend = true;
+                        ui.set_profile(p);
+                        bridge::report(&ui, e);
+                    }
+                },
+            );
+        });
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let weak = ui.as_weak();
+        ui.on_profile_follow(move || {
+            let ui = weak.unwrap();
+            let Ok(uid) = ui.get_profile().id.parse::<i64>() else { return };
+            let was = ui.get_profile().is_following;
+            let client = app.client.clone();
+
+            let mut p = ui.get_profile();
+            p.is_following = !was;
+            ui.set_profile(p);
+
+            bridge2.call_res(
+                move || async move {
+                    if was {
+                        friends::unfollow(&client, uid).await
+                    } else {
+                        friends::follow(&client, uid).await
+                    }
+                },
+                move |ui, result| {
+                    if let Err(e) = result {
+                        let mut p = ui.get_profile();
+                        p.is_following = was;
+                        ui.set_profile(p);
+                        bridge::report(&ui, e);
+                    }
+                },
+            );
+        });
+    }
+
+    // --- group writes ------------------------------------------------------
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let weak = ui.as_weak();
+        ui.on_group_join(move || {
+            let ui = weak.unwrap();
+            let Ok(gid) = ui.get_group().id.parse::<i64>() else { return };
+            let client = app.client.clone();
+            ui.set_group_busy(true);
+            bridge2.call_res(
+                move || async move { groups::join(&client, gid).await },
+                move |ui, result| {
+                    ui.set_group_busy(false);
+                    match result {
+                        Ok(()) => {
+                            let mut g = ui.get_group();
+                            g.is_member = true;
+                            g.role = "Member".into();
+                            ui.set_group(g);
+                        }
+                        Err(e) => bridge::report(&ui, e),
+                    }
+                },
+            );
+        });
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let weak = ui.as_weak();
+        ui.on_group_leave(move || {
+            let ui = weak.unwrap();
+            let Ok(gid) = ui.get_group().id.parse::<i64>() else { return };
+            let me = *app.me.lock().unwrap();
+            let client = app.client.clone();
+            ui.set_group_busy(true);
+            bridge2.call_res(
+                move || async move { groups::leave(&client, gid, me).await },
+                move |ui, result| {
+                    ui.set_group_busy(false);
+                    match result {
+                        Ok(()) => {
+                            let mut g = ui.get_group();
+                            g.is_member = false;
+                            g.role = "".into();
+                            ui.set_group(g);
+                        }
+                        Err(e) => bridge::report(&ui, e),
+                    }
+                },
+            );
+        });
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_open_group_owner(move || {
+            let ui = weak.unwrap();
+            if let Ok(uid) = ui.get_group().owner_id.parse::<i64>() {
+                open_profile(&ui, &app, &bridge2, &imgs2, uid);
+            }
+        });
+    }
+
+}
+
+// ---------------------------------------------------------------------------
+// Chat
+// ---------------------------------------------------------------------------
+
+fn wire_chat(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_chat_refresh(move || load_conversations(&weak.unwrap(), &app, &bridge2, &imgs2));
+    }
+
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_chat_select(move |index| {
+            let ui = weak.unwrap();
+            let convs = app.conversations.lock().unwrap();
+            let Some(conv) = convs.get(index as usize).cloned() else { return };
+            drop(convs);
+
+            ui.set_chat_selected(index);
+            ui.set_chat_title(conv.display_title(*app.me.lock().unwrap()).into());
+            ui.set_chat_msgs(ad::model(Vec::new()));
+            load_messages(&ui, &app, &bridge2, &imgs2, &conv.id);
+        });
+    }
+
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_chat_send(move |text| {
+            let ui = weak.unwrap();
+            let text = text.trim().to_string();
+            if text.is_empty() {
+                return;
+            }
+
+            let index = ui.get_chat_selected();
+            let conv_id = {
+                let convs = app.conversations.lock().unwrap();
+                match convs.get(index as usize) {
+                    Some(c) => c.id.clone(),
+                    None => return,
+                }
+            };
+
+            // Optimistic append so the message appears the instant you hit
+            // enter; reconciled by the refetch once Roblox confirms.
+            append_own_message(&ui, &text);
+            ui.set_chat_draft("".into());
+            ui.set_chat_sending(true);
+
+            let client = app.client.clone();
+            let app2 = app.clone();
+            let bridge3 = bridge2.clone();
+            let imgs3 = imgs2.clone();
+            let cid = conv_id.clone();
+
+            bridge2.call_res(
+                move || async move { chat::send(&client, &cid, &text).await },
+                move |ui, result| {
+                    ui.set_chat_sending(false);
+                    match result {
+                        Ok(()) => load_messages(&ui, &app2, &bridge3, &imgs3, &conv_id),
+                        Err(e) => bridge::report(&ui, e),
+                    }
+                },
+            );
+        });
+    }
+
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_chat_open_profile(move || {
+            let ui = weak.unwrap();
+            let index = ui.get_chat_selected();
+            let me = *app.me.lock().unwrap();
+            let other = app
+                .conversations
+                .lock()
+                .unwrap()
+                .get(index as usize)
+                .and_then(|c| c.other_participant(me));
+            if let Some(uid) = other {
+                open_profile(&ui, &app, &bridge2, &imgs2, uid);
+            }
+        });
+    }
+
+    // "Message" on a profile opens (or creates) the one-to-one conversation.
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_profile_message(move || {
+            let ui = weak.unwrap();
+            let Ok(uid) = ui.get_profile().id.parse::<i64>() else { return };
+            let client = app.client.clone();
+            let app2 = app.clone();
+            let bridge3 = bridge2.clone();
+            let imgs3 = imgs2.clone();
+
+            bridge2.call_res(
+                move || async move { chat::create_with(&client, uid).await },
+                move |ui, result| match result {
+                    Ok(_id) => {
+                        ui.set_view_kind(0);
+                        ui.set_can_back(false);
+                        ui.set_section(3);
+                        load_conversations(&ui, &app2, &bridge3, &imgs3);
+                    }
+                    Err(e) => bridge::report(&ui, e),
+                },
+            );
+        });
+    }
+}
+
+fn load_conversations(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
+    ui.set_chat_convs_loading(true);
+
+    let client = app.client.clone();
+    let app2 = app.clone();
+    let imgs2 = imgs.clone();
+    let me = *app.me.lock().unwrap();
+    let gen = SESSION_GEN.load(Ordering::SeqCst);
+
+    bridge.call_res(
+        move || async move {
+            let convs = chat::conversations(&client, 30).await?;
+            let ids: Vec<i64> = convs.iter().filter_map(|c| c.other_participant(me)).collect();
+            let avatars = thumbnails::headshots(&client, &ids).await.unwrap_or_default();
+            Ok((convs, avatars))
+        },
+        move |ui, result| {
+            if gen != SESSION_GEN.load(Ordering::SeqCst) {
+                return;
+            }
+            ui.set_chat_convs_loading(false);
+
+            let (convs, avatars) = match result {
+                Ok(v) => v,
+                Err(e) => return bridge::report(&ui, e),
+            };
+
+            let rows: Vec<ChatConv> = convs
+                .iter()
+                .map(|c| ChatConv {
+                    id: c.id.clone().into(),
+                    title: c.display_title(me).into(),
+                    preview: c.preview().into(),
+                    time: c
+                        .last_updated
+                        .as_deref()
+                        .map(ad::time_ago)
+                        .unwrap_or_default()
+                        .into(),
+                    unread: c.unread_message_count.min(i32::MAX as i64) as i32,
+                    online: false,
+                    avatar: slint::Image::default(),
+                })
+                .collect();
+
+            ui.set_chat_convs(ad::model(rows));
+
+            for (i, c) in convs.iter().enumerate() {
+                let Some(other) = c.other_participant(me) else { continue };
+                let Some(url) = avatars.get(&other).cloned() else { continue };
+                imgs2.load(&url, move |ui, img| {
+                    set_conv_avatar(&ui.get_chat_convs(), i, img)
+                });
+            }
+
+            *app2.conversations.lock().unwrap() = convs;
+        },
+    );
+}
+
+fn load_messages(
+    ui: &MainWindow,
+    app: &Arc<App>,
+    bridge: &Arc<Bridge>,
+    imgs: &Images,
+    conversation_id: &str,
+) {
+    ui.set_chat_msgs_loading(true);
+
+    let client = app.client.clone();
+    let imgs2 = imgs.clone();
+    let me = *app.me.lock().unwrap();
+    let cid = conversation_id.to_string();
+    let cid_for_read = cid.clone();
+    let gen = SESSION_GEN.load(Ordering::SeqCst);
+
+    bridge.call_res(
+        move || async move {
+            let msgs = chat::messages(&client, &cid, 60).await?;
+            let ids: Vec<i64> = msgs.iter().map(|m| m.sender_id).collect();
+            let avatars = thumbnails::headshots(&client, &ids).await.unwrap_or_default();
+            // Opening a conversation is what marks it read.
+            let _ = chat::mark_read(&client, &cid).await;
+            Ok((msgs, avatars))
+        },
+        move |ui, result| {
+            if gen != SESSION_GEN.load(Ordering::SeqCst) {
+                return;
+            }
+            ui.set_chat_msgs_loading(false);
+
+            let (msgs, avatars) = match result {
+                Ok(v) => v,
+                Err(e) => return bridge::report(&ui, e),
+            };
+
+            // Roblox returns newest first; conversations read oldest at the top.
+            let ordered: Vec<_> = msgs.into_iter().rev().collect();
+
+            let mut rows: Vec<ChatMsg> = Vec::with_capacity(ordered.len());
+            let mut last_sender = i64::MIN;
+            for m in &ordered {
+                let mine = m.sender_id == me;
+                rows.push(ChatMsg {
+                    id: m.id.clone().into(),
+                    body: m.content.clone().into(),
+                    time: ad::time_ago(&m.created).into(),
+                    mine,
+                    sender: if mine { "You".into() } else { slint::SharedString::default() },
+                    avatar: slint::Image::default(),
+                    // Only the first message of a run carries a header, so a
+                    // back-and-forth does not repeat the name on every line.
+                    show_header: m.sender_id != last_sender,
+                });
+                last_sender = m.sender_id;
+            }
+            ui.set_chat_msgs(ad::model(rows));
+
+            for (i, m) in ordered.iter().enumerate() {
+                if m.sender_id == me {
+                    continue;
+                }
+                if let Some(url) = avatars.get(&m.sender_id).cloned() {
+                    imgs2.load(&url, move |ui, img| {
+                        set_msg_avatar(&ui.get_chat_msgs(), i, img)
+                    });
+                }
+            }
+
+            // Clear the unread badge on the row we just opened.
+            let idx = ui.get_chat_selected();
+            let model = ui.get_chat_convs();
+            {
+                use slint::Model;
+                if idx >= 0 {
+                    if let Some(mut row) = model.row_data(idx as usize) {
+                        row.unread = 0;
+                        model.set_row_data(idx as usize, row);
+                    }
+                }
+            }
+            let _ = cid_for_read;
+        },
+    );
+}
+
+/// Optimistic local echo, so a sent message shows immediately.
+fn append_own_message(ui: &MainWindow, text: &str) {
+    use slint::Model;
+    let model = ui.get_chat_msgs();
+    let last_mine = model
+        .row_data(model.row_count().saturating_sub(1))
+        .map(|m| m.mine)
+        .unwrap_or(false);
+
+    let mut rows: Vec<ChatMsg> = model.iter().collect();
+    rows.push(ChatMsg {
+        id: format!("local-{}", rows.len()).into(),
+        body: text.into(),
+        time: "now".into(),
+        mine: true,
+        sender: "You".into(),
+        avatar: slint::Image::default(),
+        show_header: !last_mine,
+    });
+    ui.set_chat_msgs(ad::model(rows));
+}
+
+fn push_view(ui: &MainWindow, app: &Arc<App>, kind: i32) {
+    if ui.get_view_kind() == 0 {
+        *app.return_section.lock().unwrap() = ui.get_section();
+    }
+    ui.set_view_kind(kind);
+    ui.set_can_back(true);
+}
+
+fn open_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images, user_id: i64) {
+    push_view(ui, app, 2);
+    ui.set_profile_loading(true);
+    ui.set_profile_tab(0);
+    ui.set_profile_groups(ad::model(Vec::new()));
+    ui.set_profile_favorites(ad::model(Vec::new()));
+
+    let client = app.client.clone();
+    let imgs2 = imgs.clone();
+    let me = *app.me.lock().unwrap();
+    let friend_ids: Vec<i64> = app.roster.lock().unwrap().iter().map(|f| f.id).collect();
+    let gen = SESSION_GEN.load(Ordering::SeqCst);
+
+    bridge.call_res(
+        move || async move { fetch_profile(&client, user_id).await },
+        move |ui, result| {
+            if gen != SESSION_GEN.load(Ordering::SeqCst) {
+                return;
+            }
+            ui.set_profile_loading(false);
+
+            let load = match result {
+                Ok(l) => l,
+                Err(e) => return bridge::report(&ui, e),
+            };
+
+            let presence = load.presence.as_ref();
+            let kind = presence.map(|p| p.kind).unwrap_or(friends::PresenceKind::Offline);
+
+            ui.set_profile(ProfileData {
+                id: load.user.id.to_string().into(),
+                name: load.user.display_name.clone().into(),
+                username: load.user.name.clone().into(),
+                description: load.user.description.clone().unwrap_or_default().into(),
+                joined: load
+                    .user
+                    .created
+                    .as_deref()
+                    .and_then(users::account_age_years)
+                    .map(|y| format!("{y}y"))
+                    .unwrap_or_else(|| "—".into())
+                    .into(),
+                also_known_as: load.previous_names.join(", ").into(),
+                verified: load.user.has_verified_badge,
+                friends: ad::compact(load.counts.friends).into(),
+                followers: ad::compact(load.counts.followers).into(),
+                following: ad::compact(load.counts.following).into(),
+                presence: match kind {
+                    friends::PresenceKind::Online => 1,
+                    friends::PresenceKind::InGame => 2,
+                    friends::PresenceKind::InStudio => 3,
+                    _ => 0,
+                },
+                presence_label: presence
+                    .map(|p| {
+                        if p.location.is_empty() {
+                            "Offline".to_string()
+                        } else {
+                            p.location.clone()
+                        }
+                    })
+                    .unwrap_or_else(|| "Offline".into())
+                    .into(),
+                place_id: presence
+                    .and_then(|p| p.place_id.or(p.root_place_id))
+                    .map(|p| p.to_string())
+                    .unwrap_or_default()
+                    .into(),
+                is_friend: friend_ids.contains(&user_id),
+                is_following: false,
+                is_self: user_id == me,
+                avatar: slint::Image::default(),
+            });
+
+            if let Some(url) = load.avatar {
+                imgs2.load(&url, |ui, img| {
+                    let mut p = ui.get_profile();
+                    p.avatar = img;
+                    ui.set_profile(p);
+                });
+            }
+
+            let group_rows: Vec<GroupRow> = load
+                .groups
+                .iter()
+                .map(|m| GroupRow {
+                    id: m.group.id.to_string().into(),
+                    name: m.group.name.clone().into(),
+                    role: m.role.name.clone().into(),
+                    members: ad::compact(m.group.member_count).into(),
+                    icon: slint::Image::default(),
+                })
+                .collect();
+            ui.set_profile_groups(ad::model(group_rows));
+
+            for (i, m) in load.groups.iter().enumerate() {
+                if let Some(url) = load.group_icons.get(&m.group.id).cloned() {
+                    imgs2.load(&url, move |ui, img| {
+                        set_group_icon(&ui.get_profile_groups(), i, img)
+                    });
+                }
+            }
+
+            let favs: Vec<GameTile> = load
+                .favorites
+                .iter()
+                .map(|d| ad::tile_from_detail(d, None, true))
+                .collect();
+            ui.set_profile_favorites(ad::model(favs));
+
+            for (i, d) in load.favorites.iter().enumerate() {
+                if let Some(url) = load.game_art.get(&d.id).cloned() {
+                    imgs2.load(&url, move |ui, img| {
+                        set_tile_thumb(&ui.get_profile_favorites(), i, img)
+                    });
+                }
+            }
+        },
+    );
+}
+
+struct ProfileLoad {
+    user: rojoin_roblox::models::User,
+    previous_names: Vec<String>,
+    counts: friends::SocialCounts,
+    presence: Option<friends::Presence>,
+    groups: Vec<groups::Membership>,
+    favorites: Vec<rojoin_roblox::models::GameDetail>,
+    avatar: Option<String>,
+    group_icons: std::collections::HashMap<i64, String>,
+    game_art: std::collections::HashMap<i64, String>,
+}
+
+async fn fetch_profile(client: &Client, user_id: i64) -> rojoin_roblox::Result<ProfileLoad> {
+    // Only the user lookup is allowed to fail the whole screen; the rest
+    // degrade to empty so one dead endpoint cannot blank a profile.
+    let user = users::get(client, user_id).await?;
+    let previous_names = users::previous_usernames(client, user_id).await.unwrap_or_default();
+    let counts = friends::counts(client, user_id).await;
+    let presence = friends::presence(client, &[user_id])
+        .await
+        .ok()
+        .and_then(|v| v.into_iter().next());
+    let groups = groups::of_user(client, user_id).await.unwrap_or_default();
+    let favorites = games::user_favorites(client, user_id, 12).await.unwrap_or_default();
+
+    let avatar = thumbnails::avatars(client, &[user_id])
+        .await
+        .ok()
+        .and_then(|m| m.get(&user_id).cloned());
+
+    let group_ids: Vec<i64> = groups.iter().map(|m| m.group.id).collect();
+    let group_icons = thumbnails::group_icons(client, &group_ids).await.unwrap_or_default();
+
+    let universe_ids: Vec<i64> = favorites.iter().map(|d| d.id).collect();
+    let game_art = thumbnails::game_art(client, &universe_ids).await.unwrap_or_default();
+
+    Ok(ProfileLoad {
+        user,
+        previous_names,
+        counts,
+        presence,
+        groups,
+        favorites,
+        avatar,
+        group_icons,
+        game_art,
+    })
+}
+
+fn open_group(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images, group_id: i64) {
+    push_view(ui, app, 3);
+    ui.set_group_loading(true);
+    ui.set_group_games(ad::model(Vec::new()));
+
+    let client = app.client.clone();
+    let imgs2 = imgs.clone();
+    let me = *app.me.lock().unwrap();
+    let gen = SESSION_GEN.load(Ordering::SeqCst);
+
+    bridge.call_res(
+        move || async move {
+            let group = groups::get(&client, group_id).await?;
+            let mine = groups::of_user(&client, me).await.unwrap_or_default();
+            let membership = mine.into_iter().find(|m| m.group.id == group_id);
+            let games_list = games::group_games(&client, group_id, 12).await.unwrap_or_default();
+
+            let icon = thumbnails::group_icons(&client, &[group_id])
+                .await
+                .ok()
+                .and_then(|m| m.get(&group_id).cloned());
+            let owner_avatar = match group.owner.as_ref() {
+                Some(o) => thumbnails::headshots(&client, &[o.user_id])
+                    .await
+                    .ok()
+                    .and_then(|m| m.get(&o.user_id).cloned()),
+                None => None,
+            };
+            let universe_ids: Vec<i64> = games_list.iter().map(|d| d.id).collect();
+            let art = thumbnails::game_art(&client, &universe_ids).await.unwrap_or_default();
+
+            Ok(GroupLoad { group, membership, games: games_list, icon, owner_avatar, art })
+        },
+        move |ui, result| {
+            if gen != SESSION_GEN.load(Ordering::SeqCst) {
+                return;
+            }
+            ui.set_group_loading(false);
+
+            let load = match result {
+                Ok(l) => l,
+                Err(e) => return bridge::report(&ui, e),
+            };
+
+            let owner = load.group.owner.clone().unwrap_or_default();
+            let shout = load.group.shout.clone().unwrap_or_default();
+
+            ui.set_group(GroupData {
+                id: load.group.id.to_string().into(),
+                name: load.group.name.clone().into(),
+                description: load.group.description.clone().unwrap_or_default().into(),
+                members: ad::compact(load.group.member_count).into(),
+                role: load
+                    .membership
+                    .as_ref()
+                    .map(|m| m.role.name.clone())
+                    .unwrap_or_default()
+                    .into(),
+                shout: shout.body.clone().into(),
+                shout_by: shout
+                    .poster
+                    .as_ref()
+                    .map(|p| p.display_name.clone())
+                    .unwrap_or_default()
+                    .into(),
+                owner: owner.display_name.clone().into(),
+                owner_id: owner.user_id.to_string().into(),
+                is_member: load.membership.is_some(),
+                open_entry: load.group.public_entry_allowed,
+                icon: slint::Image::default(),
+                owner_avatar: slint::Image::default(),
+            });
+
+            if let Some(url) = load.icon {
+                imgs2.load(&url, |ui, img| {
+                    let mut g = ui.get_group();
+                    g.icon = img;
+                    ui.set_group(g);
+                });
+            }
+            if let Some(url) = load.owner_avatar {
+                imgs2.load(&url, |ui, img| {
+                    let mut g = ui.get_group();
+                    g.owner_avatar = img;
+                    ui.set_group(g);
+                });
+            }
+
+            let tiles: Vec<GameTile> = load
+                .games
+                .iter()
+                .map(|d| ad::tile_from_detail(d, None, false))
+                .collect();
+            ui.set_group_games(ad::model(tiles));
+
+            for (i, d) in load.games.iter().enumerate() {
+                if let Some(url) = load.art.get(&d.id).cloned() {
+                    imgs2.load(&url, move |ui, img| {
+                        set_tile_thumb(&ui.get_group_games(), i, img)
+                    });
+                }
+            }
+        },
+    );
+}
+
+struct GroupLoad {
+    group: groups::Group,
+    membership: Option<groups::Membership>,
+    games: Vec<rojoin_roblox::models::GameDetail>,
+    icon: Option<String>,
+    owner_avatar: Option<String>,
+    art: std::collections::HashMap<i64, String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1257,6 +2067,30 @@ fn set_item_thumb(model: &slint::ModelRc<DetailItem>, index: usize, img: slint::
     use slint::Model;
     if let Some(mut row) = model.row_data(index) {
         row.thumb = img;
+        model.set_row_data(index, row);
+    }
+}
+
+fn set_conv_avatar(model: &slint::ModelRc<ChatConv>, index: usize, img: slint::Image) {
+    use slint::Model;
+    if let Some(mut row) = model.row_data(index) {
+        row.avatar = img;
+        model.set_row_data(index, row);
+    }
+}
+
+fn set_msg_avatar(model: &slint::ModelRc<ChatMsg>, index: usize, img: slint::Image) {
+    use slint::Model;
+    if let Some(mut row) = model.row_data(index) {
+        row.avatar = img;
+        model.set_row_data(index, row);
+    }
+}
+
+fn set_group_icon(model: &slint::ModelRc<GroupRow>, index: usize, img: slint::Image) {
+    use slint::Model;
+    if let Some(mut row) = model.row_data(index) {
+        row.icon = img;
         model.set_row_data(index, row);
     }
 }
