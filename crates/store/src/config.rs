@@ -57,6 +57,9 @@ pub struct AccountData {
     /// Local favourites, deliberately separate from Roblox account favourites.
     pub pins: Vec<String>,
     pub recent_searches: Vec<String>,
+    /// Friends lifted to the top of the list. Per-account on purpose: v1 kept
+    /// these globally and one account's pins corrupted the other's.
+    pub pinned_friends: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

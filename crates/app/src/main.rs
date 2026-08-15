@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use rojoin_launcher::JoinRequest;
-use rojoin_roblox::{auth, games, search, thumbnails, users, Client};
+use rojoin_roblox::{auth, friends, games, search, thumbnails, users, Client};
 use rojoin_store::Config;
 use slint::ComponentHandle;
 
@@ -56,6 +56,13 @@ struct App {
     /// Section to return to when a pushed detail view is dismissed.
     return_section: Mutex<i32>,
     search_session: Mutex<String>,
+
+    /// Signed-in user id, needed for friends and group calls.
+    me: Mutex<i64>,
+    /// The friends roster, kept so filtering and pin toggles can re-render
+    /// without another round trip to Roblox.
+    roster: Mutex<Vec<ad::FriendInput>>,
+    offline_collapsed: Mutex<bool>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -79,6 +86,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         signin: Mutex::new(None),
         return_section: Mutex::new(0),
         search_session: Mutex::new(new_session_id()),
+        me: Mutex::new(0),
+        roster: Mutex::new(Vec::new()),
+        offline_collapsed: Mutex::new(false),
     });
 
     ui.set_app_version(env!("CARGO_PKG_VERSION").into());
@@ -101,6 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wire_search(&ui, &app, &bridge, &imgs);
     wire_game(&ui, &app, &bridge, &imgs);
     wire_launch(&ui, &app, &bridge);
+    wire_friends(&ui, &app, &bridge, &imgs);
 
     #[cfg(debug_assertions)]
     let demo_mode = demo::enabled();
@@ -169,6 +180,7 @@ fn enter_app(
     ui.set_session_expired(false);
     ui.set_account_name(display_name.into());
     ui.set_accounts_count(app.config.lock().unwrap().accounts.len() as i32);
+    *app.me.lock().unwrap() = user_id;
 
     // The account's own head shot in the top bar.
     let imgs2 = imgs.clone();
@@ -182,6 +194,317 @@ fn enter_app(
     });
 
     load_home(ui, app, bridge, imgs);
+    load_friends(ui, app, bridge, imgs);
+}
+
+// ---------------------------------------------------------------------------
+// Friends
+// ---------------------------------------------------------------------------
+
+fn wire_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_refresh_friends(move || load_friends(&weak.unwrap(), &app, &bridge2, &imgs2));
+    }
+
+    // Filter, pin and collapse all re-render from the cached roster — no
+    // network round trip, so typing in the filter box stays instant.
+    {
+        let app = app.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_friend_filter_changed(move |_| recompute_friends(&weak.unwrap(), &app, &imgs2));
+    }
+    {
+        let app = app.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_toggle_friend_group(move |label| {
+            if label == "OFFLINE" {
+                let mut c = app.offline_collapsed.lock().unwrap();
+                *c = !*c;
+            }
+            recompute_friends(&weak.unwrap(), &app, &imgs2);
+        });
+    }
+    {
+        let app = app.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_pin_friend(move |id| {
+            {
+                let mut cfg = app.config.lock().unwrap();
+                let data = cfg.data_mut();
+                let key = id.to_string();
+                if let Some(pos) = data.pinned_friends.iter().position(|p| *p == key) {
+                    data.pinned_friends.remove(pos);
+                } else {
+                    data.pinned_friends.push(key);
+                }
+                let _ = cfg.save();
+            }
+            recompute_friends(&weak.unwrap(), &app, &imgs2);
+        });
+    }
+    {
+        let app = app.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_notify_friend(move |id| {
+            {
+                let mut cfg = app.config.lock().unwrap();
+                let key = id.to_string();
+                if let Some(pos) = cfg.settings.notify_friends.iter().position(|p| *p == key) {
+                    cfg.settings.notify_friends.remove(pos);
+                } else {
+                    cfg.settings.notify_friends.push(key);
+                }
+                let _ = cfg.save();
+            }
+            recompute_friends(&weak.unwrap(), &app, &imgs2);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_join_friend(move |id| {
+            let ui = weak.unwrap();
+            let Ok(fid) = id.parse::<i64>() else { return };
+
+            // Join *their* server, not a random one: presence gives us both the
+            // place and the specific game instance.
+            let target = app
+                .roster
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|f| f.id == fid)
+                .and_then(|f| f.place_id.map(|p| (p, f.game_id.clone())));
+
+            let Some((place_id, job)) = target else {
+                tracing::warn!(%id, "friend is not in a joinable game");
+                return;
+            };
+
+            let mut req = JoinRequest::place(place_id);
+            if let Some(job) = job {
+                req = req.server(job);
+            }
+            launch(&ui, &app, req);
+        });
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_accept_request(move |id| {
+            respond_to_request(&weak.unwrap(), &app, &bridge2, &imgs2, id.as_str(), true)
+        });
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_decline_request(move |id| {
+            respond_to_request(&weak.unwrap(), &app, &bridge2, &imgs2, id.as_str(), false)
+        });
+    }
+
+    ui.on_open_friend(|id| tracing::info!(%id, "friend profile: milestone 2 (profiles)"));
+}
+
+fn load_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
+    let me = *app.me.lock().unwrap();
+    if me == 0 {
+        return;
+    }
+
+    ui.set_friends_loading(true);
+    let client = app.client.clone();
+    let app2 = app.clone();
+    let imgs2 = imgs.clone();
+    let gen = SESSION_GEN.load(Ordering::SeqCst);
+
+    bridge.call_res(
+        move || async move { fetch_friends(&client, me).await },
+        move |ui, result| {
+            // Drop the result if the account changed while it was in flight,
+            // or one account's roster lands under another account's name.
+            if gen != SESSION_GEN.load(Ordering::SeqCst) {
+                return;
+            }
+            ui.set_friends_loading(false);
+
+            let load = match result {
+                Ok(load) => load,
+                Err(e) => return bridge::report(&ui, e),
+            };
+
+            let requests: Vec<DetailItem> = load
+                .requests
+                .iter()
+                .map(|u| DetailItem {
+                    id: u.id.to_string().into(),
+                    name: u.display_name.clone().into(),
+                    subtitle: u.name.clone().into(),
+                    thumb: slint::Image::default(),
+                    kind: 8,
+                })
+                .collect();
+
+            ui.set_requests_list(ad::model(requests));
+            ui.set_friend_requests(load.requests.len() as i32);
+
+            for (i, u) in load.requests.iter().enumerate() {
+                if let Some(url) = load.avatars.get(&u.id).cloned() {
+                    imgs2.load(&url, move |ui, img| {
+                        set_item_thumb(&ui.get_requests_list(), i, img)
+                    });
+                }
+            }
+
+            *app2.roster.lock().unwrap() = load.friends;
+            recompute_friends(&ui, &app2, &imgs2);
+        },
+    );
+}
+
+/// Rebuild the friends model from the cached roster. Pure UI-thread work.
+fn recompute_friends(ui: &MainWindow, app: &Arc<App>, imgs: &Images) {
+    let (pinned, notify) = {
+        let cfg = app.config.lock().unwrap();
+        (
+            cfg.data()
+                .map(|d| d.pinned_friends.iter().cloned().collect())
+                .unwrap_or_default(),
+            cfg.settings.notify_friends.iter().cloned().collect(),
+        )
+    };
+
+    let roster = app.roster.lock().unwrap();
+    let collapsed = *app.offline_collapsed.lock().unwrap();
+    let view = ad::friend_rows(
+        &roster,
+        &pinned,
+        &notify,
+        ui.get_friend_filter().as_str(),
+        collapsed,
+    );
+
+    ui.set_friends_in_game(view.in_game);
+    ui.set_friends_online(view.online);
+
+    // Capture the avatar URL for each rendered row before handing the model
+    // over, so image application can address rows by index.
+    let urls: Vec<(usize, String)> = view
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| !r.is_header)
+        .filter_map(|(i, r)| {
+            let id = r.id.parse::<i64>().ok()?;
+            let f = roster.iter().find(|f| f.id == id)?;
+            (!f.avatar_url.is_empty()).then(|| (i, f.avatar_url.clone()))
+        })
+        .collect();
+    drop(roster);
+
+    ui.set_friend_rows(ad::model(view.rows));
+
+    for (i, url) in urls {
+        imgs.load(&url, move |ui, img| {
+            set_friend_avatar(&ui.get_friend_rows(), i, img)
+        });
+    }
+}
+
+fn respond_to_request(
+    ui: &MainWindow,
+    app: &Arc<App>,
+    bridge: &Arc<Bridge>,
+    imgs: &Images,
+    id: &str,
+    accept: bool,
+) {
+    let Ok(user_id) = id.parse::<i64>() else { return };
+    let client = app.client.clone();
+    let app2 = app.clone();
+    let bridge2 = bridge.clone();
+    let imgs2 = imgs.clone();
+
+    bridge.call_res(
+        move || async move {
+            if accept {
+                friends::accept(&client, user_id).await
+            } else {
+                friends::decline(&client, user_id).await
+            }
+        },
+        move |ui, result| {
+            match result {
+                // Re-fetch rather than mutating locally: accepting changes both
+                // the request list and the roster, and the server is the truth.
+                Ok(()) => load_friends(&ui, &app2, &bridge2, &imgs2),
+                Err(e) => bridge::report(&ui, e),
+            }
+        },
+    );
+}
+
+struct FriendsLoad {
+    friends: Vec<ad::FriendInput>,
+    requests: Vec<rojoin_roblox::models::User>,
+    avatars: std::collections::HashMap<i64, String>,
+}
+
+async fn fetch_friends(client: &Client, me: i64) -> rojoin_roblox::Result<FriendsLoad> {
+    let list = friends::friend_ids(client, me).await?;
+    if !list.complete {
+        // Deliberately not fatal: showing a partial roster beats showing none.
+        // It is logged so a systematically truncated list is diagnosable.
+        tracing::warn!(count = list.ids.len(), "friends list may be incomplete");
+    }
+
+    let users = users::batch(client, &list.ids).await.unwrap_or_default();
+    let presence = friends::presence(client, &list.ids).await.unwrap_or_default();
+    let requests = friends::requests(client, 25).await.unwrap_or_default();
+
+    // One batch for friends and pending requesters together.
+    let mut avatar_ids = list.ids.clone();
+    avatar_ids.extend(requests.iter().map(|u| u.id));
+    let avatars = thumbnails::headshots(client, &avatar_ids).await.unwrap_or_default();
+
+    let friends = users
+        .iter()
+        .map(|u| {
+            let p = presence.iter().find(|p| p.user_id == u.id);
+            let kind = p.map(|p| p.kind).unwrap_or(friends::PresenceKind::Offline);
+            ad::FriendInput {
+                id: u.id,
+                name: u.display_name.clone(),
+                username: u.name.clone(),
+                presence: match kind {
+                    friends::PresenceKind::Online => 1,
+                    friends::PresenceKind::InGame => 2,
+                    friends::PresenceKind::InStudio => 3,
+                    _ => 0,
+                },
+                location: p.map(|p| p.location.clone()).unwrap_or_default(),
+                last_online: p.and_then(|p| p.last_online.clone()).unwrap_or_default(),
+                place_id: p.and_then(|p| p.place_id.or(p.root_place_id)),
+                game_id: p.and_then(|p| p.game_id.clone()),
+                avatar_url: avatars.get(&u.id).cloned().unwrap_or_default(),
+                joinable: kind.is_joinable() && p.and_then(|p| p.place_id).is_some(),
+            }
+        })
+        .collect();
+
+    Ok(FriendsLoad { friends, requests, avatars })
 }
 
 // ---------------------------------------------------------------------------
@@ -926,6 +1249,28 @@ fn set_tile_thumb(model: &slint::ModelRc<GameTile>, index: usize, img: slint::Im
     use slint::Model;
     if let Some(mut row) = model.row_data(index) {
         row.thumb = img;
+        model.set_row_data(index, row);
+    }
+}
+
+fn set_item_thumb(model: &slint::ModelRc<DetailItem>, index: usize, img: slint::Image) {
+    use slint::Model;
+    if let Some(mut row) = model.row_data(index) {
+        row.thumb = img;
+        model.set_row_data(index, row);
+    }
+}
+
+fn set_friend_avatar(model: &slint::ModelRc<FriendRow>, index: usize, img: slint::Image) {
+    use slint::Model;
+    if let Some(mut row) = model.row_data(index) {
+        // The model may have been rebuilt (filter typed, group collapsed)
+        // between the request and the reply, so a header now sitting at this
+        // index means the image belongs to a list that no longer exists.
+        if row.is_header {
+            return;
+        }
+        row.avatar = img;
         model.set_row_data(index, row);
     }
 }

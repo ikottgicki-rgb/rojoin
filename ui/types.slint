@@ -77,6 +77,38 @@ export struct DetailItem {
     kind: int,
 }
 
+/// One row of the friends list.
+///
+/// Headers and friends share a flat model so the whole list can live in a
+/// single virtualised ListView. A ListView cannot mix delegate types, and
+/// nesting per-group ListViews inside a scroll container fights the layout.
+export struct FriendRow {
+    id: string,
+    name: string,
+    username: string,
+    subtitle: string,       // "Playing Jailbreak" or "Last seen 2h ago"
+    avatar: image,
+    presence: int,          // 0 offline · 1 online · 2 in game · 3 studio
+    joinable: bool,
+    pinned: bool,
+    notify: bool,
+    place_id: string,
+
+    // Header-row fields; ignored when is_header is false.
+    is_header: bool,
+    header_label: string,
+    collapsible: bool,
+    collapsed: bool,
+}
+
+export struct GroupRow {
+    id: string,
+    name: string,
+    role: string,
+    members: string,
+    icon: image,
+}
+
 export struct GameDetailData {
     universe_id: string,
     root_place_id: string,

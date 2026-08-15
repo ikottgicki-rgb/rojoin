@@ -16,7 +16,9 @@
 pub mod auth;
 pub mod client;
 pub mod error;
+pub mod friends;
 pub mod games;
+pub mod groups;
 pub mod models;
 pub mod search;
 pub mod thumbnails;

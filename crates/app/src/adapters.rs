@@ -173,6 +173,178 @@ pub fn badges(list: &[Badge]) -> Vec<DetailItem> {
         .collect()
 }
 
+// --- friends ----------------------------------------------------------------
+
+/// "3m ago", "2h ago", "5d ago". Empty for anything unparseable, because a raw
+/// timestamp under someone's name is worse than no subtitle at all.
+pub fn time_ago(iso: &str) -> String {
+    let Ok(then) = chrono::DateTime::parse_from_rfc3339(iso) else {
+        return String::new();
+    };
+    let secs = (chrono::Utc::now() - then.with_timezone(&chrono::Utc)).num_seconds();
+
+    match secs {
+        s if s < 0 => "just now".into(),
+        s if s < 60 => "just now".into(),
+        s if s < 3_600 => format!("{}m ago", s / 60),
+        s if s < 86_400 => format!("{}h ago", s / 3_600),
+        s if s < 2_592_000 => format!("{}d ago", s / 86_400),
+        s => format!("{}mo ago", s / 2_592_000),
+    }
+}
+
+pub struct FriendInput {
+    pub id: i64,
+    pub name: String,
+    pub username: String,
+    pub presence: i32,
+    pub location: String,
+    pub last_online: String,
+    pub place_id: Option<i64>,
+    /// The specific server instance, so "Join" lands in *their* server rather
+    /// than a random one.
+    pub game_id: Option<String>,
+    pub avatar_url: String,
+    pub joinable: bool,
+}
+
+pub struct FriendsView {
+    pub rows: Vec<crate::FriendRow>,
+    pub in_game: i32,
+    pub online: i32,
+}
+
+/// Flatten friends into the grouped, header-interleaved list the UI renders.
+///
+/// Pinned friends are lifted to their own section at the top *and removed from
+/// the groups below*, so nobody is listed twice.
+pub fn friend_rows(
+    friends: &[FriendInput],
+    pinned: &std::collections::HashSet<String>,
+    notify: &std::collections::HashSet<String>,
+    filter: &str,
+    offline_collapsed: bool,
+) -> FriendsView {
+    let needle = filter.trim().to_lowercase();
+    let matches = |f: &FriendInput| {
+        needle.is_empty()
+            || f.name.to_lowercase().contains(&needle)
+            || f.username.to_lowercase().contains(&needle)
+    };
+
+    let in_game = friends.iter().filter(|f| f.presence == 2).count() as i32;
+    // Counts In-Studio too, matching what the ONLINE group actually contains.
+    let online = friends.iter().filter(|f| f.presence == 1 || f.presence == 3).count() as i32;
+
+    let visible: Vec<&FriendInput> = friends.iter().filter(|f| matches(f)).collect();
+
+    let make = |f: &FriendInput| crate::FriendRow {
+        id: f.id.to_string().into(),
+        name: f.name.clone().into(),
+        username: f.username.clone().into(),
+        subtitle: subtitle_for(f).into(),
+        avatar: Image::default(),
+        presence: f.presence,
+        joinable: f.joinable,
+        pinned: pinned.contains(&f.id.to_string()),
+        notify: notify.contains(&f.id.to_string()),
+        place_id: f.place_id.map(|p| p.to_string()).unwrap_or_default().into(),
+        is_header: false,
+        header_label: SharedString::default(),
+        collapsible: false,
+        collapsed: false,
+    };
+
+    let header = |label: &str, collapsible: bool, collapsed: bool| crate::FriendRow {
+        is_header: true,
+        header_label: label.into(),
+        collapsible,
+        collapsed,
+        id: SharedString::default(),
+        name: SharedString::default(),
+        username: SharedString::default(),
+        subtitle: SharedString::default(),
+        avatar: Image::default(),
+        presence: 0,
+        joinable: false,
+        pinned: false,
+        notify: false,
+        place_id: SharedString::default(),
+    };
+
+    let mut rows = Vec::new();
+
+    // Pinned first, ordered by presence within the section.
+    let mut pins: Vec<&&FriendInput> = visible
+        .iter()
+        .filter(|f| pinned.contains(&f.id.to_string()))
+        .collect();
+    pins.sort_by_key(|f| (presence_rank(f.presence), f.name.to_lowercase()));
+
+    if !pins.is_empty() {
+        rows.push(header("PINNED", false, false));
+        rows.extend(pins.iter().map(|f| make(f)));
+    }
+
+    let rest: Vec<&&FriendInput> = visible
+        .iter()
+        .filter(|f| !pinned.contains(&f.id.to_string()))
+        .collect();
+
+    let mut push_group = |rows: &mut Vec<crate::FriendRow>,
+                          label: &str,
+                          keep: &dyn Fn(i32) -> bool,
+                          collapsible: bool,
+                          collapsed: bool| {
+        let mut group: Vec<&&&FriendInput> = rest.iter().filter(|f| keep(f.presence)).collect();
+        if group.is_empty() {
+            return;
+        }
+        group.sort_by_key(|f| f.name.to_lowercase());
+        rows.push(header(label, collapsible, collapsed));
+        if !collapsed {
+            rows.extend(group.iter().map(|f| make(f)));
+        }
+    };
+
+    push_group(&mut rows, "IN GAME", &|p| p == 2, false, false);
+    push_group(&mut rows, "ONLINE", &|p| p == 1 || p == 3, false, false);
+    push_group(&mut rows, "OFFLINE", &|p| p == 0 || p == 4, true, offline_collapsed);
+
+    FriendsView { rows, in_game, online }
+}
+
+fn presence_rank(presence: i32) -> u8 {
+    match presence {
+        2 => 0,
+        1 => 1,
+        3 => 2,
+        _ => 3,
+    }
+}
+
+fn subtitle_for(f: &FriendInput) -> String {
+    match f.presence {
+        2 => {
+            if f.location.is_empty() {
+                "In game".into()
+            } else {
+                format!("Playing {}", f.location)
+            }
+        }
+        1 => "Online".into(),
+        3 => "In Studio".into(),
+        _ => {
+            let ago = time_ago(&f.last_online);
+            if ago.is_empty() {
+                "Offline".into()
+            } else {
+                format!("Last seen {ago}")
+            }
+        }
+    }
+}
+
 // --- model helpers ----------------------------------------------------------
 
 pub fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
@@ -269,5 +441,143 @@ mod tests {
 
         let v = Votes { id: 1, up_votes: 0, down_votes: 0 };
         assert_eq!(tile_from_detail(&d, Some(&v), false).rating, -1);
+    }
+
+    // --- friends ---------------------------------------------------------
+
+    fn friend(id: i64, name: &str, presence: i32) -> FriendInput {
+        FriendInput {
+            id,
+            name: name.into(),
+            username: name.to_lowercase(),
+            presence,
+            location: if presence == 2 { "Jailbreak".into() } else { String::new() },
+            last_online: String::new(),
+            place_id: (presence == 2).then_some(606849621),
+            game_id: None,
+            avatar_url: String::new(),
+            joinable: presence == 2,
+        }
+    }
+
+    fn empty() -> std::collections::HashSet<String> {
+        std::collections::HashSet::new()
+    }
+
+    #[test]
+    fn groups_are_ordered_in_game_then_online_then_offline() {
+        let friends = vec![
+            friend(1, "Offliner", 0),
+            friend(2, "Gamer", 2),
+            friend(3, "Onliner", 1),
+        ];
+        let view = friend_rows(&friends, &empty(), &empty(), "", false);
+
+        let headers: Vec<String> = view
+            .rows
+            .iter()
+            .filter(|r| r.is_header)
+            .map(|r| r.header_label.to_string())
+            .collect();
+        assert_eq!(headers, vec!["IN GAME", "ONLINE", "OFFLINE"]);
+        assert_eq!(view.in_game, 1);
+        assert_eq!(view.online, 1);
+    }
+
+    #[test]
+    fn pinned_friends_appear_once_only() {
+        // The bug this guards: a pinned friend showing in both PINNED and
+        // their presence group.
+        let friends = vec![friend(1, "Alice", 2), friend(2, "Bob", 1)];
+        let mut pins = empty();
+        pins.insert("1".to_string());
+
+        let view = friend_rows(&friends, &pins, &empty(), "", false);
+        let alice_rows = view.rows.iter().filter(|r| !r.is_header && r.id == "1").count();
+        assert_eq!(alice_rows, 1, "pinned friend was listed twice");
+
+        assert!(view.rows[0].is_header);
+        assert_eq!(view.rows[0].header_label, "PINNED");
+        assert_eq!(view.rows[1].id, "1");
+    }
+
+    #[test]
+    fn collapsed_offline_group_keeps_its_header_but_drops_its_rows() {
+        let friends = vec![friend(1, "Ghost", 0), friend(2, "Live", 1)];
+        let view = friend_rows(&friends, &empty(), &empty(), "", true);
+
+        assert!(view.rows.iter().any(|r| r.is_header && r.header_label == "OFFLINE"));
+        assert!(
+            !view.rows.iter().any(|r| !r.is_header && r.id == "1"),
+            "collapsed group must not render its rows"
+        );
+        assert!(view.rows.iter().any(|r| !r.is_header && r.id == "2"));
+    }
+
+    #[test]
+    fn filter_matches_display_name_and_username_case_insensitively() {
+        let friends = vec![friend(1, "Alice", 1), friend(2, "Bob", 1)];
+
+        let view = friend_rows(&friends, &empty(), &empty(), "ALI", false);
+        let ids: Vec<String> = view.rows.iter().filter(|r| !r.is_header).map(|r| r.id.to_string()).collect();
+        assert_eq!(ids, vec!["1"]);
+
+        // Counts describe the whole roster, not the filtered view — otherwise
+        // typing in the filter box would appear to log your friends out.
+        assert_eq!(view.online, 2);
+    }
+
+    #[test]
+    fn online_count_includes_in_studio_like_the_group_does() {
+        // The ONLINE group renders studio users, so the header count must
+        // agree with it or the two contradict each other on screen.
+        let friends = vec![friend(1, "Web", 1), friend(2, "Studio", 3)];
+        let view = friend_rows(&friends, &empty(), &empty(), "", false);
+        assert_eq!(view.online, 2);
+    }
+
+    #[test]
+    fn empty_groups_emit_no_header() {
+        let friends = vec![friend(1, "OnlyOnline", 1)];
+        let view = friend_rows(&friends, &empty(), &empty(), "", false);
+        assert!(!view.rows.iter().any(|r| r.is_header && r.header_label == "IN GAME"));
+        assert!(!view.rows.iter().any(|r| r.is_header && r.header_label == "OFFLINE"));
+    }
+
+    #[test]
+    fn subtitles_describe_what_the_friend_is_doing() {
+        assert_eq!(subtitle_for(&friend(1, "A", 2)), "Playing Jailbreak");
+        assert_eq!(subtitle_for(&friend(1, "A", 1)), "Online");
+        assert_eq!(subtitle_for(&friend(1, "A", 3)), "In Studio");
+        assert_eq!(subtitle_for(&friend(1, "A", 0)), "Offline");
+    }
+
+    #[test]
+    fn in_game_with_no_location_still_reads_sensibly() {
+        let mut f = friend(1, "A", 2);
+        f.location = String::new();
+        assert_eq!(subtitle_for(&f), "In game");
+    }
+
+    #[test]
+    fn time_ago_is_empty_for_garbage_and_scales_otherwise() {
+        assert_eq!(time_ago("nonsense"), "");
+        assert_eq!(time_ago(""), "");
+
+        let recent = (chrono::Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
+        assert_eq!(time_ago(&recent), "5m ago");
+
+        let older = (chrono::Utc::now() - chrono::Duration::hours(3)).to_rfc3339();
+        assert_eq!(time_ago(&older), "3h ago");
+
+        let days = (chrono::Utc::now() - chrono::Duration::days(4)).to_rfc3339();
+        assert_eq!(time_ago(&days), "4d ago");
+    }
+
+    #[test]
+    fn a_future_timestamp_does_not_produce_negative_time() {
+        // Clock skew between the machine and Roblox is common enough to matter.
+        let future = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+        assert_eq!(time_ago(&future), "just now");
     }
 }

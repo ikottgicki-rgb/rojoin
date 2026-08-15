@@ -131,6 +131,8 @@ pub fn seed(ui: &MainWindow) {
         "doors".into(),
     ]));
 
+    seed_friends(ui);
+
     // Lets the screenshot harness open any screen directly.
     if let Some(n) = env_int("ROJOIN_SECTION") {
         ui.set_section(n);
@@ -143,6 +145,79 @@ pub fn seed(ui: &MainWindow) {
 
 fn env_int(key: &str) -> Option<i32> {
     std::env::var(key).ok()?.parse().ok()
+}
+
+fn seed_friends(ui: &MainWindow) {
+    // (id, display, username, presence, location, pinned, notify)
+    let people: &[(i64, &str, &str, i32, &str, bool, bool)] = &[
+        (1, "UsedHenry06", "usedhenry06", 2, "Jailbreak", true, true),
+        (2, "felix", "felixsson", 2, "Tower Defense Simulator", true, false),
+        (3, "quuut", "quuut", 1, "", false, false),
+        (4, "Floofy", "floofyiv", 1, "", false, true),
+        (5, "Spencer", "spencer0187", 3, "", false, false),
+        (6, "Marcus", "marcusdev", 0, "", false, false),
+        (7, "Ellie", "elliebuilds", 0, "", false, false),
+        (8, "Tom", "tomtomtom", 0, "", false, false),
+    ];
+
+    let inputs: Vec<crate::adapters::FriendInput> = people
+        .iter()
+        .map(|(id, name, user, presence, loc, _, _)| crate::adapters::FriendInput {
+            id: *id,
+            name: (*name).into(),
+            username: (*user).into(),
+            presence: *presence,
+            location: (*loc).into(),
+            last_online: (chrono::Utc::now() - chrono::Duration::hours(*id * 3)).to_rfc3339(),
+            place_id: (*presence == 2).then_some(606849621),
+            game_id: None,
+            avatar_url: String::new(),
+            joinable: *presence == 2,
+        })
+        .collect();
+
+    let pinned: std::collections::HashSet<String> = people
+        .iter()
+        .filter(|p| p.5)
+        .map(|p| p.0.to_string())
+        .collect();
+    let notify: std::collections::HashSet<String> = people
+        .iter()
+        .filter(|p| p.6)
+        .map(|p| p.0.to_string())
+        .collect();
+
+    let view = ad::friend_rows(&inputs, &pinned, &notify, "", false);
+    ui.set_friends_in_game(view.in_game);
+    ui.set_friends_online(view.online);
+
+    // Give each non-header row a placeholder avatar.
+    let rows: Vec<crate::FriendRow> = view
+        .rows
+        .into_iter()
+        .map(|mut r| {
+            if !r.is_header {
+                let seed = r.id.parse::<usize>().unwrap_or(0) + 60;
+                r.avatar = swatch(seed, 72, 72);
+            }
+            r
+        })
+        .collect();
+    ui.set_friend_rows(ad::model(rows));
+
+    ui.set_requests_list(ad::model(
+        [("101", "NewPerson"), ("102", "SomeoneElse")]
+            .iter()
+            .enumerate()
+            .map(|(i, (id, name))| DetailItem {
+                id: (*id).into(),
+                name: (*name).into(),
+                subtitle: "".into(),
+                thumb: swatch(i + 90, 72, 72),
+                kind: 8,
+            })
+            .collect(),
+    ));
 }
 
 /// A flat placeholder image so layout is exercised with real decoded pixels

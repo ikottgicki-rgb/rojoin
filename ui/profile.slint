@@ -1,0 +1,341 @@
+import { Theme, Space, Type, Motion, Layout } from "theme.slint";
+import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, Spinner, EmptyState, MetaStat, Skeleton } from "components.slint";
+import { GameGrid, ItemGrid } from "cards.slint";
+import { GameTile, DetailItem, GroupRow } from "types.slint";
+import { ScrollView } from "std-widgets.slint";
+
+export struct ProfileData {
+    id: string,
+    name: string,
+    username: string,
+    description: string,
+    joined: string,
+    also_known_as: string,
+    verified: bool,
+    friends: string,
+    followers: string,
+    following: string,
+    presence: int,        // 0 offline · 1 online · 2 in game · 3 studio
+    presence_label: string,
+    place_id: string,
+    is_friend: bool,
+    is_following: bool,
+    is_self: bool,
+    avatar: image,
+}
+
+component StatCell inherits VerticalLayout {
+    in property <string> value;
+    in property <string> label;
+    spacing: 1px;
+
+    Text {
+        text: root.value;
+        color: Theme.text;
+        font-size: Type.lead;
+        font-weight: Type.w_bold;
+    }
+    Text {
+        text: root.label;
+        color: Theme.text_mute;
+        font-size: Type.caption;
+    }
+}
+
+export component ProfileScreen inherits Rectangle {
+    in property <ProfileData> profile;
+    in property <bool> loading: false;
+    in property <bool> busy: false;
+    in property <[GroupRow]> groups;
+    in property <[DetailItem]> badges;
+    in property <[GameTile]> favorites;
+    in-out property <int> tab: 0;   // 0 Overview · 1 Groups · 2 Badges
+
+    callback join();
+    callback add_friend();
+    callback unfriend();
+    callback follow();
+    callback message();
+    callback open_browser();
+    callback copy_link();
+    callback open_group(string);
+    callback open_game(string);
+
+    background: Theme.bg_0;
+
+    if root.loading: VerticalLayout {
+        padding: Space.xl;
+        spacing: Space.lg;
+        alignment: start;
+        Skeleton { height: 120px; }
+        Skeleton { height: 34px; width: 280px; }
+        Skeleton { height: 200px; }
+    }
+
+    if !root.loading: ScrollView {
+        VerticalLayout {
+            alignment: start;
+            spacing: 0;
+
+            // --- identity ---------------------------------------------------
+            Rectangle {
+                background: Theme.bg_1;
+                VerticalLayout {
+                    padding: Space.xl;
+                    spacing: Space.lg;
+
+                    HorizontalLayout {
+                        spacing: Space.lg;
+
+                        VerticalLayout {
+                            alignment: start;
+                            Avatar {
+                                source: root.profile.avatar;
+                                size_px: 96px;
+                                show_presence: true;
+                                online: root.profile.presence != 0;
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: Space.xs;
+
+                            HorizontalLayout {
+                                spacing: Space.sm;
+                                alignment: start;
+                                Text {
+                                    text: root.profile.name;
+                                    color: Theme.text;
+                                    font-size: Type.display;
+                                    font-weight: Type.w_bold;
+                                }
+                                if root.profile.verified: VerticalLayout {
+                                    alignment: center;
+                                    Text {
+                                        text: "✓";
+                                        color: Theme.accent;
+                                        font-size: Type.lead;
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: "@" + root.profile.username;
+                                color: Theme.text_mute;
+                                font-size: Type.small;
+                            }
+
+                            if root.profile.also_known_as != "": Text {
+                                text: "aka " + root.profile.also_known_as;
+                                color: Theme.text_mute;
+                                font-size: Type.caption;
+                                overflow: elide;
+                                wrap: no-wrap;
+                            }
+
+                            HorizontalLayout {
+                                spacing: Space.xs;
+                                alignment: start;
+                                Rectangle {
+                                    width: 7px;
+                                    height: 7px;
+                                    y: 6px;
+                                    border-radius: 4px;
+                                    background: root.profile.presence == 2 ? Theme.accent
+                                                : root.profile.presence == 1 ? Theme.text_dim
+                                                : Theme.text_mute;
+                                }
+                                Text {
+                                    text: root.profile.presence_label;
+                                    color: root.profile.presence == 2 ? Theme.text_dim : Theme.text_mute;
+                                    font-size: Type.caption;
+                                }
+                            }
+                        }
+
+                        Rectangle { horizontal-stretch: 1; }
+
+                        VerticalLayout {
+                            alignment: center;
+                            HorizontalLayout {
+                                spacing: Space.xxl;
+                                StatCell { value: root.profile.friends; label: "friends"; }
+                                StatCell { value: root.profile.followers; label: "followers"; }
+                                StatCell { value: root.profile.following; label: "following"; }
+                                StatCell { value: root.profile.joined; label: "on Roblox"; }
+                            }
+                        }
+                    }
+
+                    // --- actions --------------------------------------------
+                    if !root.profile.is_self: HorizontalLayout {
+                        spacing: Space.sm;
+                        alignment: start;
+
+                        if root.profile.presence == 2 && root.profile.place_id != "": Rectangle {
+                            width: 110px;
+                            height: 34px;
+                            background: jta.pressed ? Theme.accent_press
+                                        : jta.has-hover ? Theme.accent_hover : Theme.accent;
+                            border-radius: Theme.radius;
+                            animate background { duration: Motion.instant; easing: Motion.ease; }
+                            Text {
+                                text: "Join game";
+                                color: Theme.on_accent;
+                                font-size: Type.body;
+                                font-weight: Type.w_bold;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                            jta := TouchArea { mouse-cursor: pointer; clicked => { root.join(); } }
+                        }
+
+                        Btn {
+                            label: root.profile.is_friend ? "Remove friend" : "Add friend";
+                            enabled: !root.busy;
+                            clicked => {
+                                if (root.profile.is_friend) { root.unfriend(); } else { root.add_friend(); }
+                            }
+                        }
+                        Btn {
+                            label: root.profile.is_following ? "Following" : "Follow";
+                            enabled: !root.busy;
+                            clicked => { root.follow(); }
+                        }
+                        Btn {
+                            label: "Message";
+                            clicked => { root.message(); }
+                        }
+                        IconBtn { glyph: "⧉"; clicked => { root.copy_link(); } }
+                        IconBtn { glyph: "↗"; clicked => { root.open_browser(); } }
+                    }
+                }
+            }
+            Rectangle { height: Theme.hairline; background: Theme.line; }
+
+            // --- tabs ---------------------------------------------------------
+            VerticalLayout {
+                padding: Space.xl;
+                spacing: Space.lg;
+                alignment: start;
+
+                HorizontalLayout {
+                    alignment: start;
+                    Segmented {
+                        options: ["Overview", "Groups", "Badges"];
+                        current <=> root.tab;
+                    }
+                }
+
+                if root.tab == 0: VerticalLayout {
+                    spacing: Space.lg;
+                    alignment: start;
+
+                    if root.profile.description != "": Rectangle {
+                        background: Theme.bg_1;
+                        border-radius: Theme.radius;
+                        border-width: Theme.hairline;
+                        border-color: Theme.line;
+                        height: bio.preferred-height + Space.lg * 2;
+                        bio := Text {
+                            x: Space.lg;
+                            y: Space.lg;
+                            width: parent.width - Space.lg * 2;
+                            text: root.profile.description;
+                            color: Theme.text_dim;
+                            font-size: Type.body;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    if root.profile.description == "" && root.favorites.length == 0: EmptyState {
+                        height: 160px;
+                        title: "Nothing to show";
+                        hint: "This profile has no description.";
+                    }
+
+                    if root.favorites.length > 0: VerticalLayout {
+                        spacing: Space.md;
+                        Text {
+                            text: "Favourite games";
+                            color: Theme.text;
+                            font-size: Type.lead;
+                            font-weight: Type.w_bold;
+                        }
+                        GameGrid {
+                            games: root.favorites;
+                            open(id) => { root.open_game(id); }
+                            play(id) => { root.open_game(id); }
+                        }
+                    }
+                }
+
+                if root.tab == 1: VerticalLayout {
+                    spacing: Space.sm;
+                    alignment: start;
+
+                    if root.groups.length == 0: EmptyState {
+                        height: 160px;
+                        title: "No groups";
+                        hint: "Not a member of any group.";
+                    }
+
+                    for g in root.groups: Rectangle {
+                        height: 56px;
+                        background: gta.has-hover ? Theme.bg_2 : Theme.bg_1;
+                        border-radius: Theme.radius;
+                        border-width: Theme.hairline;
+                        border-color: Theme.line;
+                        animate background { duration: Motion.fast; easing: Motion.ease; }
+
+                        HorizontalLayout {
+                            padding-left: Space.md;
+                            padding-right: Space.md;
+                            spacing: Space.md;
+
+                            VerticalLayout {
+                                alignment: center;
+                                Thumb { width: 36px; height: 36px; source: g.icon; }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 1px;
+                                Text {
+                                    text: g.name;
+                                    color: Theme.text;
+                                    font-size: Type.body;
+                                    font-weight: Type.w_medium;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                }
+                                Text {
+                                    text: g.role + " · " + g.members + " members";
+                                    color: Theme.text_mute;
+                                    font-size: Type.caption;
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+
+                        gta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.open_group(g.id); }
+                        }
+                    }
+                }
+
+                if root.tab == 2: VerticalLayout {
+                    spacing: Space.md;
+                    alignment: start;
+                    if root.badges.length == 0: EmptyState {
+                        height: 160px;
+                        title: "No badges";
+                        hint: "This profile has not earned any badges yet.";
+                    }
+                    if root.badges.length > 0: ItemGrid { items: root.badges; }
+                }
+            }
+        }
+    }
+}

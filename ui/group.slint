@@ -1,0 +1,248 @@
+import { Theme, Space, Type, Motion, Layout } from "theme.slint";
+import { Thumb, Avatar, Btn, IconBtn, Skeleton, EmptyState, MetaStat } from "components.slint";
+import { GameGrid } from "cards.slint";
+import { GameTile } from "types.slint";
+import { ScrollView } from "std-widgets.slint";
+
+export struct GroupData {
+    id: string,
+    name: string,
+    description: string,
+    members: string,
+    role: string,
+    shout: string,
+    shout_by: string,
+    owner: string,
+    owner_id: string,
+    is_member: bool,
+    open_entry: bool,
+    icon: image,
+    owner_avatar: image,
+}
+
+export component GroupScreen inherits Rectangle {
+    in property <GroupData> group;
+    in property <bool> loading: false;
+    in property <bool> busy: false;
+    in property <[GameTile]> games;
+
+    callback join();
+    callback leave();
+    callback open_owner();
+    callback open_game(string);
+    callback open_browser();
+    callback copy_link();
+
+    background: Theme.bg_0;
+
+    if root.loading: VerticalLayout {
+        padding: Space.xl;
+        spacing: Space.lg;
+        alignment: start;
+        Skeleton { height: 110px; }
+        Skeleton { height: 70px; }
+        Skeleton { height: 180px; }
+    }
+
+    if !root.loading: ScrollView {
+        VerticalLayout {
+            alignment: start;
+            spacing: 0;
+
+            Rectangle {
+                background: Theme.bg_1;
+                VerticalLayout {
+                    padding: Space.xl;
+                    spacing: Space.lg;
+
+                    HorizontalLayout {
+                        spacing: Space.lg;
+
+                        Thumb { width: 84px; height: 84px; source: root.group.icon; }
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: Space.xs;
+
+                            Text {
+                                text: root.group.name;
+                                color: Theme.text;
+                                font-size: Type.display;
+                                font-weight: Type.w_bold;
+                                overflow: elide;
+                                wrap: no-wrap;
+                            }
+
+                            HorizontalLayout {
+                                spacing: Space.lg;
+                                alignment: start;
+                                MetaStat { glyph: "◆"; value: root.group.members + " members"; }
+                                if root.group.is_member: MetaStat {
+                                    glyph: "●";
+                                    value: root.group.role;
+                                }
+                            }
+
+                            if root.group.owner != "": HorizontalLayout {
+                                spacing: Space.sm;
+                                alignment: start;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Avatar { source: root.group.owner_avatar; size_px: 20px; }
+                                }
+                                Rectangle {
+                                    width: ownert.preferred-width;
+                                    height: ownert.preferred-height;
+                                    ownert := Text {
+                                        text: "Owned by " + root.group.owner;
+                                        color: ota.has-hover ? Theme.accent : Theme.text_mute;
+                                        font-size: Type.caption;
+                                        animate color { duration: Motion.fast; easing: Motion.ease; }
+                                    }
+                                    ota := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.open_owner(); }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Space.sm;
+                        alignment: start;
+
+                        if !root.group.is_member: Rectangle {
+                            width: 96px;
+                            height: 34px;
+                            opacity: root.group.open_entry ? 1.0 : 0.45;
+                            background: jta.pressed ? Theme.accent_press
+                                        : jta.has-hover ? Theme.accent_hover : Theme.accent;
+                            border-radius: Theme.radius;
+                            animate background { duration: Motion.instant; easing: Motion.ease; }
+                            Text {
+                                text: "Join";
+                                color: Theme.on_accent;
+                                font-size: Type.body;
+                                font-weight: Type.w_bold;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                            jta := TouchArea {
+                                enabled: root.group.open_entry && !root.busy;
+                                mouse-cursor: pointer;
+                                clicked => { root.join(); }
+                            }
+                        }
+
+                        if !root.group.is_member && !root.group.open_entry: VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: "This group approves members manually.";
+                                color: Theme.text_mute;
+                                font-size: Type.caption;
+                            }
+                        }
+
+                        if root.group.is_member: Btn {
+                            label: "Leave group";
+                            enabled: !root.busy;
+                            clicked => { root.leave(); }
+                        }
+
+                        IconBtn { glyph: "⧉"; clicked => { root.copy_link(); } }
+                        IconBtn { glyph: "↗"; clicked => { root.open_browser(); } }
+                    }
+                }
+            }
+            Rectangle { height: Theme.hairline; background: Theme.line; }
+
+            VerticalLayout {
+                padding: Space.xl;
+                spacing: Space.lg;
+                alignment: start;
+
+                if root.group.shout != "": Rectangle {
+                    background: Theme.bg_1;
+                    border-radius: Theme.radius;
+                    border-width: Theme.hairline;
+                    border-color: Theme.line;
+                    height: shoutlay.preferred-height;
+
+                    // The accent edge marks this as a live announcement rather
+                    // than another block of description text.
+                    Rectangle {
+                        x: 0;
+                        width: 2px;
+                        height: 100%;
+                        background: Theme.accent;
+                    }
+
+                    shoutlay := VerticalLayout {
+                        padding: Space.lg;
+                        spacing: Space.xs;
+                        Text {
+                            text: "GROUP SHOUT";
+                            color: Theme.text_mute;
+                            font-size: Type.micro;
+                            font-weight: Type.w_bold;
+                            letter-spacing: 0.8px;
+                        }
+                        Text {
+                            text: root.group.shout;
+                            color: Theme.text;
+                            font-size: Type.body;
+                            wrap: word-wrap;
+                        }
+                        if root.group.shout_by != "": Text {
+                            text: "— " + root.group.shout_by;
+                            color: Theme.text_mute;
+                            font-size: Type.caption;
+                        }
+                    }
+                }
+
+                if root.group.description != "": Rectangle {
+                    background: Theme.bg_1;
+                    border-radius: Theme.radius;
+                    border-width: Theme.hairline;
+                    border-color: Theme.line;
+                    height: gdesc.preferred-height + Space.lg * 2;
+                    gdesc := Text {
+                        x: Space.lg;
+                        y: Space.lg;
+                        width: parent.width - Space.lg * 2;
+                        text: root.group.description;
+                        color: Theme.text_dim;
+                        font-size: Type.body;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if root.games.length > 0: VerticalLayout {
+                    spacing: Space.md;
+                    Text {
+                        text: "Games";
+                        color: Theme.text;
+                        font-size: Type.lead;
+                        font-weight: Type.w_bold;
+                    }
+                    GameGrid {
+                        games: root.games;
+                        open(id) => { root.open_game(id); }
+                        play(id) => { root.open_game(id); }
+                    }
+                }
+
+                if root.group.description == "" && root.group.shout == "" && root.games.length == 0:
+                EmptyState {
+                    height: 180px;
+                    title: "Nothing to show";
+                    hint: "This group has no description, shout or games.";
+                }
+            }
+        }
+    }
+}

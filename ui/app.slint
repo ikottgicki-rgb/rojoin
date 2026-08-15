@@ -1,10 +1,11 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Btn, IconBtn, Segmented, Spinner, EmptyState } from "components.slint";
-import { GameTile, ChatConv, ChatMsg, WearItem, SubPlace, ServerRow, DetailItem, GameDetailData } from "types.slint";
+import { GameTile, ChatConv, ChatMsg, WearItem, SubPlace, ServerRow, DetailItem, GameDetailData, FriendRow, GroupRow } from "types.slint";
 import { Sidebar, TopBar, NavEntry, ExpiredBanner } from "shell.slint";
 import { SignInScreen, SignInPhase } from "signin.slint";
 import { HomeScreen, PlayScreen } from "screens.slint";
 import { GameScreen } from "game.slint";
+import { FriendsScreen } from "friends.slint";
 
 export { Theme, SignInPhase }
 
@@ -74,6 +75,23 @@ export component MainWindow inherits Window {
 
     callback play_search(string);
     callback clear_recents();
+
+    // === friends ===========================================================
+    in property <[FriendRow]> friend_rows;
+    in property <[DetailItem]> requests_list;
+    in property <bool> friends_loading: false;
+    in property <int> friends_in_game: 0;
+    in-out property <string> friend_filter;
+
+    callback refresh_friends();
+    callback open_friend(string);
+    callback join_friend(string);
+    callback pin_friend(string);
+    callback notify_friend(string);
+    callback toggle_friend_group(string);
+    callback accept_request(string);
+    callback decline_request(string);
+    callback friend_filter_changed(string);
 
     // === game detail =======================================================
     in property <GameDetailData> game;
@@ -254,8 +272,28 @@ export component MainWindow inherits Window {
                             clear_recents => { root.clear_recents(); }
                         }
 
+                        if root.view_kind == 0 && root.section == 2: FriendsScreen {
+                            width: 100%;
+                            height: 100%;
+                            rows: root.friend_rows;
+                            requests: root.requests_list;
+                            loading: root.friends_loading;
+                            in_game: root.friends_in_game;
+                            online: root.friends_online;
+                            filter <=> root.friend_filter;
+                            refresh => { root.refresh_friends(); }
+                            filter_changed(q) => { root.friend_filter_changed(q); }
+                            open(id) => { root.open_friend(id); }
+                            join(id) => { root.join_friend(id); }
+                            pin(id) => { root.pin_friend(id); }
+                            notify(id) => { root.notify_friend(id); }
+                            toggle_group(label) => { root.toggle_friend_group(label); }
+                            accept(id) => { root.accept_request(id); }
+                            decline(id) => { root.decline_request(id); }
+                        }
+
                         // Sections still to be built out in later milestones.
-                        if root.view_kind == 0 && root.section > 1: EmptyState {
+                        if root.view_kind == 0 && root.section > 2: EmptyState {
                             width: 100%;
                             height: 100%;
                             title: root.nav[root.section].label;
