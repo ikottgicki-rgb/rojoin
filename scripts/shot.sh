@@ -9,7 +9,7 @@
 # into the user's real config; that must never happen again.
 #
 # Usage: scripts/shot.sh <out.png> [width] [height]
-#   ROJOIN_LAB=0|1|2   which risk lab to open
+#   ROJOIN_DEMO=1 ROJOIN_SECTION=N ROJOIN_VIEW=1  which screen to open
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -45,7 +45,9 @@ XDG_CONFIG_HOME="$CFGDIR" \
 WLR_BACKENDS=headless \
 WLR_LIBINPUT_NO_DEVICES=1 \
 LIBGL_ALWAYS_SOFTWARE=1 \
-ROJOIN_LAB="${ROJOIN_LAB:-0}" \
+ROJOIN_DEMO="${ROJOIN_DEMO:-0}" \
+ROJOIN_SECTION="${ROJOIN_SECTION:-0}" \
+ROJOIN_VIEW="${ROJOIN_VIEW:-0}" \
     sway -c "$SWAYCFG" >"$RT/sway.log" 2>&1 &
 SWAYPID=$!
 

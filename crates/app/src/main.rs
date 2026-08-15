@@ -14,6 +14,8 @@ slint::include_modules!();
 
 mod adapters;
 mod bridge;
+#[cfg(debug_assertions)]
+mod demo;
 mod images;
 mod secrets;
 
@@ -100,7 +102,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wire_game(&ui, &app, &bridge, &imgs);
     wire_launch(&ui, &app, &bridge);
 
-    restore_session(&ui, &app, &bridge, &imgs);
+    #[cfg(debug_assertions)]
+    let demo_mode = demo::enabled();
+    #[cfg(not(debug_assertions))]
+    let demo_mode = false;
+
+    if demo_mode {
+        #[cfg(debug_assertions)]
+        demo::seed(&ui);
+    } else {
+        restore_session(&ui, &app, &bridge, &imgs);
+    }
 
     ui.run()?;
     Ok(())

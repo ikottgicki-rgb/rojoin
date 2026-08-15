@@ -382,6 +382,9 @@ export component GameScreen inherits Rectangle {
                             font-size: Type.small;
                         }
                     }
+                    // Without a trailing spacer the layout hands its slack to
+                    // the count and it drifts to the far right of the page.
+                    Rectangle { horizontal-stretch: 1; }
                 }
                 Text {
                     text: "Join a specific place directly instead of starting in the main one.";

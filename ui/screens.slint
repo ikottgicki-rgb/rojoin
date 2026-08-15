@@ -322,11 +322,14 @@ export component PlayScreen inherits Rectangle {
                             accepted => { root.search(self.text); }
                         }
                         if root.query == "": Text {
+                            x: 0;
+                            width: 100%;
+                            height: 100%;
                             text: "Search games, people, groups — or paste a Roblox link";
                             color: Theme.text_mute;
                             font-size: Type.lead;
                             vertical-alignment: center;
-                            height: 100%;
+                            horizontal-alignment: left;
                         }
                     }
                     if root.searching: VerticalLayout {

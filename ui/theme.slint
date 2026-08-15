@@ -15,15 +15,20 @@ export global Theme {
     in-out property <bool> dark: true;
 
     // ---- Surfaces: deepest to highest elevation -------------------------
-    out property <color> bg_0: root.dark ? #0A0A0B : #FFFFFF;  // window
-    out property <color> bg_1: root.dark ? #101012 : #F7F7F8;
-    out property <color> bg_2: root.dark ? #17171A : #F0F0F2;  // cards
-    out property <color> bg_3: root.dark ? #1F1F23 : #E7E7EA;  // hover
-    out property <color> bg_4: root.dark ? #2A2A30 : #DADADE;  // pressed
+    //
+    // The window is true black on purpose. Surfaces step up from it in
+    // widening increments so cards, hover and pressed states stay clearly
+    // distinct against it rather than all reading as "dark grey".
+    out property <color> bg_0: root.dark ? #000000 : #FFFFFF;  // window
+    out property <color> bg_1: root.dark ? #08080A : #F7F7F8;
+    out property <color> bg_2: root.dark ? #0F0F13 : #F0F0F2;  // cards
+    out property <color> bg_3: root.dark ? #191920 : #E7E7EA;  // hover
+    out property <color> bg_4: root.dark ? #26262F : #DADADE;  // pressed
 
     // ---- Lines ----------------------------------------------------------
-    out property <color> line: root.dark ? #2E2E34 : #DFDFE3;
-    out property <color> line_strong: root.dark ? #3D3D45 : #C4C4CB;
+    // Lifted a little to keep edges legible now that the ground is black.
+    out property <color> line: root.dark ? #24242B : #DFDFE3;
+    out property <color> line_strong: root.dark ? #3A3A44 : #C4C4CB;
 
     // ---- Text: three levels, no more --------------------------------------
     out property <color> text: root.dark ? #F2F2F3 : #16161A;
