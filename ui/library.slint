@@ -1,0 +1,255 @@
+import { Theme, Space, Type, Motion, Layout } from "theme.slint";
+import { Btn, IconBtn, Segmented, EmptyState, MetaStat } from "components.slint";
+import { GameGrid, GameListRow } from "cards.slint";
+import { GameTile, DetailItem } from "types.slint";
+import { ScrollView } from "std-widgets.slint";
+
+// Library: what you have actually played, and for how long.
+//
+// Everything here comes from local history — no algorithmic shelves.
+
+export struct PlayStat {
+    id: string,
+    name: string,
+    value: string,     // "4h 20m"
+    fraction: float,   // 0..1 relative to the most-played entry
+}
+
+component StatBar inherits Rectangle {
+    in property <PlayStat> stat;
+    callback clicked();
+
+    height: 40px;
+
+    VerticalLayout {
+        spacing: 4px;
+        HorizontalLayout {
+            spacing: Space.sm;
+            Text {
+                text: root.stat.name;
+                color: sba.has-hover ? Theme.text : Theme.text_dim;
+                font-size: Type.small;
+                overflow: elide;
+                wrap: no-wrap;
+                animate color { duration: Motion.fast; easing: Motion.ease; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: root.stat.value;
+                color: Theme.text_mute;
+                font-size: Type.caption;
+            }
+        }
+        Rectangle {
+            height: 4px;
+            background: Theme.bg_3;
+            border-radius: Theme.radius;
+            Rectangle {
+                x: 0;
+                width: parent.width * root.stat.fraction;
+                height: 100%;
+                background: sba.has-hover ? Theme.accent : Theme.text_mute;
+                border-radius: Theme.radius;
+                animate background { duration: Motion.fast; easing: Motion.ease; }
+            }
+        }
+    }
+
+    sba := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component LibraryScreen inherits Rectangle {
+    in property <[GameTile]> recent;
+    in property <[GameTile]> favorites;
+    in property <[PlayStat]> most_played;
+    in property <string> total_playtime;
+    in property <int> games_played: 0;
+    in property <int> total_launches: 0;
+    in-out property <int> tab: 0;   // 0 Recent · 1 Favourites · 2 Stats
+
+    callback open(string);
+    callback play(string);
+    callback favorite(string);
+
+    background: Theme.bg_0;
+
+    VerticalLayout {
+        spacing: 0;
+
+        Rectangle {
+            height: 56px;
+            background: Theme.bg_1;
+            HorizontalLayout {
+                padding-left: Space.lg;
+                padding-right: Space.lg;
+                spacing: Space.md;
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: "Library";
+                        color: Theme.text;
+                        font-size: Type.title;
+                        font-weight: Type.w_bold;
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                VerticalLayout {
+                    alignment: center;
+                    Segmented {
+                        options: ["Recent", "Favourites", "Stats"];
+                        current <=> root.tab;
+                    }
+                }
+            }
+        }
+        Rectangle { height: Theme.hairline; background: Theme.line; }
+
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                alignment: start;
+                padding: Space.xl;
+                spacing: Space.lg;
+
+                // --- recent ---------------------------------------------
+                if root.tab == 0 && root.recent.length == 0: EmptyState {
+                    height: 220px;
+                    title: "Nothing played yet";
+                    hint: "Games you launch from RoJoin show up here.";
+                }
+                if root.tab == 0 && root.recent.length > 0: GameGrid {
+                    games: root.recent;
+                    open(id) => { root.open(id); }
+                    play(id) => { root.play(id); }
+                    favorite(id) => { root.favorite(id); }
+                }
+
+                // --- favourites -------------------------------------------
+                if root.tab == 1 && root.favorites.length == 0: EmptyState {
+                    height: 220px;
+                    title: "No favourites";
+                    hint: "Star a game to keep it here.";
+                }
+                if root.tab == 1 && root.favorites.length > 0: GameGrid {
+                    games: root.favorites;
+                    open(id) => { root.open(id); }
+                    play(id) => { root.play(id); }
+                    favorite(id) => { root.favorite(id); }
+                }
+
+                // --- stats --------------------------------------------------
+                if root.tab == 2: VerticalLayout {
+                    spacing: Space.xl;
+                    alignment: start;
+
+                    HorizontalLayout {
+                        spacing: Space.md;
+                        alignment: start;
+                        for tile in [
+                            { label: "Total playtime", value: root.total_playtime },
+                        ]: Rectangle {
+                            width: 200px;
+                            height: 76px;
+                            background: Theme.bg_2;
+                            border-radius: Theme.radius;
+                            border-width: Theme.hairline;
+                            border-color: Theme.line;
+                            VerticalLayout {
+                                padding: Space.md;
+                                spacing: 2px;
+                                alignment: center;
+                                Text {
+                                    text: tile.value;
+                                    color: Theme.text;
+                                    font-size: Type.display;
+                                    font-weight: Type.w_bold;
+                                }
+                                Text {
+                                    text: tile.label;
+                                    color: Theme.text_mute;
+                                    font-size: Type.caption;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            width: 150px;
+                            height: 76px;
+                            background: Theme.bg_2;
+                            border-radius: Theme.radius;
+                            border-width: Theme.hairline;
+                            border-color: Theme.line;
+                            VerticalLayout {
+                                padding: Space.md;
+                                spacing: 2px;
+                                alignment: center;
+                                Text {
+                                    text: root.games_played + "";
+                                    color: Theme.text;
+                                    font-size: Type.display;
+                                    font-weight: Type.w_bold;
+                                }
+                                Text {
+                                    text: "games played";
+                                    color: Theme.text_mute;
+                                    font-size: Type.caption;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            width: 150px;
+                            height: 76px;
+                            background: Theme.bg_2;
+                            border-radius: Theme.radius;
+                            border-width: Theme.hairline;
+                            border-color: Theme.line;
+                            VerticalLayout {
+                                padding: Space.md;
+                                spacing: 2px;
+                                alignment: center;
+                                Text {
+                                    text: root.total_launches + "";
+                                    color: Theme.text;
+                                    font-size: Type.display;
+                                    font-weight: Type.w_bold;
+                                }
+                                Text {
+                                    text: "launches";
+                                    color: Theme.text_mute;
+                                    font-size: Type.caption;
+                                }
+                            }
+                        }
+                    }
+
+                    if root.most_played.length > 0: VerticalLayout {
+                        spacing: Space.md;
+                        Text {
+                            text: "Most played";
+                            color: Theme.text;
+                            font-size: Type.lead;
+                            font-weight: Type.w_bold;
+                        }
+                        VerticalLayout {
+                            spacing: Space.sm;
+                            for s in root.most_played: StatBar {
+                                stat: s;
+                                clicked => { root.open(s.id); }
+                            }
+                        }
+                    }
+
+                    if root.most_played.length == 0: EmptyState {
+                        height: 160px;
+                        title: "No playtime recorded";
+                        hint: "Launch a game from RoJoin and time starts counting.";
+                    }
+                }
+            }
+        }
+    }
+}

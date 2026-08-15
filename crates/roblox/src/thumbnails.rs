@@ -91,6 +91,14 @@ pub async fn group_icons(client: &Client, group_ids: &[i64]) -> Result<HashMap<i
     .await
 }
 
+/// Saved-outfit renders, keyed by outfit id.
+pub async fn outfits(client: &Client, outfit_ids: &[i64]) -> Result<HashMap<i64, String>> {
+    batch(client, outfit_ids, |ids| {
+        format!("{THUMBS}/users/outfits?userOutfitIds={ids}&size=150x150&format=Png&isCircular=false")
+    })
+    .await
+}
+
 pub async fn assets(client: &Client, asset_ids: &[i64]) -> Result<HashMap<i64, String>> {
     batch(client, asset_ids, |ids| {
         format!("{THUMBS}/assets?assetIds={ids}&size=420x420&format=Png&isCircular=false")

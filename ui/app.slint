@@ -1,6 +1,6 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Btn, IconBtn, Segmented, Spinner, EmptyState } from "components.slint";
-import { GameTile, ChatConv, ChatMsg, WearItem, SubPlace, ServerRow, DetailItem, GameDetailData, FriendRow, GroupRow } from "types.slint";
+import { GameTile, ChatConv, ChatMsg, WearItem, SubPlace, ServerRow, DetailItem, GameDetailData, FriendRow, GroupRow, MacroRow } from "types.slint";
 import { Sidebar, TopBar, NavEntry, ExpiredBanner } from "shell.slint";
 import { SignInScreen, SignInPhase } from "signin.slint";
 import { HomeScreen, PlayScreen } from "screens.slint";
@@ -9,6 +9,8 @@ import { FriendsScreen } from "friends.slint";
 import { ProfileScreen, ProfileData } from "profile.slint";
 import { GroupScreen, GroupData } from "group.slint";
 import { ChatScreen } from "chat.slint";
+import { AvatarScreen } from "avatar.slint";
+import { MacrosScreen } from "macros.slint";
 
 export { Theme, SignInPhase, ProfileData, GroupData }
 
@@ -161,6 +163,42 @@ export component MainWindow inherits Window {
     callback chat_send(string);
     callback chat_refresh();
     callback chat_open_profile();
+
+    // === avatar ============================================================
+    in property <image> av_body;
+    in property <bool> av_body_loading: false;
+    in property <[WearItem]> av_items;
+    in property <[string]> av_categories;
+    in property <[DetailItem]> av_outfits;
+    in property <[DetailItem]> av_worn;
+    in-out property <int> av_category: 0;
+    in-out property <int> av_tab: 0;
+    in property <bool> av_items_loading: false;
+    in property <bool> av_busy: false;
+    in property <int> av_worn_count: 0;
+    in property <bool> av_is_r15: true;
+
+    callback av_pick_category(int);
+    callback av_toggle(string);
+    callback av_wear_outfit(string);
+    callback av_save_outfit();
+    callback av_set_type(bool);
+    callback av_refresh();
+
+    // === macros ============================================================
+    in property <[MacroRow]> macros;
+    in property <bool> macro_available: true;
+    in property <string> macro_hint;
+    in property <string> macro_backend;
+    in property <int> macro_active: 0;
+    in property <string> macro_binding;
+
+    callback macro_toggle_run(string);
+    callback macro_toggle_enabled(string);
+    callback macro_edit(string);
+    callback macro_rebind(string);
+    callback macro_stop_all();
+    callback macro_open_credit();
 
     // --- signed out --------------------------------------------------------
     if !root.signed_in: SignInScreen {
@@ -388,8 +426,48 @@ export component MainWindow inherits Window {
                             open_profile => { root.chat_open_profile(); }
                         }
 
+                        if root.view_kind == 0 && root.section == 5: AvatarScreen {
+                            width: 100%;
+                            height: 100%;
+                            body: root.av_body;
+                            body_loading: root.av_body_loading;
+                            items: root.av_items;
+                            categories: root.av_categories;
+                            outfits: root.av_outfits;
+                            worn: root.av_worn;
+                            category <=> root.av_category;
+                            tab <=> root.av_tab;
+                            items_loading: root.av_items_loading;
+                            busy: root.av_busy;
+                            worn_count: root.av_worn_count;
+                            is_r15: root.av_is_r15;
+                            pick_category(i) => { root.av_pick_category(i); }
+                            toggle(id) => { root.av_toggle(id); }
+                            wear_outfit(id) => { root.av_wear_outfit(id); }
+                            save_outfit => { root.av_save_outfit(); }
+                            set_avatar_type(r15) => { root.av_set_type(r15); }
+                            refresh => { root.av_refresh(); }
+                        }
+
+                        if root.view_kind == 0 && root.section == 6: MacrosScreen {
+                            width: 100%;
+                            height: 100%;
+                            macros: root.macros;
+                            available: root.macro_available;
+                            permission_hint: root.macro_hint;
+                            backend_name: root.macro_backend;
+                            active_count: root.macro_active;
+                            binding_id: root.macro_binding;
+                            toggle_run(id) => { root.macro_toggle_run(id); }
+                            toggle_enabled(id) => { root.macro_toggle_enabled(id); }
+                            edit(id) => { root.macro_edit(id); }
+                            rebind(id) => { root.macro_rebind(id); }
+                            stop_all => { root.macro_stop_all(); }
+                            open_credit => { root.macro_open_credit(); }
+                        }
+
                         // Sections still to be built out in later milestones.
-                        if root.view_kind == 0 && root.section > 3: EmptyState {
+                        if root.view_kind == 0 && root.section == 4: EmptyState {
                             width: 100%;
                             height: 100%;
                             title: root.nav[root.section].label;

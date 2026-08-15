@@ -109,6 +109,19 @@ export struct GroupRow {
     icon: image,
 }
 
+/// One row in the macro list.
+export struct MacroRow {
+    id: string,
+    name: string,
+    description: string,
+    hotkey: string,
+    mode: string,
+    enabled: bool,
+    running: bool,
+    cycle: string,
+    summary: string,
+}
+
 export struct GameDetailData {
     universe_id: string,
     root_place_id: string,

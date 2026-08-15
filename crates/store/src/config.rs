@@ -86,6 +86,8 @@ pub struct Settings {
     /// place id -> account id, so a game can always launch as a chosen alt.
     /// Keyed on the ROOT place id so sub-place launches honour it too.
     pub game_account_bindings: HashMap<String, String>,
+    /// User macros. Empty means "use the bundled presets".
+    pub macros: Vec<rojoin_macro::Macro>,
 }
 
 impl Default for Settings {
@@ -97,6 +99,7 @@ impl Default for Settings {
             notify_friend_requests: false,
             close_to_tray: false,
             game_account_bindings: HashMap::new(),
+            macros: Vec::new(),
         }
     }
 }

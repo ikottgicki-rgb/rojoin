@@ -4,6 +4,7 @@ members = [
     "crates/roblox",
     "crates/store",
     "crates/launcher",
+    "crates/macroeng",
     "crates/app",
 ]
 
@@ -17,6 +18,7 @@ license = "MIT"
 rojoin-roblox = { path = "crates/roblox" }
 rojoin-store = { path = "crates/store" }
 rojoin-launcher = { path = "crates/launcher" }
+rojoin-macro = { path = "crates/macroeng" }
 
 slint = { version = "1.17", default-features = false, features = [
     "compat-1-2",

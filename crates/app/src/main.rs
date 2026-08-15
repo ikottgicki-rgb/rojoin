@@ -66,6 +66,12 @@ struct App {
     /// Conversations as Roblox returned them, so a row index can be mapped
     /// back to a conversation id and its participants.
     conversations: Mutex<Vec<chat::Conversation>>,
+    /// Asset ids currently worn. Local source of truth for the avatar editor,
+    /// because Roblox only accepts the complete list on every change.
+    worn: Mutex<Vec<i64>>,
+    /// The macro engine, absent when input permission is missing.
+    engine: Mutex<Option<Arc<rojoin_macro::Engine>>>,
+    macros: Mutex<Vec<rojoin_macro::Macro>>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -93,6 +99,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         roster: Mutex::new(Vec::new()),
         offline_collapsed: Mutex::new(false),
         conversations: Mutex::new(Vec::new()),
+        worn: Mutex::new(Vec::new()),
+        engine: Mutex::new(None),
+        macros: Mutex::new(Vec::new()),
     });
 
     ui.set_app_version(env!("CARGO_PKG_VERSION").into());
@@ -118,6 +127,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wire_friends(&ui, &app, &bridge, &imgs);
     wire_profile(&ui, &app, &bridge, &imgs);
     wire_chat(&ui, &app, &bridge, &imgs);
+    wire_avatar(&ui, &app, &bridge, &imgs);
+    wire_macros(&ui, &app);
 
     #[cfg(debug_assertions)]
     let demo_mode = demo::enabled();
@@ -202,6 +213,7 @@ fn enter_app(
     load_home(ui, app, bridge, imgs);
     load_friends(ui, app, bridge, imgs);
     load_conversations(ui, app, bridge, imgs);
+    load_avatar(ui, app, bridge, imgs);
 }
 
 // ---------------------------------------------------------------------------
@@ -1271,6 +1283,530 @@ fn append_own_message(ui: &MainWindow, text: &str) {
     ui.set_chat_msgs(ad::model(rows));
 }
 
+// ---------------------------------------------------------------------------
+// Avatar
+//
+// Owned items only — no catalog, no prices, nothing to buy.
+// ---------------------------------------------------------------------------
+
+fn wire_avatar(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
+    ui.set_av_categories(ad::strings(
+        rojoin_roblox::avatar::CATEGORIES
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect(),
+    ));
+
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_av_refresh(move || load_avatar(&weak.unwrap(), &app, &bridge2, &imgs2));
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_av_pick_category(move |_| load_wardrobe(&weak.unwrap(), &app, &bridge2, &imgs2));
+    }
+
+    // Toggling an item sends the *complete* worn list — that is the only
+    // mechanism Roblox still offers — so the local list is the source of truth
+    // and is rolled back if the call fails.
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_av_toggle(move |id| {
+            let ui = weak.unwrap();
+            let Ok(asset_id) = id.parse::<i64>() else { return };
+
+            let before = app.worn.lock().unwrap().clone();
+            let adding = !before.contains(&asset_id);
+            let mut after = before.clone();
+            if adding {
+                after.push(asset_id);
+            } else {
+                after.retain(|a| *a != asset_id);
+            }
+            *app.worn.lock().unwrap() = after.clone();
+
+            apply_worn_flags(&ui, &after);
+            ui.set_av_worn_count(after.len() as i32);
+            ui.set_av_busy(true);
+
+            let client = app.client.clone();
+            let app2 = app.clone();
+            let bridge3 = bridge2.clone();
+            let imgs3 = imgs2.clone();
+            let send = after.clone();
+
+            bridge2.call_res(
+                move || async move { rojoin_roblox::avatar::set_wearing(&client, &send).await },
+                move |ui, result| {
+                    ui.set_av_busy(false);
+                    match result {
+                        // Re-render the avatar so the preview matches.
+                        Ok(()) => refresh_avatar_render(&ui, &app2, &bridge3, &imgs3),
+                        Err(e) => {
+                            *app2.worn.lock().unwrap() = before.clone();
+                            apply_worn_flags(&ui, &before);
+                            ui.set_av_worn_count(before.len() as i32);
+                            bridge::report(&ui, e);
+                        }
+                    }
+                },
+            );
+        });
+    }
+
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_av_wear_outfit(move |id| {
+            let ui = weak.unwrap();
+            let Ok(outfit_id) = id.parse::<i64>() else { return };
+            ui.set_av_busy(true);
+
+            let client = app.client.clone();
+            let app2 = app.clone();
+            let bridge3 = bridge2.clone();
+            let imgs3 = imgs2.clone();
+
+            bridge2.call_res(
+                move || async move { rojoin_roblox::avatar::wear_outfit(&client, outfit_id).await },
+                move |ui, result| {
+                    ui.set_av_busy(false);
+                    match result {
+                        Ok(ids) => {
+                            *app2.worn.lock().unwrap() = ids.clone();
+                            apply_worn_flags(&ui, &ids);
+                            ui.set_av_worn_count(ids.len() as i32);
+                            load_avatar(&ui, &app2, &bridge3, &imgs3);
+                        }
+                        Err(e) => bridge::report(&ui, e),
+                    }
+                },
+            );
+        });
+    }
+
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_av_save_outfit(move || {
+            let ui = weak.unwrap();
+            ui.set_av_busy(true);
+
+            let client = app.client.clone();
+            let app2 = app.clone();
+            let bridge3 = bridge2.clone();
+            let imgs3 = imgs2.clone();
+            let name = format!("RoJoin {}", chrono::Local::now().format("%d %b %H:%M"));
+
+            bridge2.call_res(
+                move || async move {
+                    let current = rojoin_roblox::avatar::mine(&client).await?;
+                    rojoin_roblox::avatar::save_outfit(&client, &name, &current).await
+                },
+                move |ui, result| {
+                    ui.set_av_busy(false);
+                    match result {
+                        Ok(()) => load_avatar(&ui, &app2, &bridge3, &imgs3),
+                        Err(e) => bridge::report(&ui, e),
+                    }
+                },
+            );
+        });
+    }
+
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_av_set_type(move |r15| {
+            let ui = weak.unwrap();
+            if ui.get_av_is_r15() == r15 {
+                return;
+            }
+            ui.set_av_is_r15(r15);
+            ui.set_av_busy(true);
+
+            let client = app.client.clone();
+            let app2 = app.clone();
+            let bridge3 = bridge2.clone();
+            let imgs3 = imgs2.clone();
+
+            bridge2.call_res(
+                move || async move { rojoin_roblox::avatar::set_avatar_type(&client, r15).await },
+                move |ui, result| {
+                    ui.set_av_busy(false);
+                    match result {
+                        Ok(()) => refresh_avatar_render(&ui, &app2, &bridge3, &imgs3),
+                        Err(e) => {
+                            ui.set_av_is_r15(!r15);
+                            bridge::report(&ui, e);
+                        }
+                    }
+                },
+            );
+        });
+    }
+}
+
+/// Re-tick the worn markers across the wardrobe grid and the wearing list.
+fn apply_worn_flags(ui: &MainWindow, worn: &[i64]) {
+    use slint::Model;
+    let items = ui.get_av_items();
+    for i in 0..items.row_count() {
+        if let Some(mut row) = items.row_data(i) {
+            let is_worn = row.id.parse::<i64>().map(|id| worn.contains(&id)).unwrap_or(false);
+            if row.worn != is_worn {
+                row.worn = is_worn;
+                items.set_row_data(i, row);
+            }
+        }
+    }
+}
+
+fn load_avatar(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
+    let me = *app.me.lock().unwrap();
+    if me == 0 {
+        return;
+    }
+
+    ui.set_av_body_loading(true);
+    let client = app.client.clone();
+    let app2 = app.clone();
+    let imgs2 = imgs.clone();
+    let bridge2 = bridge.clone();
+    let gen = SESSION_GEN.load(Ordering::SeqCst);
+
+    bridge.call_res(
+        move || async move {
+            let av = rojoin_roblox::avatar::mine(&client).await?;
+            let outfits = rojoin_roblox::avatar::outfits(&client, me, 24).await.unwrap_or_default();
+            let body = thumbnails::avatars(&client, &[me])
+                .await
+                .ok()
+                .and_then(|m| m.get(&me).cloned());
+
+            let worn_ids = av.worn_ids();
+            let worn_thumbs = thumbnails::assets(&client, &worn_ids).await.unwrap_or_default();
+            let outfit_ids: Vec<i64> = outfits.iter().map(|o| o.id).collect();
+            let outfit_thumbs = thumbnails::outfits(&client, &outfit_ids).await.unwrap_or_default();
+
+            Ok(AvatarLoad { av, outfits, body, worn_thumbs, outfit_thumbs })
+        },
+        move |ui, result| {
+            if gen != SESSION_GEN.load(Ordering::SeqCst) {
+                return;
+            }
+            ui.set_av_body_loading(false);
+
+            let load = match result {
+                Ok(l) => l,
+                Err(e) => return bridge::report(&ui, e),
+            };
+
+            let worn_ids = load.av.worn_ids();
+            *app2.worn.lock().unwrap() = worn_ids.clone();
+            ui.set_av_worn_count(worn_ids.len() as i32);
+            ui.set_av_is_r15(load.av.player_avatar_type != "R6");
+
+            let worn_rows: Vec<DetailItem> = load
+                .av
+                .assets
+                .iter()
+                .map(|a| DetailItem {
+                    id: a.id.to_string().into(),
+                    name: a.name.clone().into(),
+                    subtitle: a.asset_type.name.clone().into(),
+                    thumb: slint::Image::default(),
+                    kind: 7,
+                })
+                .collect();
+            ui.set_av_worn(ad::model(worn_rows));
+
+            for (i, a) in load.av.assets.iter().enumerate() {
+                if let Some(url) = load.worn_thumbs.get(&a.id).cloned() {
+                    imgs2.load(&url, move |ui, img| set_item_thumb(&ui.get_av_worn(), i, img));
+                }
+            }
+
+            let outfit_rows: Vec<DetailItem> = load
+                .outfits
+                .iter()
+                .map(|o| DetailItem {
+                    id: o.id.to_string().into(),
+                    name: o.name.clone().into(),
+                    subtitle: slint::SharedString::default(),
+                    thumb: slint::Image::default(),
+                    kind: 9,
+                })
+                .collect();
+            ui.set_av_outfits(ad::model(outfit_rows));
+
+            for (i, o) in load.outfits.iter().enumerate() {
+                if let Some(url) = load.outfit_thumbs.get(&o.id).cloned() {
+                    imgs2.load(&url, move |ui, img| set_item_thumb(&ui.get_av_outfits(), i, img));
+                }
+            }
+
+            if let Some(url) = load.body {
+                imgs2.load(&url, |ui, img| ui.set_av_body(img));
+            }
+
+            apply_worn_flags(&ui, &worn_ids);
+            load_wardrobe(&ui, &app2, &bridge2, &imgs2);
+        },
+    );
+}
+
+struct AvatarLoad {
+    av: rojoin_roblox::avatar::Avatar,
+    outfits: Vec<rojoin_roblox::avatar::Outfit>,
+    body: Option<String>,
+    worn_thumbs: std::collections::HashMap<i64, String>,
+    outfit_thumbs: std::collections::HashMap<i64, String>,
+}
+
+/// The owned items for the selected category.
+fn load_wardrobe(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
+    let me = *app.me.lock().unwrap();
+    if me == 0 {
+        return;
+    }
+
+    let index = ui.get_av_category().max(0) as usize;
+    let Some((category, _)) = rojoin_roblox::avatar::CATEGORIES.get(index) else { return };
+    let category = category.to_string();
+
+    ui.set_av_items_loading(true);
+    ui.set_av_items(ad::model(Vec::new()));
+
+    let client = app.client.clone();
+    let imgs2 = imgs.clone();
+    let worn = app.worn.lock().unwrap().clone();
+    let gen = SESSION_GEN.load(Ordering::SeqCst);
+
+    bridge.call_res(
+        move || async move {
+            let items =
+                rojoin_roblox::avatar::inventory_for_category(&client, me, &category, 100).await?;
+            let ids: Vec<i64> = items.iter().map(|i| i.asset_id).collect();
+            let thumbs = thumbnails::assets(&client, &ids).await.unwrap_or_default();
+            Ok((items, thumbs))
+        },
+        move |ui, result| {
+            if gen != SESSION_GEN.load(Ordering::SeqCst) {
+                return;
+            }
+            ui.set_av_items_loading(false);
+
+            let (items, thumbs) = match result {
+                Ok(v) => v,
+                Err(e) => return bridge::report(&ui, e),
+            };
+
+            let rows: Vec<WearItem> = items
+                .iter()
+                .map(|i| WearItem {
+                    id: i.asset_id.to_string().into(),
+                    name: i.asset_name.clone().into(),
+                    category: slint::SharedString::default(),
+                    thumb: slint::Image::default(),
+                    worn: worn.contains(&i.asset_id),
+                })
+                .collect();
+            ui.set_av_items(ad::model(rows));
+
+            for (idx, item) in items.iter().enumerate() {
+                if let Some(url) = thumbs.get(&item.asset_id).cloned() {
+                    imgs2.load(&url, move |ui, img| set_wear_thumb(&ui.get_av_items(), idx, img));
+                }
+            }
+        },
+    );
+}
+
+/// Ask Roblox to re-render the avatar image after a change, then reload it.
+fn refresh_avatar_render(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
+    let me = *app.me.lock().unwrap();
+    let client = app.client.clone();
+    let imgs2 = imgs.clone();
+    let gen = SESSION_GEN.load(Ordering::SeqCst);
+
+    bridge.call_res(
+        move || async move {
+            let map = thumbnails::avatars(&client, &[me]).await?;
+            Ok(map.get(&me).cloned())
+        },
+        move |ui, result| {
+            if gen != SESSION_GEN.load(Ordering::SeqCst) {
+                return;
+            }
+            if let Ok(Some(url)) = result {
+                imgs2.load(&url, |ui, img| ui.set_av_body(img));
+            }
+            let _ = &ui;
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Macros
+// ---------------------------------------------------------------------------
+
+fn wire_macros(ui: &MainWindow, app: &Arc<App>) {
+    let available = rojoin_macro::backend::available();
+    ui.set_macro_available(available);
+    ui.set_macro_hint(
+        rojoin_macro::backend::permission_hint()
+            .unwrap_or_default()
+            .into(),
+    );
+    ui.set_macro_backend(if cfg!(windows) { "SendInput".into() } else { "uinput".into() });
+
+    // Presets are the starting set; anything the user has saved wins.
+    {
+        let mut macros = app.macros.lock().unwrap();
+        let saved = app.config.lock().unwrap().settings.macros.clone();
+        *macros = if saved.is_empty() {
+            rojoin_macro::presets::all()
+        } else {
+            saved
+        };
+    }
+    render_macros(ui, app);
+
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_macro_toggle_run(move |id| {
+            let ui = weak.unwrap();
+            let Some(engine) = app.engine.lock().unwrap().clone() else {
+                tracing::warn!("no macro engine available");
+                return;
+            };
+
+            if engine.is_running(id.as_str()) {
+                engine.stop(id.as_str());
+            } else {
+                let macros = app.macros.lock().unwrap();
+                if let Some(mac) = macros.iter().find(|m| m.id == id.as_str()) {
+                    engine.start(mac);
+                }
+            }
+            render_macros(&ui, &app);
+        });
+    }
+
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_macro_toggle_enabled(move |id| {
+            let ui = weak.unwrap();
+            {
+                let mut macros = app.macros.lock().unwrap();
+                if let Some(mac) = macros.iter_mut().find(|m| m.id == id.as_str()) {
+                    mac.enabled = !mac.enabled;
+                    // Disabling a running macro must actually stop it.
+                    if !mac.enabled {
+                        if let Some(engine) = app.engine.lock().unwrap().as_ref() {
+                            engine.stop(&mac.id);
+                        }
+                    }
+                }
+            }
+            persist_macros(&app);
+            render_macros(&ui, &app);
+        });
+    }
+
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_macro_stop_all(move || {
+            let ui = weak.unwrap();
+            if let Some(engine) = app.engine.lock().unwrap().as_ref() {
+                engine.stop_all();
+            }
+            render_macros(&ui, &app);
+        });
+    }
+
+    {
+        let weak = ui.as_weak();
+        ui.on_macro_rebind(move |id| {
+            // The key capture itself lands with the step editor; for now this
+            // just marks which macro is waiting for a key.
+            weak.unwrap().set_macro_binding(id);
+        });
+    }
+
+    ui.on_macro_edit(|id| tracing::info!(%id, "step editor: pending"));
+    ui.on_macro_open_credit(|| {
+        let _ = webbrowser::open("https://github.com/Spencer0187/Spencer-Macro-Utilities");
+    });
+
+    if available {
+        match rojoin_macro::Engine::new() {
+            Ok(engine) => *app.engine.lock().unwrap() = Some(Arc::new(engine)),
+            Err(e) => {
+                tracing::warn!(error = %e, "macro engine unavailable");
+                ui.set_macro_available(false);
+                ui.set_macro_hint(format!("{e}").into());
+            }
+        }
+    }
+}
+
+fn render_macros(ui: &MainWindow, app: &Arc<App>) {
+    let engine = app.engine.lock().unwrap().clone();
+    let macros = app.macros.lock().unwrap();
+
+    let rows: Vec<MacroRow> = macros
+        .iter()
+        .map(|m| MacroRow {
+            id: m.id.clone().into(),
+            name: m.name.clone().into(),
+            description: m.description.clone().into(),
+            hotkey: m.hotkey.map(|k| k.label().to_string()).unwrap_or_default().into(),
+            mode: match m.mode {
+                rojoin_macro::Mode::Once => "Once",
+                rojoin_macro::Mode::Hold => "While held",
+                rojoin_macro::Mode::Toggle => "Toggle",
+            }
+            .into(),
+            enabled: m.enabled,
+            running: engine.as_ref().map(|e| e.is_running(&m.id)).unwrap_or(false),
+            cycle: format!("{}ms cycle", m.cycle_ms()).into(),
+            summary: format!("{} steps", m.steps.len()).into(),
+        })
+        .collect();
+
+    ui.set_macro_active(engine.map(|e| e.active_count() as i32).unwrap_or(0));
+    ui.set_macros(ad::model(rows));
+}
+
+fn persist_macros(app: &Arc<App>) {
+    let macros = app.macros.lock().unwrap().clone();
+    let mut cfg = app.config.lock().unwrap();
+    cfg.settings.macros = macros;
+    if let Err(e) = cfg.save() {
+        tracing::error!(error = %e, "could not save macros");
+    }
+}
+
 fn push_view(ui: &MainWindow, app: &Arc<App>, kind: i32) {
     if ui.get_view_kind() == 0 {
         *app.return_section.lock().unwrap() = ui.get_section();
@@ -2064,6 +2600,14 @@ fn set_tile_thumb(model: &slint::ModelRc<GameTile>, index: usize, img: slint::Im
 }
 
 fn set_item_thumb(model: &slint::ModelRc<DetailItem>, index: usize, img: slint::Image) {
+    use slint::Model;
+    if let Some(mut row) = model.row_data(index) {
+        row.thumb = img;
+        model.set_row_data(index, row);
+    }
+}
+
+fn set_wear_thumb(model: &slint::ModelRc<WearItem>, index: usize, img: slint::Image) {
     use slint::Model;
     if let Some(mut row) = model.row_data(index) {
         row.thumb = img;

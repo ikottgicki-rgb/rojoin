@@ -1,0 +1,383 @@
+import { Theme, Space, Type, Motion, Layout } from "theme.slint";
+import { Btn, IconBtn, Chip, Segmented, Spinner, EmptyState, Badge } from "components.slint";
+import { MacroRow } from "types.slint";
+import { ScrollView } from "std-widgets.slint";
+
+// Macro utilities.
+//
+// Every macro is a list of timed input steps, and every step is editable. The
+// bundled presets are starting points, not verified timings — the screen says
+// so rather than implying otherwise.
+
+component MacroCard inherits Rectangle {
+    in property <MacroRow> entry;
+    callback toggle_run();
+    callback toggle_enabled();
+    callback edit();
+    callback rebind();
+
+    height: 92px;
+    background: root.entry.running ? Theme.bg_3 : Theme.bg_2;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: root.entry.running ? Theme.accent : Theme.line;
+    animate background, border-color { duration: Motion.fast; easing: Motion.ease; }
+    opacity: root.entry.enabled ? 1.0 : 0.55;
+
+    HorizontalLayout {
+        padding: Space.md;
+        spacing: Space.md;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: Space.xs;
+
+            HorizontalLayout {
+                spacing: Space.sm;
+                alignment: start;
+                Text {
+                    text: root.entry.name;
+                    color: Theme.text;
+                    font-size: Type.body;
+                    font-weight: Type.w_bold;
+                }
+                if root.entry.running: VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 46px;
+                        height: 16px;
+                        background: Theme.accent;
+                        border-radius: Theme.radius;
+                        Text {
+                            text: "ACTIVE";
+                            color: Theme.on_accent;
+                            font-size: Type.micro;
+                            font-weight: Type.w_bold;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            Text {
+                text: root.entry.description;
+                color: Theme.text_mute;
+                font-size: Type.caption;
+                overflow: elide;
+                wrap: no-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: Space.md;
+                alignment: start;
+                Text {
+                    text: root.entry.mode;
+                    color: Theme.text_mute;
+                    font-size: Type.micro;
+                }
+                Text {
+                    text: root.entry.cycle;
+                    color: Theme.text_mute;
+                    font-size: Type.micro;
+                }
+                Text {
+                    text: root.entry.summary;
+                    color: Theme.text_mute;
+                    font-size: Type.micro;
+                    overflow: elide;
+                    wrap: no-wrap;
+                }
+            }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: Space.sm;
+
+                // Hotkey chip doubles as the rebind control.
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 62px;
+                        height: 28px;
+                        background: hta.has-hover ? Theme.bg_4 : Theme.bg_1;
+                        border-radius: Theme.radius;
+                        border-width: Theme.hairline;
+                        border-color: Theme.line;
+                        animate background { duration: Motion.instant; easing: Motion.ease; }
+                        Text {
+                            text: root.entry.hotkey == "" ? "Bind" : root.entry.hotkey;
+                            color: root.entry.hotkey == "" ? Theme.text_mute : Theme.text;
+                            font-size: Type.caption;
+                            font-weight: Type.w_medium;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                        hta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.rebind(); }
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Btn {
+                        label: root.entry.enabled ? "On" : "Off";
+                        clicked => { root.toggle_enabled(); }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 78px;
+                        height: 32px;
+                        background: root.entry.running
+                                    ? (rta.has-hover ? Theme.bg_4 : Theme.bg_3)
+                                    : (rta.pressed ? Theme.accent_press
+                                       : rta.has-hover ? Theme.accent_hover : Theme.accent);
+                        border-radius: Theme.radius;
+                        border-width: root.entry.running ? Theme.hairline : 0px;
+                        border-color: Theme.line_strong;
+                        animate background { duration: Motion.instant; easing: Motion.ease; }
+                        Text {
+                            text: root.entry.running ? "Stop" : "Start";
+                            color: root.entry.running ? Theme.text : Theme.on_accent;
+                            font-size: Type.body;
+                            font-weight: Type.w_bold;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                        rta := TouchArea {
+                            enabled: root.entry.enabled;
+                            mouse-cursor: pointer;
+                            clicked => { root.toggle_run(); }
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    IconBtn { glyph: "✎"; clicked => { root.edit(); } }
+                }
+            }
+        }
+    }
+}
+
+export component MacrosScreen inherits Rectangle {
+    in property <[MacroRow]> macros;
+    in property <bool> available: true;
+    in property <string> permission_hint;
+    in property <string> backend_name;
+    in property <int> active_count: 0;
+    in property <string> binding_id;
+
+    callback toggle_run(string);
+    callback toggle_enabled(string);
+    callback edit(string);
+    callback rebind(string);
+    callback stop_all();
+    callback open_credit();
+
+    background: Theme.bg_0;
+
+    VerticalLayout {
+        spacing: 0;
+
+        // --- header --------------------------------------------------------
+        Rectangle {
+            height: 56px;
+            background: Theme.bg_1;
+            HorizontalLayout {
+                padding-left: Space.lg;
+                padding-right: Space.lg;
+                spacing: Space.md;
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    Text {
+                        text: "Macros";
+                        color: Theme.text;
+                        font-size: Type.title;
+                        font-weight: Type.w_bold;
+                    }
+                    Text {
+                        text: root.available
+                              ? "Synthesised input via " + root.backend_name
+                              : "Input permission needed";
+                        color: Theme.text_mute;
+                        font-size: Type.caption;
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                if root.active_count > 0: VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        spacing: Space.sm;
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: root.active_count + " running";
+                                color: Theme.accent;
+                                font-size: Type.small;
+                                font-weight: Type.w_medium;
+                            }
+                        }
+                        Btn {
+                            label: "Stop all";
+                            clicked => { root.stop_all(); }
+                        }
+                    }
+                }
+            }
+        }
+        Rectangle { height: Theme.hairline; background: Theme.line; }
+
+        // --- permission gate ------------------------------------------------
+        if !root.available: Rectangle {
+            vertical-stretch: 1;
+            VerticalLayout {
+                alignment: center;
+                padding: Space.xxl;
+                spacing: Space.lg;
+
+                Text {
+                    text: "RoJoin cannot send input yet";
+                    color: Theme.text;
+                    font-size: Type.title;
+                    font-weight: Type.w_bold;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "Macros need permission to create a virtual keyboard and mouse. Run the commands below once, then log out and back in.";
+                    color: Theme.text_dim;
+                    font-size: Type.small;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+                Rectangle {
+                    background: Theme.bg_2;
+                    border-radius: Theme.radius;
+                    border-width: Theme.hairline;
+                    border-color: Theme.line;
+                    height: hint.preferred-height + Space.lg * 2;
+                    hint := Text {
+                        x: Space.lg;
+                        y: Space.lg;
+                        width: parent.width - Space.lg * 2;
+                        text: root.permission_hint;
+                        color: Theme.text_dim;
+                        font-size: Type.small;
+                        font-family: "monospace";
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+
+        // --- macro list -------------------------------------------------------
+        if root.available: ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                padding: Space.lg;
+                spacing: Space.md;
+                alignment: start;
+
+                if root.binding_id != "": Rectangle {
+                    height: 44px;
+                    background: Theme.accent_soft;
+                    border-radius: Theme.radius;
+                    border-width: Theme.hairline;
+                    border-color: Theme.accent;
+                    Text {
+                        text: "Press a key to bind it, or Esc to cancel.";
+                        color: Theme.text;
+                        font-size: Type.small;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                }
+
+                for m in root.macros: MacroCard {
+                    entry: m;
+                    toggle_run => { root.toggle_run(m.id); }
+                    toggle_enabled => { root.toggle_enabled(m.id); }
+                    edit => { root.edit(m.id); }
+                    rebind => { root.rebind(m.id); }
+                }
+
+                if root.macros.length == 0: EmptyState {
+                    height: 200px;
+                    title: "No macros";
+                    hint: "Something went wrong loading the presets.";
+                }
+
+                // --- honesty + credit -------------------------------------
+                Rectangle {
+                    background: Theme.bg_1;
+                    border-radius: Theme.radius;
+                    border-width: Theme.hairline;
+                    border-color: Theme.line;
+                    height: notelay.preferred-height;
+
+                    notelay := VerticalLayout {
+                        padding: Space.lg;
+                        spacing: Space.sm;
+
+                        Text {
+                            text: "About these presets";
+                            color: Theme.text_dim;
+                            font-size: Type.small;
+                            font-weight: Type.w_bold;
+                        }
+                        Text {
+                            text: "The bundled timings are starting points, not values verified against a live game. Roblox physics changes between updates, so expect to tune them — every step is editable.";
+                            color: Theme.text_mute;
+                            font-size: Type.caption;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: Space.xs;
+                            alignment: start;
+                            Text {
+                                text: "Inspired by";
+                                color: Theme.text_mute;
+                                font-size: Type.caption;
+                                vertical-alignment: center;
+                            }
+                            Rectangle {
+                                width: link.preferred-width;
+                                height: link.preferred-height;
+                                link := Text {
+                                    text: "Spencer Macro Utilities";
+                                    color: lta.has-hover ? Theme.accent : Theme.text_dim;
+                                    font-size: Type.caption;
+                                    animate color { duration: Motion.fast; easing: Motion.ease; }
+                                }
+                                lta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.open_credit(); }
+                                }
+                            }
+                            Text {
+                                text: "— an independent implementation, no shared code.";
+                                color: Theme.text_mute;
+                                font-size: Type.caption;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

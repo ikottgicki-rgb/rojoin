@@ -1,0 +1,381 @@
+import { Theme, Space, Type, Motion, Layout } from "theme.slint";
+import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, Spinner, EmptyState, Skeleton } from "components.slint";
+import { WearItem, DetailItem } from "types.slint";
+import { ScrollView } from "std-widgets.slint";
+
+// Avatar editor.
+//
+// Scope, set deliberately: this edits items the user **already owns**. There is
+// no catalog, no prices, and nothing to buy.
+//
+// Wearing works by sending the complete worn list to Roblox, so the toggle is
+// optimistic locally and reconciled against whatever comes back.
+
+component ItemTile inherits Rectangle {
+    in property <WearItem> item;
+    callback clicked();
+
+    background: ita.has-hover ? Theme.bg_3 : Theme.bg_2;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: root.item.worn ? Theme.accent : Theme.line;
+    animate background, border-color { duration: Motion.fast; easing: Motion.ease; }
+    clip: true;
+
+    VerticalLayout {
+        spacing: 0;
+        Rectangle {
+            height: root.width;
+            Thumb { width: 100%; height: 100%; source: root.item.thumb; }
+            if root.item.worn: Rectangle {
+                x: parent.width - self.width - Space.xs;
+                y: Space.xs;
+                width: 18px;
+                height: 18px;
+                background: Theme.accent;
+                border-radius: Theme.radius;
+                Text {
+                    text: "✓";
+                    color: Theme.on_accent;
+                    font-size: Type.micro;
+                    font-weight: Type.w_bold;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+        Rectangle {
+            height: 30px;
+            Text {
+                x: Space.sm;
+                width: parent.width - Space.sm * 2;
+                height: 100%;
+                text: root.item.name;
+                color: Theme.text_dim;
+                font-size: Type.caption;
+                overflow: elide;
+                wrap: no-wrap;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    ita := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component AvatarScreen inherits Rectangle {
+    in property <image> body;
+    in property <bool> body_loading: false;
+    in property <[WearItem]> items;
+    in property <[string]> categories;
+    in property <[DetailItem]> outfits;
+    in property <[DetailItem]> worn;
+    in-out property <int> category: 0;
+    in-out property <int> tab: 0;      // 0 Items · 1 Outfits · 2 Body
+    in property <bool> items_loading: false;
+    in property <bool> busy: false;
+    in property <int> worn_count: 0;
+    in property <bool> is_r15: true;
+
+    callback pick_category(int);
+    callback toggle(string);
+    callback wear_outfit(string);
+    callback save_outfit();
+    callback set_avatar_type(bool);
+    callback refresh();
+
+    background: Theme.bg_0;
+
+    HorizontalLayout {
+        spacing: 0;
+
+        // --- preview pane -------------------------------------------------
+        Rectangle {
+            width: 300px;
+            background: Theme.bg_1;
+            VerticalLayout {
+                padding: Space.xl;
+                spacing: Space.lg;
+                alignment: start;
+
+                HorizontalLayout {
+                    Text {
+                        text: "Avatar";
+                        color: Theme.text;
+                        font-size: Type.title;
+                        font-weight: Type.w_bold;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    VerticalLayout {
+                        alignment: center;
+                        if root.busy: Spinner { size_px: 14px; }
+                        if !root.busy: IconBtn { glyph: "⟳"; clicked => { root.refresh(); } }
+                    }
+                }
+
+                Rectangle {
+                    height: 260px;
+                    background: Theme.bg_2;
+                    border-radius: Theme.radius;
+                    border-width: Theme.hairline;
+                    border-color: Theme.line;
+
+                    if root.body_loading: Skeleton { width: 100%; height: 100%; }
+
+                    Image {
+                        width: 100%;
+                        height: 100%;
+                        source: root.body;
+                        image-fit: contain;
+                        opacity: root.body.width > 0 ? 1.0 : 0.0;
+                        animate opacity { duration: Motion.normal; easing: Motion.ease; }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: Space.sm;
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: root.worn_count + " worn";
+                            color: Theme.text_mute;
+                            font-size: Type.small;
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    VerticalLayout {
+                        alignment: center;
+                        Segmented {
+                            options: ["R6", "R15"];
+                            current: root.is_r15 ? 1 : 0;
+                            changed(i) => { root.set_avatar_type(i == 1); }
+                        }
+                    }
+                }
+
+                Btn {
+                    label: "Save as outfit";
+                    primary: true;
+                    enabled: !root.busy;
+                    clicked => { root.save_outfit(); }
+                }
+
+                // --- currently worn ------------------------------------
+                if root.worn.length > 0: VerticalLayout {
+                    spacing: Space.sm;
+                    Text {
+                        text: "WEARING";
+                        color: Theme.text_mute;
+                        font-size: Type.micro;
+                        font-weight: Type.w_bold;
+                        letter-spacing: 0.8px;
+                    }
+                    for w in root.worn: Rectangle {
+                        height: 34px;
+                        background: wta.has-hover ? Theme.bg_3 : transparent;
+                        border-radius: Theme.radius;
+                        animate background { duration: Motion.instant; easing: Motion.ease; }
+
+                        HorizontalLayout {
+                            padding-left: Space.xs;
+                            padding-right: Space.xs;
+                            spacing: Space.sm;
+                            VerticalLayout {
+                                alignment: center;
+                                Thumb { width: 24px; height: 24px; source: w.thumb; }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: w.name;
+                                    color: Theme.text_dim;
+                                    font-size: Type.caption;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: "×";
+                                    color: wta.has-hover ? Theme.text : Theme.text_mute;
+                                    font-size: Type.body;
+                                }
+                            }
+                        }
+
+                        wta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.toggle(w.id); }
+                        }
+                    }
+                }
+            }
+        }
+        Rectangle { width: Theme.hairline; background: Theme.line; }
+
+        // --- browse pane ----------------------------------------------------
+        VerticalLayout {
+            spacing: 0;
+            horizontal-stretch: 1;
+
+            Rectangle {
+                height: 52px;
+                background: Theme.bg_1;
+                HorizontalLayout {
+                    padding-left: Space.lg;
+                    padding-right: Space.lg;
+                    spacing: Space.md;
+                    VerticalLayout {
+                        alignment: center;
+                        Segmented {
+                            options: ["Items", "Outfits"];
+                            current <=> root.tab;
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+            }
+            Rectangle { height: Theme.hairline; background: Theme.line; }
+
+            // --- items -------------------------------------------------------
+            if root.tab == 0: Rectangle {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: 0;
+
+                    Rectangle {
+                        height: 48px;
+                        ScrollView {
+                            HorizontalLayout {
+                                padding-left: Space.lg;
+                                padding-right: Space.lg;
+                                spacing: Space.sm;
+                                alignment: start;
+                                for c[i] in root.categories: VerticalLayout {
+                                    alignment: center;
+                                    Chip {
+                                        label: c;
+                                        selected: root.category == i;
+                                        clicked => { root.category = i; root.pick_category(i); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if root.items_loading: VerticalLayout {
+                        padding: Space.lg;
+                        spacing: Space.sm;
+                        alignment: start;
+                        for s in [0, 1, 2]: Skeleton { height: 116px; }
+                    }
+
+                    if !root.items_loading && root.items.length == 0: EmptyState {
+                        vertical-stretch: 1;
+                        title: "Nothing here";
+                        hint: "You do not own anything in this category.";
+                    }
+
+                    if !root.items_loading && root.items.length > 0: ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            padding: Space.lg;
+                            alignment: start;
+                            wardrobe := Rectangle {
+                                property <length> min_w: 116px;
+                                property <int> cols: Math.max(1, Math.floor((self.width + Layout.tile_gap) / (self.min_w + Layout.tile_gap)));
+                                property <length> cell_w: (self.width - (self.cols - 1) * Layout.tile_gap) / self.cols;
+                                property <length> cell_h: self.cell_w + 30px;
+                                property <int> rows: Math.ceil(root.items.length / self.cols);
+                                height: self.rows * self.cell_h + Math.max(0, self.rows - 1) * Layout.tile_gap;
+                                vertical-stretch: 0;
+
+                                for it[i] in root.items: ItemTile {
+                                    item: it;
+                                    x: Math.mod(i, wardrobe.cols) * (wardrobe.cell_w + Layout.tile_gap);
+                                    y: Math.floor(i / wardrobe.cols) * (wardrobe.cell_h + Layout.tile_gap);
+                                    width: wardrobe.cell_w;
+                                    height: wardrobe.cell_h;
+                                    clicked => { root.toggle(it.id); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- outfits ------------------------------------------------------
+            if root.tab == 1: Rectangle {
+                vertical-stretch: 1;
+
+                if root.outfits.length == 0: EmptyState {
+                    width: 100%;
+                    height: 100%;
+                    title: "No saved outfits";
+                    hint: "Save your current look with the button on the left.";
+                }
+
+                if root.outfits.length > 0: ScrollView {
+                    VerticalLayout {
+                        padding: Space.lg;
+                        alignment: start;
+                        ogrid := Rectangle {
+                            property <length> min_w: 132px;
+                            property <int> cols: Math.max(1, Math.floor((self.width + Layout.tile_gap) / (self.min_w + Layout.tile_gap)));
+                            property <length> cell_w: (self.width - (self.cols - 1) * Layout.tile_gap) / self.cols;
+                            property <length> cell_h: self.cell_w + 34px;
+                            property <int> rows: Math.ceil(root.outfits.length / self.cols);
+                            height: self.rows * self.cell_h + Math.max(0, self.rows - 1) * Layout.tile_gap;
+                            vertical-stretch: 0;
+
+                            for o[i] in root.outfits: Rectangle {
+                                x: Math.mod(i, ogrid.cols) * (ogrid.cell_w + Layout.tile_gap);
+                                y: Math.floor(i / ogrid.cols) * (ogrid.cell_h + Layout.tile_gap);
+                                width: ogrid.cell_w;
+                                height: ogrid.cell_h;
+                                background: ota.has-hover ? Theme.bg_3 : Theme.bg_2;
+                                border-radius: Theme.radius;
+                                border-width: Theme.hairline;
+                                border-color: ota.has-hover ? Theme.accent : Theme.line;
+                                animate background, border-color { duration: Motion.fast; easing: Motion.ease; }
+                                clip: true;
+
+                                VerticalLayout {
+                                    spacing: 0;
+                                    Rectangle {
+                                        height: ogrid.cell_w;
+                                        Thumb { width: 100%; height: 100%; source: o.thumb; }
+                                    }
+                                    Rectangle {
+                                        height: 34px;
+                                        Text {
+                                            x: Space.sm;
+                                            width: parent.width - Space.sm * 2;
+                                            height: 100%;
+                                            text: o.name;
+                                            color: Theme.text_dim;
+                                            font-size: Type.caption;
+                                            overflow: elide;
+                                            wrap: no-wrap;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+
+                                ota := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.wear_outfit(o.id); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
