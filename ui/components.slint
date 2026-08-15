@@ -20,12 +20,17 @@ export component Spinner inherits Rectangle {
     height: root.size_px;
 
     HorizontalLayout {
+        width: 100%;
+        height: 100%;
         spacing: root.size_px / 8;
         alignment: center;
 
         for d[idx] in [0, 1, 2]: Rectangle {
             width: root.size_px / 4;
-            height: self.width;
+            // The dots are a quarter of the footprint, so without this they
+            // sit at the top of the slot rather than in the middle of it.
+            y: (parent.height - self.height) / 2;
+            height: root.size_px / 4;
             background: root.tint;
             border-radius: Theme.radius;
             opacity: 0.25;
@@ -64,6 +69,29 @@ export component BusySlot inherits Rectangle {
         size_px: root.slot / 2;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
+    }
+}
+
+/// A bell, drawn as a Path so it needs no particular font and is not an emoji.
+/// Filled when subscribed, outline when not.
+export component Bell inherits Rectangle {
+    in property <bool> on;
+    in property <color> tint: Theme.text_mute;
+    in property <length> size_px: 15px;
+
+    width: root.size_px;
+    height: root.size_px;
+
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        // Body of the bell, then the clapper underneath.
+        commands: "M 12 2.5 C 8.6 2.5 6.2 5 6.2 8.2 L 6.2 12.4 L 4.3 15.6 L 19.7 15.6 L 17.8 12.4 L 17.8 8.2 C 17.8 5 15.4 2.5 12 2.5 Z M 9.6 17.4 C 9.6 19 10.7 20 12 20 C 13.3 20 14.4 19 14.4 17.4 Z";
+        fill: root.on ? root.tint : transparent;
+        stroke: root.tint;
+        stroke-width: root.on ? 0px : 1.6px;
     }
 }
 

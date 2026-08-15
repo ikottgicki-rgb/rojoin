@@ -13,7 +13,7 @@
 use crate::{Key, Macro, Mode, MouseButton, Step};
 
 pub fn all() -> Vec<Macro> {
-    vec![bunnyhop(), wallhop(), wall_walk(), key_spam(), auto_clicker()]
+    vec![bunnyhop(), wallhop(), wall_walk(), freeze(), key_spam(), auto_clicker()]
 }
 
 /// Repeated jumps while holding forward.
@@ -76,6 +76,23 @@ pub fn wall_walk() -> Macro {
             Step::MouseMove { dx: -6, dy: 0 },
             Step::Wait { ms: 30 },
         ],
+        ..Default::default()
+    }
+}
+
+/// Briefly suspend the game process.
+///
+/// Deliberately Once rather than Toggle: a freeze you have to remember to turn
+/// off is a freeze you eventually forget, and that is a hung game.
+pub fn freeze() -> Macro {
+    Macro {
+        id: "freeze".into(),
+        name: "Freeze".into(),
+        description: "Suspends the game briefly, then resumes it. F8 always releases.".into(),
+        mode: Mode::Once,
+        hotkey: Some(Key::F3),
+        cycle_gap_ms: 0,
+        steps: vec![Step::Freeze { ms: 250 }],
         ..Default::default()
     }
 }

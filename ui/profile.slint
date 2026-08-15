@@ -203,10 +203,6 @@ export component ProfileScreen inherits Rectangle {
                             enabled: !root.busy;
                             clicked => { root.follow(); }
                         }
-                        Btn {
-                            label: "Message";
-                            clicked => { root.message(); }
-                        }
                         IconBtn { glyph: "⧉"; clicked => { root.copy_link(); } }
                         IconBtn { glyph: "↗"; clicked => { root.open_browser(); } }
                     }

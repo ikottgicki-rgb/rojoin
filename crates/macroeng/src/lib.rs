@@ -37,6 +37,7 @@ pub mod backend;
 pub mod hotkeys;
 pub mod keys;
 pub mod presets;
+pub mod process;
 
 pub use backend::{Backend, InputBackend};
 pub use keys::Key;
@@ -68,6 +69,11 @@ pub enum Step {
     /// Relative mouse movement, in counts.
     MouseMove { dx: i32, dy: i32 },
     Wait { ms: u64 },
+    /// Suspend the game process for `ms`, then resume it.
+    ///
+    /// Always time-boxed and always paired with a resume — a process left
+    /// stopped is a hung game.
+    Freeze { ms: u64 },
 }
 
 impl Step {
@@ -75,7 +81,7 @@ impl Step {
     pub fn duration_ms(&self) -> u64 {
         match self {
             Step::Tap { hold_ms, .. } => *hold_ms,
-            Step::Wait { ms } => *ms,
+            Step::Wait { ms } | Step::Freeze { ms } => *ms,
             _ => 0,
         }
     }
@@ -229,6 +235,9 @@ impl Engine {
         std::thread::spawn(move || {
             play(&backend, &mac, &stop);
 
+            // A freeze must never outlive the macro that started it.
+            process::resume_all();
+
             // Always release whatever the macro was holding, however it ended.
             if let Ok(mut b) = backend.lock() {
                 for key in mac.held_keys() {
@@ -263,6 +272,9 @@ impl Engine {
                 flag.store(true, Ordering::SeqCst);
             }
         }
+        // The panic key must un-freeze the game immediately, not on the next
+        // scheduling tick of whichever thread happened to freeze it.
+        process::resume_all();
     }
 }
 
@@ -299,6 +311,11 @@ fn play(
                             sleep_interruptible(*ms, stop);
                             Ok(())
                         }
+                        Step::Freeze { ms } => {
+                            drop(b);
+                            freeze_for(*ms, stop);
+                            Ok(())
+                        }
                     },
                     Err(_) => return,
                 }
@@ -314,6 +331,26 @@ fn play(
             return;
         }
         sleep_interruptible(mac.cycle_gap_ms.max(1), stop);
+    }
+}
+
+/// Suspend the game, wait, resume. Resumes on every path, including a stop
+/// request landing mid-freeze.
+fn freeze_for(ms: u64, stop: &Arc<AtomicBool>) {
+    let Some(pid) = process::find_game_pid() else {
+        tracing::warn!("freeze: no running game found");
+        return;
+    };
+
+    if let Err(e) = process::suspend(pid) {
+        tracing::warn!(error = %e, pid, "freeze: could not suspend");
+        return;
+    }
+
+    sleep_interruptible(process::clamp_freeze(ms), stop);
+
+    if let Err(e) = process::resume(pid) {
+        tracing::error!(error = %e, pid, "freeze: could not resume — game may be stopped");
     }
 }
 
@@ -387,6 +424,13 @@ mod tests {
             Step::MouseUp { button: MouseButton::Left },
         ]);
         assert_eq!(m.held_buttons(), vec![MouseButton::Right]);
+    }
+
+    #[test]
+    fn a_freeze_counts_as_doing_something() {
+        let m = mac_with(vec![Step::Freeze { ms: 200 }]);
+        assert!(m.is_effective());
+        assert_eq!(m.cycle_ms(), 200);
     }
 
     #[test]

@@ -17,26 +17,6 @@ export struct GameTile {
     favorited: bool,
 }
 
-export struct ChatConv {
-    id: string,
-    title: string,
-    preview: string,
-    time: string,
-    unread: int,
-    online: bool,
-    avatar: image,
-}
-
-export struct ChatMsg {
-    id: string,
-    body: string,
-    time: string,
-    mine: bool,
-    sender: string,
-    avatar: image,
-    show_header: bool,  // false when continuing a run from the same sender
-}
-
 export struct WearItem {
     id: string,
     name: string,

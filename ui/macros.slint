@@ -644,7 +644,7 @@ export component StepEditor inherits Rectangle {
                             font-size: Type.caption;
                         }
                     }
-                    for opt[k] in ["Hold key", "Release key", "Tap key", "Wait", "Click down", "Click up", "Move mouse"]:
+                    for opt[k] in ["Hold key", "Release key", "Tap key", "Wait", "Click down", "Click up", "Move mouse", "Freeze"]:
                     VerticalLayout {
                         alignment: center;
                         Chip { label: opt; clicked => { root.add_step(k); } }

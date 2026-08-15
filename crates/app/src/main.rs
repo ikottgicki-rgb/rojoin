@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use rojoin_launcher::JoinRequest;
-use rojoin_roblox::{auth, chat, friends, games, groups, search, thumbnails, users, Client};
+use rojoin_roblox::{auth, friends, games, groups, search, thumbnails, users, Client};
 use rojoin_store::Config;
 use slint::ComponentHandle;
 
@@ -41,7 +41,6 @@ const NAV: &[(&str, &str)] = &[
     ("Home", "⌂"),
     ("Play", "▷"),
     ("Friends", "◑"),
-    ("Chat", "✉"),
     ("Library", "▤"),
     ("Avatar", "☺"),
     ("Macros", "⌨"),
@@ -66,9 +65,6 @@ pub(crate) struct App {
     /// without another round trip to Roblox.
     roster: Mutex<Vec<ad::FriendInput>>,
     offline_collapsed: Mutex<bool>,
-    /// Conversations as Roblox returned them, so a row index can be mapped
-    /// back to a conversation id and its participants.
-    conversations: Mutex<Vec<chat::Conversation>>,
     /// Asset ids currently worn. Local source of truth for the avatar editor,
     /// because Roblox only accepts the complete list on every change.
     worn: Mutex<Vec<i64>>,
@@ -119,7 +115,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         me: Mutex::new(0),
         roster: Mutex::new(Vec::new()),
         offline_collapsed: Mutex::new(false),
-        conversations: Mutex::new(Vec::new()),
         worn: Mutex::new(Vec::new()),
         engine: Mutex::new(None),
         macros: Mutex::new(Vec::new()),
@@ -154,7 +149,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wire_launch(&ui, &app, &bridge);
     wire_friends(&ui, &app, &bridge, &imgs);
     wire_profile(&ui, &app, &bridge, &imgs);
-    wire_chat(&ui, &app, &bridge, &imgs);
     wire_avatar(&ui, &app, &bridge, &imgs);
     wire_macros(&ui, &app);
     wire_settings(&ui, &app, &bridge, &imgs);
@@ -261,8 +255,7 @@ fn enter_app(
     render_settings(ui, app);
 
     stagger(ui, app, bridge, imgs, 600, load_friends);
-    stagger(ui, app, bridge, imgs, 2_000, load_conversations);
-    stagger(ui, app, bridge, imgs, 3_500, load_avatar);
+    stagger(ui, app, bridge, imgs, 2_000, load_avatar);
 
     // One presence watcher per session. It reads the subscription lists on
     // every sweep, so toggling a bell takes effect without a restart.
@@ -1292,323 +1285,6 @@ fn wire_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
 }
 
 // ---------------------------------------------------------------------------
-// Chat
-// ---------------------------------------------------------------------------
-
-fn wire_chat(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
-    {
-        let app = app.clone();
-        let bridge2 = bridge.clone();
-        let imgs2 = imgs.clone();
-        let weak = ui.as_weak();
-        ui.on_chat_refresh(move || load_conversations(&weak.unwrap(), &app, &bridge2, &imgs2));
-    }
-
-    {
-        let app = app.clone();
-        let bridge2 = bridge.clone();
-        let imgs2 = imgs.clone();
-        let weak = ui.as_weak();
-        ui.on_chat_select(move |index| {
-            let ui = weak.unwrap();
-            let convs = app.conversations.lock().unwrap();
-            let Some(conv) = convs.get(index as usize).cloned() else { return };
-            drop(convs);
-
-            ui.set_chat_selected(index);
-            ui.set_chat_title(conv.display_title(*app.me.lock().unwrap()).into());
-            ui.set_chat_msgs(ad::model(Vec::new()));
-
-            // A friend you have never messaged has no conversation yet, so
-            // there is no history to fetch — the first send creates it.
-            if let Some(id) = conv.id.as_deref() {
-                load_messages(&ui, &app, &bridge2, &imgs2, id);
-            }
-        });
-    }
-
-    {
-        let app = app.clone();
-        let bridge2 = bridge.clone();
-        let imgs2 = imgs.clone();
-        let weak = ui.as_weak();
-        ui.on_chat_send(move |text| {
-            let ui = weak.unwrap();
-            let text = text.trim().to_string();
-            if text.is_empty() {
-                return;
-            }
-
-            let index = ui.get_chat_selected();
-            let (conv_id, other) = {
-                let convs = app.conversations.lock().unwrap();
-                let me = *app.me.lock().unwrap();
-                match convs.get(index as usize) {
-                    Some(c) => (c.id.clone(), c.other_participant(me)),
-                    None => return,
-                }
-            };
-
-            // Optimistic append so the message appears the instant you hit
-            // enter; reconciled by the refetch once Roblox confirms.
-            append_own_message(&ui, &text);
-            ui.set_chat_draft("".into());
-            ui.set_chat_sending(true);
-
-            let client = app.client.clone();
-            let app2 = app.clone();
-            let bridge3 = bridge2.clone();
-            let imgs3 = imgs2.clone();
-
-            bridge2.call_res(
-                move || async move {
-                    // No conversation yet? Create it, then send. This is the
-                    // path for messaging a friend for the first time.
-                    let id = match conv_id {
-                        Some(id) if !id.is_empty() => id,
-                        _ => match other {
-                            Some(uid) => chat::create_with(&client, uid).await?,
-                            None => {
-                                return Err(rojoin_roblox::Error::Api(
-                                    "no one to send this to".into(),
-                                ))
-                            }
-                        },
-                    };
-                    chat::send(&client, &id, &text).await?;
-                    Ok(id)
-                },
-                move |ui, result| {
-                    ui.set_chat_sending(false);
-                    match result {
-                        Ok(id) => load_messages(&ui, &app2, &bridge3, &imgs3, &id),
-                        Err(e) => bridge::report(&ui, e),
-                    }
-                },
-            );
-        });
-    }
-
-    {
-        let app = app.clone();
-        let bridge2 = bridge.clone();
-        let imgs2 = imgs.clone();
-        let weak = ui.as_weak();
-        ui.on_chat_open_profile(move || {
-            let ui = weak.unwrap();
-            let index = ui.get_chat_selected();
-            let me = *app.me.lock().unwrap();
-            let other = app
-                .conversations
-                .lock()
-                .unwrap()
-                .get(index as usize)
-                .and_then(|c| c.other_participant(me));
-            if let Some(uid) = other {
-                open_profile(&ui, &app, &bridge2, &imgs2, uid);
-            }
-        });
-    }
-
-    // "Message" on a profile opens (or creates) the one-to-one conversation.
-    {
-        let app = app.clone();
-        let bridge2 = bridge.clone();
-        let imgs2 = imgs.clone();
-        let weak = ui.as_weak();
-        ui.on_profile_message(move || {
-            let ui = weak.unwrap();
-            let Ok(uid) = ui.get_profile().id.parse::<i64>() else { return };
-            let client = app.client.clone();
-            let app2 = app.clone();
-            let bridge3 = bridge2.clone();
-            let imgs3 = imgs2.clone();
-
-            bridge2.call_res(
-                move || async move { chat::create_with(&client, uid).await },
-                move |ui, result| match result {
-                    Ok(_id) => {
-                        ui.set_view_kind(0);
-                        ui.set_can_back(false);
-                        ui.set_section(3);
-                        load_conversations(&ui, &app2, &bridge3, &imgs3);
-                    }
-                    Err(e) => bridge::report(&ui, e),
-                },
-            );
-        });
-    }
-}
-
-fn load_conversations(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
-    ui.set_chat_convs_loading(true);
-
-    let client = app.client.clone();
-    let app2 = app.clone();
-    let imgs2 = imgs.clone();
-    let me = *app.me.lock().unwrap();
-    let gen = SESSION_GEN.load(Ordering::SeqCst);
-
-    bridge.call_res(
-        move || async move {
-            let convs = chat::conversations(&client, 30).await?;
-            let ids: Vec<i64> = convs.iter().filter_map(|c| c.other_participant(me)).collect();
-            let avatars = thumbnails::headshots(&client, &ids).await.unwrap_or_default();
-            Ok((convs, avatars))
-        },
-        move |ui, result| {
-            if gen != SESSION_GEN.load(Ordering::SeqCst) {
-                return;
-            }
-            ui.set_chat_convs_loading(false);
-
-            let (convs, avatars) = match result {
-                Ok(v) => v,
-                Err(e) => return bridge::report(&ui, e),
-            };
-
-            let rows: Vec<ChatConv> = convs
-                .iter()
-                .map(|c| ChatConv {
-                    id: c.id.clone().unwrap_or_default().into(),
-                    title: c.display_title(me).into(),
-                    preview: c.preview().into(),
-                    time: c
-                        .updated_at
-                        .as_deref()
-                        .map(ad::time_ago)
-                        .unwrap_or_default()
-                        .into(),
-                    unread: c.unread_message_count.min(i32::MAX as i64) as i32,
-                    online: false,
-                    avatar: slint::Image::default(),
-                })
-                .collect();
-
-            ui.set_chat_convs(ad::model(rows));
-
-            for (i, c) in convs.iter().enumerate() {
-                let Some(other) = c.other_participant(me) else { continue };
-                let Some(url) = avatars.get(&other).cloned() else { continue };
-                imgs2.load(&url, move |ui, img| {
-                    set_conv_avatar(&ui.get_chat_convs(), i, img)
-                });
-            }
-
-            *app2.conversations.lock().unwrap() = convs;
-        },
-    );
-}
-
-fn load_messages(
-    ui: &MainWindow,
-    app: &Arc<App>,
-    bridge: &Arc<Bridge>,
-    imgs: &Images,
-    conversation_id: &str,
-) {
-    ui.set_chat_msgs_loading(true);
-
-    let client = app.client.clone();
-    let imgs2 = imgs.clone();
-    let me = *app.me.lock().unwrap();
-    let cid = conversation_id.to_string();
-    let cid_for_read = cid.clone();
-    let gen = SESSION_GEN.load(Ordering::SeqCst);
-
-    bridge.call_res(
-        move || async move {
-            let msgs = chat::messages(&client, &cid, 60).await?;
-            let ids: Vec<i64> = msgs.iter().map(|m| m.sender_id).collect();
-            let avatars = thumbnails::headshots(&client, &ids).await.unwrap_or_default();
-            // Opening a conversation is what marks it read.
-            let _ = chat::mark_read(&client, &cid).await;
-            Ok((msgs, avatars))
-        },
-        move |ui, result| {
-            if gen != SESSION_GEN.load(Ordering::SeqCst) {
-                return;
-            }
-            ui.set_chat_msgs_loading(false);
-
-            let (msgs, avatars) = match result {
-                Ok(v) => v,
-                Err(e) => return bridge::report(&ui, e),
-            };
-
-            // Roblox returns newest first; conversations read oldest at the top.
-            let ordered: Vec<_> = msgs.into_iter().rev().collect();
-
-            let mut rows: Vec<ChatMsg> = Vec::with_capacity(ordered.len());
-            let mut last_sender = i64::MIN;
-            for m in &ordered {
-                let mine = m.sender_id == me;
-                rows.push(ChatMsg {
-                    id: m.id.clone().unwrap_or_default().into(),
-                    body: m.content.clone().into(),
-                    time: m.created.as_deref().map(ad::time_ago).unwrap_or_default().into(),
-                    mine,
-                    sender: if mine { "You".into() } else { slint::SharedString::default() },
-                    avatar: slint::Image::default(),
-                    // Only the first message of a run carries a header, so a
-                    // back-and-forth does not repeat the name on every line.
-                    show_header: m.sender_id != last_sender,
-                });
-                last_sender = m.sender_id;
-            }
-            ui.set_chat_msgs(ad::model(rows));
-
-            for (i, m) in ordered.iter().enumerate() {
-                if m.sender_id == me {
-                    continue;
-                }
-                if let Some(url) = avatars.get(&m.sender_id).cloned() {
-                    imgs2.load(&url, move |ui, img| {
-                        set_msg_avatar(&ui.get_chat_msgs(), i, img)
-                    });
-                }
-            }
-
-            // Clear the unread badge on the row we just opened.
-            let idx = ui.get_chat_selected();
-            let model = ui.get_chat_convs();
-            {
-                use slint::Model;
-                if idx >= 0 {
-                    if let Some(mut row) = model.row_data(idx as usize) {
-                        row.unread = 0;
-                        model.set_row_data(idx as usize, row);
-                    }
-                }
-            }
-            let _ = cid_for_read;
-        },
-    );
-}
-
-/// Optimistic local echo, so a sent message shows immediately.
-fn append_own_message(ui: &MainWindow, text: &str) {
-    use slint::Model;
-    let model = ui.get_chat_msgs();
-    let last_mine = model
-        .row_data(model.row_count().saturating_sub(1))
-        .map(|m| m.mine)
-        .unwrap_or(false);
-
-    let mut rows: Vec<ChatMsg> = model.iter().collect();
-    rows.push(ChatMsg {
-        id: format!("local-{}", rows.len()).into(),
-        body: text.into(),
-        time: "now".into(),
-        mine: true,
-        sender: "You".into(),
-        avatar: slint::Image::default(),
-        show_header: !last_mine,
-    });
-    ui.set_chat_msgs(ad::model(rows));
-}
-
-// ---------------------------------------------------------------------------
 // Avatar
 //
 // Owned items only — no catalog, no prices, nothing to buy.
@@ -2295,6 +1971,10 @@ fn wire_editor(ui: &MainWindow, app: &Arc<App>) {
             match step {
                 rojoin_macro::Step::Tap { hold_ms, .. } => *hold_ms = v,
                 rojoin_macro::Step::Wait { ms } => *ms = v,
+                // Clamped: an unbounded freeze is a hung game.
+                rojoin_macro::Step::Freeze { ms } => {
+                    *ms = rojoin_macro::process::clamp_freeze(v)
+                }
                 _ => {}
             }
         }
@@ -2340,7 +2020,8 @@ fn wire_editor(ui: &MainWindow, app: &Arc<App>) {
             3 => Step::Wait { ms: 50 },
             4 => Step::MouseDown { button: MouseButton::Left },
             5 => Step::MouseUp { button: MouseButton::Left },
-            _ => Step::MouseMove { dx: 5, dy: 0 },
+            6 => Step::MouseMove { dx: 5, dy: 0 },
+            _ => Step::Freeze { ms: 250 },
         });
     });
     edit!(on_editor_reset, |m| {
@@ -2438,6 +2119,17 @@ fn render_editor(ui: &MainWindow, app: &Arc<App>) {
                 has_amount: false,
                 has_delta: false,
             },
+            Step::Freeze { ms } => MacroStepRow {
+                kind: 7,
+                label: "Freeze game for".into(),
+                key: slint::SharedString::default(),
+                amount: (*ms).min(i32::MAX as u64) as i32,
+                dx: 0,
+                dy: 0,
+                has_key: false,
+                has_amount: true,
+                has_delta: false,
+            },
             Step::MouseMove { dx, dy } => MacroStepRow {
                 kind: 6,
                 label: "Move mouse".into(),
@@ -2506,7 +2198,7 @@ fn persist_macros(app: &Arc<App>) {
 
 /// Section index for Settings. Deliberately past the end of NAV — Settings is
 /// reached by the gear, not by a sidebar row.
-const SETTINGS_SECTION: i32 = 7;
+const SETTINGS_SECTION: i32 = 6;
 
 fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
     ui.set_data_dir(rojoin_store::config_dir().to_string_lossy().to_string().into());
@@ -3628,22 +3320,6 @@ fn set_wear_thumb(model: &slint::ModelRc<WearItem>, index: usize, img: slint::Im
     use slint::Model;
     if let Some(mut row) = model.row_data(index) {
         row.thumb = img;
-        model.set_row_data(index, row);
-    }
-}
-
-fn set_conv_avatar(model: &slint::ModelRc<ChatConv>, index: usize, img: slint::Image) {
-    use slint::Model;
-    if let Some(mut row) = model.row_data(index) {
-        row.avatar = img;
-        model.set_row_data(index, row);
-    }
-}
-
-fn set_msg_avatar(model: &slint::ModelRc<ChatMsg>, index: usize, img: slint::Image) {
-    use slint::Model;
-    if let Some(mut row) = model.row_data(index) {
-        row.avatar = img;
         model.set_row_data(index, row);
     }
 }

@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Avatar, Btn, IconBtn, Chip, Badge, Spinner, BusySlot, EmptyState, MetaStat } from "components.slint";
+import { Avatar, Btn, IconBtn, Chip, Badge, Spinner, BusySlot, Bell, EmptyState, MetaStat } from "components.slint";
 import { FriendRow, DetailItem } from "types.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -178,14 +178,12 @@ component FriendListRow inherits Rectangle {
                     Rectangle {
                         width: 28px;
                         height: 28px;
-                        Text {
-                            text: root.entry.notify ? "◉" : "○";
-                            color: root.entry.notify ? Theme.accent
-                                   : notta.has-hover ? Theme.text : Theme.text_mute;
-                            font-size: Type.body;
-                            vertical-alignment: center;
-                            horizontal-alignment: center;
-                            animate color { duration: Motion.fast; easing: Motion.ease; }
+                        Bell {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            on: root.entry.notify;
+                            tint: root.entry.notify ? Theme.accent
+                                  : notta.has-hover ? Theme.text : Theme.text_mute;
                         }
                         notta := TouchArea { mouse-cursor: pointer; clicked => { root.notify(); } }
                     }
@@ -275,7 +273,7 @@ export component FriendsScreen inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     Text {
-                        text: "★ pin      ◉ notify";
+                        text: "★ pin      bell = notify";
                         color: Theme.text_mute;
                         font-size: Type.micro;
                     }
