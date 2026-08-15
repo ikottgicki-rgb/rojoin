@@ -1,7 +1,7 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Btn, IconBtn, Chip, Segmented, Spinner, EmptyState, Badge } from "components.slint";
-import { MacroRow } from "types.slint";
-import { ScrollView } from "std-widgets.slint";
+import { MacroRow, MacroStepRow } from "types.slint";
+import { ScrollView, ComboBox } from "std-widgets.slint";
 
 // Macro utilities.
 //
@@ -321,6 +321,335 @@ export component MacrosScreen inherits Rectangle {
                     hint: "Something went wrong loading the presets.";
                 }
 
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Step editor
+// ---------------------------------------------------------------------------
+
+component NumField inherits Rectangle {
+    in property <int> value;
+    in property <string> suffix;
+    in property <length> field_w: 62px;
+    callback changed(int);
+
+    width: root.field_w;
+    height: 26px;
+    background: Theme.bg_1;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: input.has-focus ? Theme.accent : Theme.line;
+    animate border-color { duration: Motion.fast; easing: Motion.ease; }
+
+    HorizontalLayout {
+        padding-left: Space.xs;
+        padding-right: Space.xs;
+        spacing: 2px;
+
+        input := TextInput {
+            width: root.field_w - 26px;
+            height: 100%;
+            text: root.value;
+            color: Theme.text;
+            font-size: Type.caption;
+            vertical-alignment: center;
+            single-line: true;
+            input-type: number;
+            edited => { root.changed(self.text.to-float()); }
+        }
+        Text {
+            text: root.suffix;
+            color: Theme.text_mute;
+            font-size: Type.micro;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component StepEditor inherits Rectangle {
+    in property <bool> open;
+    in property <string> title;
+    in property <[MacroStepRow]> steps;
+    in property <[string]> keys;
+    in property <int> mode;
+    in property <int> cycle_gap;
+    in property <string> hotkey;
+    in property <bool> capturing;
+
+    callback close();
+    callback set_mode(int);
+    callback set_cycle_gap(int);
+    callback set_step_amount(int, int);
+    callback set_step_delta(int, int, int);
+    callback set_step_key(int, string);
+    callback move_step(int, int);
+    callback remove_step(int);
+    callback add_step(int);
+    callback capture_hotkey();
+    callback reset();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    // Scrim: swallows clicks so nothing behind the modal reacts.
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000CC;
+        TouchArea { clicked => { root.close(); } }
+    }
+
+    Rectangle {
+        width: Math.min(720px, parent.width - Space.xxl * 2);
+        height: Math.min(620px, parent.height - Space.xxl * 2);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.bg_1;
+        border-radius: Theme.radius;
+        border-width: Theme.hairline;
+        border-color: Theme.line_strong;
+
+        // Keeps clicks inside the panel from reaching the scrim.
+        TouchArea {}
+
+        VerticalLayout {
+            spacing: 0;
+
+            // --- header ---------------------------------------------------
+            Rectangle {
+                height: 52px;
+                HorizontalLayout {
+                    padding-left: Space.lg;
+                    padding-right: Space.sm;
+                    spacing: Space.sm;
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: root.title;
+                            color: Theme.text;
+                            font-size: Type.title;
+                            font-weight: Type.w_bold;
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    VerticalLayout {
+                        alignment: center;
+                        Btn { label: "Reset to default"; clicked => { root.reset(); } }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        IconBtn { glyph: "×"; clicked => { root.close(); } }
+                    }
+                }
+            }
+            Rectangle { height: Theme.hairline; background: Theme.line; }
+
+            // --- top settings ----------------------------------------------
+            Rectangle {
+                height: 60px;
+                HorizontalLayout {
+                    padding-left: Space.lg;
+                    padding-right: Space.lg;
+                    spacing: Space.xl;
+                    alignment: start;
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 3px;
+                        Text {
+                            text: "TRIGGER";
+                            color: Theme.text_mute;
+                            font-size: Type.micro;
+                            font-weight: Type.w_bold;
+                        }
+                        Segmented {
+                            options: ["Once", "While held", "Toggle"];
+                            current: root.mode;
+                            changed(i) => { root.set_mode(i); }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 3px;
+                        Text {
+                            text: "HOTKEY";
+                            color: Theme.text_mute;
+                            font-size: Type.micro;
+                            font-weight: Type.w_bold;
+                        }
+                        Rectangle {
+                            width: 110px;
+                            height: 28px;
+                            background: root.capturing ? Theme.accent_soft : Theme.bg_2;
+                            border-radius: Theme.radius;
+                            border-width: Theme.hairline;
+                            border-color: root.capturing ? Theme.accent : Theme.line;
+                            animate background, border-color { duration: Motion.fast; easing: Motion.ease; }
+                            Text {
+                                text: root.capturing
+                                      ? "Press a key…"
+                                      : (root.hotkey == "" ? "Click to bind" : root.hotkey);
+                                color: root.capturing ? Theme.accent : Theme.text;
+                                font-size: Type.caption;
+                                font-weight: Type.w_medium;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.capture_hotkey(); }
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 3px;
+                        Text {
+                            text: "GAP BETWEEN REPEATS";
+                            color: Theme.text_mute;
+                            font-size: Type.micro;
+                            font-weight: Type.w_bold;
+                        }
+                        NumField {
+                            value: root.cycle_gap;
+                            suffix: "ms";
+                            changed(v) => { root.set_cycle_gap(v); }
+                        }
+                    }
+                }
+            }
+            Rectangle { height: Theme.hairline; background: Theme.line; }
+
+            // --- steps -------------------------------------------------------
+            ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    padding: Space.md;
+                    spacing: Space.xs;
+                    alignment: start;
+
+                    for st[i] in root.steps: Rectangle {
+                        height: 40px;
+                        background: Theme.bg_2;
+                        border-radius: Theme.radius;
+                        border-width: Theme.hairline;
+                        border-color: Theme.line;
+
+                        HorizontalLayout {
+                            padding-left: Space.sm;
+                            padding-right: Space.sm;
+                            spacing: Space.sm;
+
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: (i + 1) + ".";
+                                    color: Theme.text_mute;
+                                    font-size: Type.caption;
+                                    width: 20px;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: st.label;
+                                    color: Theme.text;
+                                    font-size: Type.small;
+                                    width: 132px;
+                                    overflow: elide;
+                                }
+                            }
+
+                            if st.has_key: VerticalLayout {
+                                alignment: center;
+                                ComboBox {
+                                    width: 96px;
+                                    model: root.keys;
+                                    current-value: st.key;
+                                    selected(v) => { root.set_step_key(i, v); }
+                                }
+                            }
+
+                            if st.has_amount: VerticalLayout {
+                                alignment: center;
+                                NumField {
+                                    value: st.amount;
+                                    suffix: "ms";
+                                    changed(v) => { root.set_step_amount(i, v); }
+                                }
+                            }
+
+                            if st.has_delta: VerticalLayout {
+                                alignment: center;
+                                HorizontalLayout {
+                                    spacing: Space.xs;
+                                    NumField {
+                                        value: st.dx;
+                                        suffix: "x";
+                                        field_w: 54px;
+                                        changed(v) => { root.set_step_delta(i, v, st.dy); }
+                                    }
+                                    NumField {
+                                        value: st.dy;
+                                        suffix: "y";
+                                        field_w: 54px;
+                                        changed(v) => { root.set_step_delta(i, st.dx, v); }
+                                    }
+                                }
+                            }
+
+                            Rectangle { horizontal-stretch: 1; }
+
+                            VerticalLayout {
+                                alignment: center;
+                                HorizontalLayout {
+                                    spacing: 1px;
+                                    IconBtn { glyph: "▲"; size_px: 24px; clicked => { root.move_step(i, -1); } }
+                                    IconBtn { glyph: "▼"; size_px: 24px; clicked => { root.move_step(i, 1); } }
+                                    IconBtn { glyph: "×"; size_px: 24px; clicked => { root.remove_step(i); } }
+                                }
+                            }
+                        }
+                    }
+
+                    if root.steps.length == 0: EmptyState {
+                        height: 120px;
+                        title: "No steps";
+                        hint: "Add one below. A macro with no input does nothing.";
+                    }
+                }
+            }
+
+            // --- add step ------------------------------------------------------
+            Rectangle { height: Theme.hairline; background: Theme.line; }
+            Rectangle {
+                height: 52px;
+                HorizontalLayout {
+                    padding-left: Space.md;
+                    padding-right: Space.md;
+                    spacing: Space.xs;
+                    alignment: start;
+
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: "Add:";
+                            color: Theme.text_mute;
+                            font-size: Type.caption;
+                        }
+                    }
+                    for opt[k] in ["Hold key", "Release key", "Tap key", "Wait", "Click down", "Click up", "Move mouse"]:
+                    VerticalLayout {
+                        alignment: center;
+                        Chip { label: opt; clicked => { root.add_step(k); } }
+                    }
+                }
             }
         }
     }

@@ -1,6 +1,6 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Btn, IconBtn, Segmented, Spinner, EmptyState } from "components.slint";
-import { GameTile, ChatConv, ChatMsg, WearItem, SubPlace, ServerRow, DetailItem, GameDetailData, FriendRow, GroupRow, MacroRow } from "types.slint";
+import { GameTile, ChatConv, ChatMsg, WearItem, SubPlace, ServerRow, DetailItem, GameDetailData, FriendRow, GroupRow, MacroRow, MacroStepRow } from "types.slint";
 import { Sidebar, TopBar, NavEntry, ExpiredBanner } from "shell.slint";
 import { SignInScreen, SignInPhase } from "signin.slint";
 import { HomeScreen, PlayScreen } from "screens.slint";
@@ -10,7 +10,7 @@ import { ProfileScreen, ProfileData } from "profile.slint";
 import { GroupScreen, GroupData } from "group.slint";
 import { ChatScreen } from "chat.slint";
 import { AvatarScreen } from "avatar.slint";
-import { MacrosScreen } from "macros.slint";
+import { MacrosScreen, StepEditor } from "macros.slint";
 import { LibraryScreen, PlayStat } from "library.slint";
 import { SettingsScreen, AccountRow } from "settings.slint";
 
@@ -202,6 +202,28 @@ export component MainWindow inherits Window {
     callback macro_stop_all();
     callback macro_open_credit();
 
+    // === macro step editor =================================================
+    in property <bool> editor_open: false;
+    in property <string> editor_title;
+    in property <[MacroStepRow]> editor_steps;
+    in property <[string]> editor_keys;
+    in property <int> editor_mode;
+    in property <int> editor_gap;
+    in property <string> editor_hotkey;
+    in property <bool> editor_capturing: false;
+
+    callback editor_close();
+    callback editor_set_mode(int);
+    callback editor_set_gap(int);
+    callback editor_set_amount(int, int);
+    callback editor_set_delta(int, int, int);
+    callback editor_set_key(int, string);
+    callback editor_move(int, int);
+    callback editor_remove(int);
+    callback editor_add(int);
+    callback editor_capture();
+    callback editor_reset();
+
     // === library ===========================================================
     in property <[PlayStat]> most_played;
     in property <string> total_playtime;
@@ -273,6 +295,7 @@ export component MainWindow inherits Window {
             return reject;
         }
 
+        // Modal, so it is declared last and paints over the whole shell.
         VerticalLayout {
             spacing: 0;
 
@@ -543,6 +566,28 @@ export component MainWindow inherits Window {
                     }
                 }
             }
+        }
+
+        StepEditor {
+            open: root.editor_open;
+            title: root.editor_title;
+            steps: root.editor_steps;
+            keys: root.editor_keys;
+            mode: root.editor_mode;
+            cycle_gap: root.editor_gap;
+            hotkey: root.editor_hotkey;
+            capturing: root.editor_capturing;
+            close => { root.editor_close(); }
+            set_mode(m) => { root.editor_set_mode(m); }
+            set_cycle_gap(g) => { root.editor_set_gap(g); }
+            set_step_amount(i, v) => { root.editor_set_amount(i, v); }
+            set_step_delta(i, x, y) => { root.editor_set_delta(i, x, y); }
+            set_step_key(i, k) => { root.editor_set_key(i, k); }
+            move_step(i, d) => { root.editor_move(i, d); }
+            remove_step(i) => { root.editor_remove(i); }
+            add_step(k) => { root.editor_add(k); }
+            capture_hotkey => { root.editor_capture(); }
+            reset => { root.editor_reset(); }
         }
     }
 }

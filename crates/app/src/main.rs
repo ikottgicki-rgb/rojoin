@@ -88,6 +88,11 @@ pub(crate) struct App {
     /// demand is what gets the *account* rate-limited — not just RoJoin — and
     /// it shows up as friends rendering as "User 12345" or vanishing entirely.
     names: Mutex<rojoin_store::NameCache>,
+    /// Macro currently open in the step editor.
+    editing: Mutex<Option<String>>,
+    /// True while the editor is waiting for a key to bind. The hotkey listener
+    /// consumes the next press instead of firing macros.
+    capturing: std::sync::atomic::AtomicBool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -122,6 +127,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         watching: std::sync::atomic::AtomicBool::new(false),
         hotkeys: Mutex::new(None),
         names: Mutex::new(rojoin_store::NameCache::load()),
+        editing: Mutex::new(None),
+        capturing: std::sync::atomic::AtomicBool::new(false),
     });
     *app.bridge.lock().unwrap() = Some(bridge.clone());
 
@@ -2054,16 +2061,33 @@ fn wire_macros(ui: &MainWindow, app: &Arc<App>) {
         });
     }
 
+    // The hotkey chip on a card opens the editor already capturing.
     {
+        let app = app.clone();
         let weak = ui.as_weak();
         ui.on_macro_rebind(move |id| {
-            // The key capture itself lands with the step editor; for now this
-            // just marks which macro is waiting for a key.
-            weak.unwrap().set_macro_binding(id);
+            let ui = weak.unwrap();
+            *app.editing.lock().unwrap() = Some(id.to_string());
+            render_editor(&ui, &app);
+            ui.set_editor_open(true);
+            ui.set_editor_capturing(true);
+            app.capturing.store(true, Ordering::SeqCst);
         });
     }
 
-    ui.on_macro_edit(|id| tracing::info!(%id, "step editor: pending"));
+    wire_editor(ui, &app);
+
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_macro_edit(move |id| {
+            let ui = weak.unwrap();
+            *app.editing.lock().unwrap() = Some(id.to_string());
+            ui.set_editor_capturing(false);
+            render_editor(&ui, &app);
+            ui.set_editor_open(true);
+        });
+    }
     ui.on_macro_open_credit(|| {
         let _ = webbrowser::open("https://github.com/Spencer0187/Spencer-Macro-Utilities");
     });
@@ -2116,6 +2140,40 @@ fn spawn_hotkey_listener(ui: &MainWindow, app: &Arc<App>) {
         while let Ok(event) = rx.recv() {
             let Some(engine) = app.engine.lock().unwrap().clone() else { continue };
 
+            // While the editor is waiting for a key, the next press binds it
+            // rather than firing anything.
+            if app.capturing.load(Ordering::SeqCst) {
+                if let HotkeyEvent::Pressed(key) = event {
+                    app.capturing.store(false, Ordering::SeqCst);
+                    {
+                        let id = app.editing.lock().unwrap().clone();
+                        if let Some(id) = id {
+                            let mut macros = app.macros.lock().unwrap();
+                            // Escape clears the binding instead of setting it.
+                            let bind = (key != rojoin_macro::Key::Escape).then_some(key);
+                            for m in macros.iter_mut() {
+                                // A hotkey may only drive one macro.
+                                if m.hotkey == bind && m.id != id {
+                                    m.hotkey = None;
+                                }
+                                if m.id == id {
+                                    m.hotkey = bind;
+                                }
+                            }
+                        }
+                    }
+                    persist_macros(&app);
+
+                    let app2 = app.clone();
+                    let _ = weak.upgrade_in_event_loop(move |ui| {
+                        ui.set_editor_capturing(false);
+                        render_editor(&ui, &app2);
+                        render_macros(&ui, &app2);
+                    });
+                }
+                continue;
+            }
+
             match event {
                 HotkeyEvent::Pressed(PANIC_KEY) => {
                     engine.stop_all();
@@ -2160,6 +2218,241 @@ fn spawn_hotkey_listener(ui: &MainWindow, app: &Arc<App>) {
             let _ = weak.upgrade_in_event_loop(move |ui| render_macros(&ui, &app2));
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// Macro step editor
+// ---------------------------------------------------------------------------
+
+fn wire_editor(ui: &MainWindow, app: &Arc<App>) {
+    ui.set_editor_keys(ad::strings(
+        rojoin_macro::Key::ALL.iter().map(|k| k.label().to_string()).collect(),
+    ));
+
+    macro_rules! edit {
+        ($hook:ident, |$mac:ident $(, $arg:ident : $ty:ty)*| $body:block) => {{
+            let app = app.clone();
+            let weak = ui.as_weak();
+            ui.$hook(move |$($arg: $ty),*| {
+                let ui = weak.unwrap();
+                {
+                    let Some(id) = app.editing.lock().unwrap().clone() else { return };
+                    let mut macros = app.macros.lock().unwrap();
+                    let Some($mac) = macros.iter_mut().find(|m| m.id == id) else { return };
+                    $body
+                }
+                persist_macros(&app);
+                render_editor(&ui, &app);
+                render_macros(&ui, &app);
+            });
+        }};
+    }
+
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_editor_close(move || {
+            let ui = weak.unwrap();
+            ui.set_editor_open(false);
+            ui.set_editor_capturing(false);
+            app.capturing.store(false, Ordering::SeqCst);
+            *app.editing.lock().unwrap() = None;
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_editor_capture(move || {
+            let ui = weak.unwrap();
+            let on = !ui.get_editor_capturing();
+            ui.set_editor_capturing(on);
+            app.capturing.store(on, Ordering::SeqCst);
+        });
+    }
+
+    edit!(on_editor_set_mode, |m, mode: i32| {
+        m.mode = match mode {
+            0 => rojoin_macro::Mode::Once,
+            1 => rojoin_macro::Mode::Hold,
+            _ => rojoin_macro::Mode::Toggle,
+        };
+    });
+    edit!(on_editor_set_gap, |m, gap: i32| {
+        m.cycle_gap_ms = gap.max(0) as u64;
+    });
+    edit!(on_editor_set_amount, |m, i: i32, v: i32| {
+        if let Some(step) = m.steps.get_mut(i.max(0) as usize) {
+            // 0ms would spin the play loop, so the floor is 1.
+            let v = v.max(1) as u64;
+            match step {
+                rojoin_macro::Step::Tap { hold_ms, .. } => *hold_ms = v,
+                rojoin_macro::Step::Wait { ms } => *ms = v,
+                _ => {}
+            }
+        }
+    });
+    edit!(on_editor_set_delta, |m, i: i32, dx: i32, dy: i32| {
+        if let Some(rojoin_macro::Step::MouseMove { dx: x, dy: y }) =
+            m.steps.get_mut(i.max(0) as usize)
+        {
+            *x = dx;
+            *y = dy;
+        }
+    });
+    edit!(on_editor_set_key, |m, i: i32, key: slint::SharedString| {
+        let Some(k) = rojoin_macro::Key::from_label(key.as_str()) else { return };
+        if let Some(step) = m.steps.get_mut(i.max(0) as usize) {
+            match step {
+                rojoin_macro::Step::KeyDown { key }
+                | rojoin_macro::Step::KeyUp { key }
+                | rojoin_macro::Step::Tap { key, .. } => *key = k,
+                _ => {}
+            }
+        }
+    });
+    edit!(on_editor_move, |m, i: i32, delta: i32| {
+        let from = i.max(0) as usize;
+        let to = (i + delta).max(0) as usize;
+        if from < m.steps.len() && to < m.steps.len() && from != to {
+            m.steps.swap(from, to);
+        }
+    });
+    edit!(on_editor_remove, |m, i: i32| {
+        let idx = i.max(0) as usize;
+        if idx < m.steps.len() {
+            m.steps.remove(idx);
+        }
+    });
+    edit!(on_editor_add, |m, kind: i32| {
+        use rojoin_macro::{Key, MouseButton, Step};
+        m.steps.push(match kind {
+            0 => Step::KeyDown { key: Key::W },
+            1 => Step::KeyUp { key: Key::W },
+            2 => Step::Tap { key: Key::Space, hold_ms: 25 },
+            3 => Step::Wait { ms: 50 },
+            4 => Step::MouseDown { button: MouseButton::Left },
+            5 => Step::MouseUp { button: MouseButton::Left },
+            _ => Step::MouseMove { dx: 5, dy: 0 },
+        });
+    });
+    edit!(on_editor_reset, |m| {
+        // Restore the shipped preset, if this macro is one.
+        if let Some(preset) = rojoin_macro::presets::all().into_iter().find(|p| p.id == m.id) {
+            let hotkey = m.hotkey;
+            *m = preset;
+            // Keep whatever the user bound; only the steps reset.
+            m.hotkey = hotkey;
+        }
+    });
+}
+
+/// Rebuild the editor's view of the macro being edited.
+fn render_editor(ui: &MainWindow, app: &Arc<App>) {
+    use rojoin_macro::{MouseButton, Step};
+
+    let Some(id) = app.editing.lock().unwrap().clone() else { return };
+    let macros = app.macros.lock().unwrap();
+    let Some(mac) = macros.iter().find(|m| m.id == id) else { return };
+
+    let button_name = |b: &MouseButton| match b {
+        MouseButton::Left => "left",
+        MouseButton::Right => "right",
+        MouseButton::Middle => "middle",
+    };
+
+    let rows: Vec<MacroStepRow> = mac
+        .steps
+        .iter()
+        .map(|st| match st {
+            Step::KeyDown { key } => MacroStepRow {
+                kind: 0,
+                label: "Hold key".into(),
+                key: key.label().into(),
+                amount: 0,
+                dx: 0,
+                dy: 0,
+                has_key: true,
+                has_amount: false,
+                has_delta: false,
+            },
+            Step::KeyUp { key } => MacroStepRow {
+                kind: 1,
+                label: "Release key".into(),
+                key: key.label().into(),
+                amount: 0,
+                dx: 0,
+                dy: 0,
+                has_key: true,
+                has_amount: false,
+                has_delta: false,
+            },
+            Step::Tap { key, hold_ms } => MacroStepRow {
+                kind: 2,
+                label: "Tap key, hold".into(),
+                key: key.label().into(),
+                amount: (*hold_ms).min(i32::MAX as u64) as i32,
+                dx: 0,
+                dy: 0,
+                has_key: true,
+                has_amount: true,
+                has_delta: false,
+            },
+            Step::Wait { ms } => MacroStepRow {
+                kind: 3,
+                label: "Wait".into(),
+                key: slint::SharedString::default(),
+                amount: (*ms).min(i32::MAX as u64) as i32,
+                dx: 0,
+                dy: 0,
+                has_key: false,
+                has_amount: true,
+                has_delta: false,
+            },
+            Step::MouseDown { button } => MacroStepRow {
+                kind: 4,
+                label: format!("Press {} click", button_name(button)).into(),
+                key: slint::SharedString::default(),
+                amount: 0,
+                dx: 0,
+                dy: 0,
+                has_key: false,
+                has_amount: false,
+                has_delta: false,
+            },
+            Step::MouseUp { button } => MacroStepRow {
+                kind: 5,
+                label: format!("Release {} click", button_name(button)).into(),
+                key: slint::SharedString::default(),
+                amount: 0,
+                dx: 0,
+                dy: 0,
+                has_key: false,
+                has_amount: false,
+                has_delta: false,
+            },
+            Step::MouseMove { dx, dy } => MacroStepRow {
+                kind: 6,
+                label: "Move mouse".into(),
+                key: slint::SharedString::default(),
+                amount: 0,
+                dx: *dx,
+                dy: *dy,
+                has_key: false,
+                has_amount: false,
+                has_delta: true,
+            },
+        })
+        .collect();
+
+    ui.set_editor_title(mac.name.clone().into());
+    ui.set_editor_mode(match mac.mode {
+        rojoin_macro::Mode::Once => 0,
+        rojoin_macro::Mode::Hold => 1,
+        rojoin_macro::Mode::Toggle => 2,
+    });
+    ui.set_editor_gap(mac.cycle_gap_ms.min(i32::MAX as u64) as i32);
+    ui.set_editor_hotkey(mac.hotkey.map(|k| k.label().to_string()).unwrap_or_default().into());
+    ui.set_editor_steps(ad::model(rows));
 }
 
 fn render_macros(ui: &MainWindow, app: &Arc<App>) {

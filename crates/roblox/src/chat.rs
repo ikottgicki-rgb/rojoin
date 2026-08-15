@@ -41,28 +41,39 @@ const CHAT: &str = "https://apis.roblox.com/platform-chat-api/v1";
 pub struct Conversation {
     /// None for a friend you have not messaged yet.
     pub id: Option<String>,
+    #[serde(deserialize_with = "null_default")]
     pub source: String,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", deserialize_with = "null_default")]
     pub kind: String,
     /// Already the display title Roblox wants shown.
+    #[serde(deserialize_with = "null_default")]
     pub name: String,
+    #[serde(deserialize_with = "null_default")]
     pub participant_user_ids: Vec<i64>,
+    #[serde(deserialize_with = "null_default")]
     pub user_data: std::collections::HashMap<String, UserData>,
+    #[serde(deserialize_with = "null_default")]
     pub messages: Vec<Message>,
+    #[serde(deserialize_with = "null_default")]
     pub unread_message_count: i64,
     pub updated_at: Option<String>,
+    // Roblox sends this as null on conversations that have never been used.
+    #[serde(deserialize_with = "null_default")]
     pub sort_index: i64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct UserData {
+    #[serde(deserialize_with = "null_default")]
     pub id: i64,
     /// `name` and `display_name` are routinely null; `combined_name` is what
     /// Roblox actually renders.
     pub name: Option<String>,
     pub display_name: Option<String>,
+    #[serde(deserialize_with = "null_default")]
     pub combined_name: String,
+    #[serde(deserialize_with = "null_default")]
     pub is_verified: bool,
 }
 
@@ -101,9 +112,13 @@ impl Conversation {
 #[serde(default)]
 pub struct Message {
     pub id: Option<String>,
-    #[serde(alias = "message_content", alias = "text")]
+    #[serde(alias = "message_content", alias = "text", deserialize_with = "null_default")]
     pub content: String,
-    #[serde(alias = "sender_user_id", alias = "sender_target_id")]
+    #[serde(
+        alias = "sender_user_id",
+        alias = "sender_target_id",
+        deserialize_with = "null_default"
+    )]
     pub sender_id: i64,
     #[serde(alias = "created_at", alias = "sent_at")]
     pub created: Option<String>,
@@ -267,6 +282,20 @@ mod tests {
         // name and display_name are null in the real payload; combined_name is
         // the only usable one.
         assert_eq!(c.display_title(343552312), "Goopchan");
+    }
+
+    #[test]
+    fn every_nullable_field_survives_being_null() {
+        // Roblox nulls these freely, and a single one used to fail the whole
+        // conversation list.
+        let json = r#"{"conversations":[{"source":null,"id":null,"type":null,
+            "name":null,"participant_user_ids":null,"user_data":null,
+            "messages":null,"unread_message_count":null,"updated_at":null,
+            "sort_index":null}]}"#;
+        let c = serde_json::from_str::<ConversationsResponse>(json).unwrap().conversations;
+        assert_eq!(c.len(), 1);
+        assert!(!c[0].is_real());
+        assert_eq!(c[0].display_title(1), "Conversation");
     }
 
     #[test]

@@ -109,6 +109,22 @@ export struct GroupRow {
     icon: image,
 }
 
+/// One editable step of a macro, flattened for the UI.
+///
+/// `kind`: 0 key down · 1 key up · 2 tap · 3 wait · 4 mouse down ·
+///         5 mouse up · 6 mouse move
+export struct MacroStepRow {
+    kind: int,
+    label: string,      // human summary, e.g. "Tap Space"
+    key: string,        // key label, blank for non-key steps
+    amount: int,        // hold_ms / wait ms
+    dx: int,
+    dy: int,
+    has_key: bool,
+    has_amount: bool,
+    has_delta: bool,
+}
+
 /// One row in the macro list.
 export struct MacroRow {
     id: string,
