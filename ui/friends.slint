@@ -155,36 +155,39 @@ component FriendListRow inherits Rectangle {
                 HorizontalLayout {
                     spacing: Space.xxs;
 
-                    // Pin and bell stay visible when active, so their state is
-                    // readable without hovering every row.
+                    // Always visible, never hover-revealed. Hovering the icon
+                    // itself steals the hover from the row's TouchArea, so a
+                    // hover-gated opacity made them vanish as you reached for
+                    // them. Dim means off, accent means on.
                     Rectangle {
                         width: 28px;
                         height: 28px;
-                        opacity: fta.has-hover || root.entry.pinned ? 1.0 : 0.0;
-                        animate opacity { duration: Motion.fast; easing: Motion.ease; }
                         Text {
                             text: root.entry.pinned ? "★" : "☆";
-                            color: root.entry.pinned ? Theme.accent : Theme.text_dim;
+                            color: root.entry.pinned ? Theme.accent
+                                   : pinta.has-hover ? Theme.text : Theme.text_mute;
                             font-size: Type.body;
                             vertical-alignment: center;
                             horizontal-alignment: center;
+                            animate color { duration: Motion.fast; easing: Motion.ease; }
                         }
-                        TouchArea { mouse-cursor: pointer; clicked => { root.pin(); } }
+                        pinta := TouchArea { mouse-cursor: pointer; clicked => { root.pin(); } }
                     }
 
+                    // Notification bell: tells you when this friend joins a game.
                     Rectangle {
                         width: 28px;
                         height: 28px;
-                        opacity: fta.has-hover || root.entry.notify ? 1.0 : 0.0;
-                        animate opacity { duration: Motion.fast; easing: Motion.ease; }
                         Text {
                             text: root.entry.notify ? "◉" : "○";
-                            color: root.entry.notify ? Theme.accent : Theme.text_dim;
+                            color: root.entry.notify ? Theme.accent
+                                   : notta.has-hover ? Theme.text : Theme.text_mute;
                             font-size: Type.body;
                             vertical-alignment: center;
                             horizontal-alignment: center;
+                            animate color { duration: Motion.fast; easing: Motion.ease; }
                         }
-                        TouchArea { mouse-cursor: pointer; clicked => { root.notify(); } }
+                        notta := TouchArea { mouse-cursor: pointer; clicked => { root.notify(); } }
                     }
 
                     // The slot is always reserved, so the star and bell keep
@@ -268,6 +271,15 @@ export component FriendsScreen inherits Rectangle {
                 }
 
                 Rectangle { horizontal-stretch: 1; }
+
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: "★ pin      ◉ notify";
+                        color: Theme.text_mute;
+                        font-size: Type.micro;
+                    }
+                }
 
                 VerticalLayout {
                     alignment: center;
@@ -357,41 +369,57 @@ export component FriendsScreen inherits Rectangle {
                 HorizontalLayout {
                     spacing: Space.sm;
                     alignment: start;
+                    // Absolute positioning rather than a HorizontalLayout:
+                    // in a layout the username competes with the buttons for
+                    // width, and a long name squeezed them to nothing — they
+                    // were still drawn but had no clickable area left.
                     for r in root.requests: Rectangle {
-                        width: 210px;
+                        width: 236px;
                         height: 40px;
                         background: Theme.bg_2;
                         border-radius: Theme.radius;
                         border-width: Theme.hairline;
                         border-color: Theme.line;
 
-                        HorizontalLayout {
-                            padding-left: Space.sm;
-                            padding-right: Space.xs;
-                            spacing: Space.sm;
+                        Avatar {
+                            x: Space.sm;
+                            y: (parent.height - self.height) / 2;
+                            source: r.thumb;
+                            size_px: 26px;
+                        }
 
-                            VerticalLayout {
-                                alignment: center;
-                                Avatar { source: r.thumb; size_px: 26px; }
+                        Text {
+                            x: Space.sm + 26px + Space.sm;
+                            // Width is whatever is left after the fixed button
+                            // block, so the name elides instead of pushing.
+                            width: parent.width - (Space.sm + 26px + Space.sm) - 60px;
+                            height: 100%;
+                            text: r.name;
+                            color: Theme.text;
+                            font-size: Type.small;
+                            overflow: elide;
+                            wrap: no-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        // Fixed 56px block pinned to the right edge.
+                        Rectangle {
+                            x: parent.width - 56px;
+                            y: (parent.height - self.height) / 2;
+                            width: 56px;
+                            height: 26px;
+
+                            IconBtn {
+                                x: 0;
+                                glyph: "✓";
+                                size_px: 26px;
+                                clicked => { root.accept(r.id); }
                             }
-                            VerticalLayout {
-                                alignment: center;
-                                Text {
-                                    text: r.name;
-                                    color: Theme.text;
-                                    font-size: Type.small;
-                                    overflow: elide;
-                                    wrap: no-wrap;
-                                }
-                            }
-                            Rectangle { horizontal-stretch: 1; }
-                            VerticalLayout {
-                                alignment: center;
-                                HorizontalLayout {
-                                    spacing: Space.xxs;
-                                    IconBtn { glyph: "✓"; size_px: 24px; clicked => { root.accept(r.id); } }
-                                    IconBtn { glyph: "×"; size_px: 24px; clicked => { root.decline(r.id); } }
-                                }
+                            IconBtn {
+                                x: 28px;
+                                glyph: "×";
+                                size_px: 26px;
+                                clicked => { root.decline(r.id); }
                             }
                         }
                     }

@@ -77,7 +77,7 @@ export component GameCard inherits Rectangle {
                 height: 26px;
                 background: #00000099;
                 border-radius: Theme.radius;
-                opacity: ta.has-hover || root.game.favorited ? 1.0 : 0.0;
+                opacity: ta.has-hover || cardfav.has-hover || root.game.favorited ? 1.0 : 0.0;
                 animate opacity { duration: Motion.fast; easing: Motion.ease; }
                 Text {
                     text: root.game.favorited ? "★" : "☆";
@@ -86,7 +86,7 @@ export component GameCard inherits Rectangle {
                     vertical-alignment: center;
                     horizontal-alignment: center;
                 }
-                TouchArea {
+                cardfav := TouchArea {
                     mouse-cursor: pointer;
                     clicked => { root.fav_clicked(); }
                 }
@@ -238,19 +238,21 @@ export component GameListRow inherits Rectangle {
             HorizontalLayout {
                 spacing: Space.sm;
 
+                // Always visible: a hover-gated icon vanishes the moment its
+                // own TouchArea takes the hover from the row.
                 Rectangle {
                     width: 26px;
                     height: 26px;
-                    opacity: ta.has-hover || root.game.favorited ? 1.0 : 0.0;
-                    animate opacity { duration: Motion.fast; easing: Motion.ease; }
                     Text {
                         text: root.game.favorited ? "★" : "☆";
-                        color: root.game.favorited ? Theme.accent : Theme.text_dim;
+                        color: root.game.favorited ? Theme.accent
+                               : favta.has-hover ? Theme.text : Theme.text_mute;
                         font-size: Type.body;
                         vertical-alignment: center;
                         horizontal-alignment: center;
+                        animate color { duration: Motion.fast; easing: Motion.ease; }
                     }
-                    TouchArea {
+                    favta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.favorite(); }
                     }
@@ -262,7 +264,7 @@ export component GameListRow inherits Rectangle {
                     background: playta.pressed ? Theme.accent_press
                                 : playta.has-hover ? Theme.accent_hover : Theme.accent;
                     border-radius: Theme.radius;
-                    opacity: ta.has-hover ? 1.0 : 0.0;
+                    opacity: ta.has-hover || playta.has-hover ? 1.0 : 0.0;
                     animate opacity, background { duration: Motion.fast; easing: Motion.ease; }
                     Text {
                         text: "Play";

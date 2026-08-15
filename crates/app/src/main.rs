@@ -556,7 +556,12 @@ fn respond_to_request(
     id: &str,
     accept: bool,
 ) {
-    let Ok(user_id) = id.parse::<i64>() else { return };
+    let Ok(user_id) = id.parse::<i64>() else {
+        tracing::error!(%id, "friend request has an unparseable user id");
+        return;
+    };
+    tracing::info!(user_id, accept, "responding to friend request");
+
     let client = app.client.clone();
     let app2 = app.clone();
     let bridge2 = bridge.clone();
@@ -574,7 +579,10 @@ fn respond_to_request(
             match result {
                 // Re-fetch rather than mutating locally: accepting changes both
                 // the request list and the roster, and the server is the truth.
-                Ok(()) => load_friends(&ui, &app2, &bridge2, &imgs2),
+                Ok(()) => {
+                    tracing::info!(user_id, "friend request handled");
+                    load_friends(&ui, &app2, &bridge2, &imgs2);
+                }
                 Err(e) => bridge::report(&ui, e),
             }
         },
