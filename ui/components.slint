@@ -10,27 +10,60 @@ import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 // Three pulsing squares rather than a rotating arc: `rotation-angle` does not
 // exist on Rectangle, and a staggered opacity animation needs no transform at
 // all. Reads as "working" without drawing attention to itself.
-export component Spinner inherits HorizontalLayout {
+export component Spinner inherits Rectangle {
     in property <length> size_px: 16px;
     in property <color> tint: Theme.text_dim;
 
-    spacing: root.size_px / 8;
-    alignment: center;
+    // A fixed footprint. As a bare layout it sized to its dots, so swapping it
+    // in for a button changed the row width and shoved neighbours sideways.
+    width: root.size_px;
+    height: root.size_px;
 
-    for d[idx] in [0, 1, 2]: Rectangle {
-        width: root.size_px / 4;
-        height: self.width;
-        background: root.tint;
-        border-radius: Theme.radius;
-        opacity: 0.25;
-        animate opacity {
-            duration: 560ms;
-            iteration-count: -1;
-            direction: alternate;
-            easing: ease-in-out;
-            delay: idx * 160ms;
+    HorizontalLayout {
+        spacing: root.size_px / 8;
+        alignment: center;
+
+        for d[idx] in [0, 1, 2]: Rectangle {
+            width: root.size_px / 4;
+            height: self.width;
+            background: root.tint;
+            border-radius: Theme.radius;
+            opacity: 0.25;
+            animate opacity {
+                duration: 560ms;
+                iteration-count: -1;
+                direction: alternate;
+                easing: ease-in-out;
+                delay: idx * 160ms;
+            }
+            init => { self.opacity = 1.0; }
         }
-        init => { self.opacity = 1.0; }
+    }
+}
+
+/// A fixed-size slot that shows a spinner while busy and its child otherwise.
+/// Using this instead of two sibling `if`s keeps the row from reflowing.
+export component BusySlot inherits Rectangle {
+    in property <bool> busy;
+    in property <length> slot: 30px;
+
+    width: root.slot;
+    height: root.slot;
+
+    // `@children` cannot sit inside a conditional, so the child is always
+    // mounted and simply hidden while busy. `visible: false` also removes it
+    // from hit testing, so the hidden control cannot be clicked.
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        visible: !root.busy;
+        @children
+    }
+
+    if root.busy: Spinner {
+        size_px: root.slot / 2;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
     }
 }
 

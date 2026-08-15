@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Avatar, Btn, IconBtn, Badge, Spinner, EmptyState, Skeleton } from "components.slint";
+import { Avatar, Btn, IconBtn, Badge, Spinner, BusySlot, EmptyState, Skeleton } from "components.slint";
 import { ChatConv, ChatMsg } from "types.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -203,10 +203,9 @@ export component ChatScreen inherits Rectangle {
                         Rectangle { horizontal-stretch: 1; }
                         VerticalLayout {
                             alignment: center;
-                            if root.convs_loading: Spinner { size_px: 14px; }
-                            if !root.convs_loading: IconBtn {
-                                glyph: "⟳";
-                                clicked => { root.refresh(); }
+                            BusySlot {
+                                busy: root.convs_loading;
+                                IconBtn { glyph: "⟳"; clicked => { root.refresh(); } }
                             }
                         }
                     }
@@ -277,7 +276,7 @@ export component ChatScreen inherits Rectangle {
                     Rectangle { horizontal-stretch: 1; }
                     VerticalLayout {
                         alignment: center;
-                        if root.msgs_loading: Spinner { size_px: 14px; }
+                        BusySlot { busy: root.msgs_loading; Rectangle {} }
                     }
                 }
             }

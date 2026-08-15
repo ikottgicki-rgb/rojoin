@@ -19,17 +19,43 @@ pub async fn get(client: &Client, user_id: i64) -> Result<User> {
     client.get_json(&format!("{USERS}/users/{user_id}")).await
 }
 
-/// Resolve many users in one call. Roblox caps this at 100 per request.
+/// Roblox caps this endpoint at 100 ids per request.
+pub const BATCH: usize = 100;
+
+/// Resolve many users.
+///
+/// **Partial-tolerant on purpose.** If a chunk fails — 429 is the common case —
+/// this returns everything resolved so far instead of erroring. That matters
+/// because the caller caches what it gets: throwing away 200 good names because
+/// the third chunk was throttled means the next run re-requests all of them,
+/// which throttles again. Returning partial results lets the cache converge.
 pub async fn batch(client: &Client, user_ids: &[i64]) -> Result<Vec<User>> {
     let mut out = Vec::with_capacity(user_ids.len());
 
-    for chunk in user_ids.chunks(100) {
+    for (i, chunk) in user_ids.chunks(BATCH).enumerate() {
+        // Breathe between chunks. Back-to-back batches are what trips the
+        // limiter in the first place.
+        if i > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        }
+
         let body = serde_json::json!({
             "userIds": chunk,
             "excludeBannedUsers": false,
         });
-        let list: DataList<User> = client.post_json(&format!("{USERS}/users"), &body).await?;
-        out.extend(list.data);
+
+        match client.post_json::<DataList<User>>(&format!("{USERS}/users"), &body).await {
+            Ok(list) => out.extend(list.data),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    resolved = out.len(),
+                    remaining = user_ids.len() - out.len(),
+                    "user batch interrupted; keeping what resolved"
+                );
+                break;
+            }
+        }
     }
 
     Ok(out)
@@ -70,6 +96,11 @@ mod tests {
         let age = account_age_years("2006-02-27T21:06:40.3Z");
         assert!(age.is_some());
         assert!(age.unwrap() >= 19, "Roblox launched in 2006; got {age:?}");
+    }
+
+    #[test]
+    fn batch_size_matches_roblox_limit() {
+        assert_eq!(BATCH, 100);
     }
 
     #[test]

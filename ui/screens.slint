@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Thumb, Avatar, Btn, IconBtn, Chip, Badge, Skeleton, EmptyState, Spinner, MetaStat, Segmented } from "components.slint";
+import { Thumb, Avatar, Btn, IconBtn, Chip, Badge, Skeleton, EmptyState, Spinner, BusySlot, MetaStat, Segmented } from "components.slint";
 import { GameGrid, GameListRow, ItemGrid } from "cards.slint";
 import { GameTile, DetailItem } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -332,9 +332,9 @@ export component PlayScreen inherits Rectangle {
                             horizontal-alignment: left;
                         }
                     }
-                    if root.searching: VerticalLayout {
+                    VerticalLayout {
                         alignment: center;
-                        Spinner { size_px: 16px; }
+                        BusySlot { busy: root.searching; slot: 20px; Rectangle {} }
                     }
                 }
             }

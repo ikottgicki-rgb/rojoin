@@ -49,8 +49,19 @@ pub async fn friend_ids(client: &Client, user_id: i64) -> Result<FriendList> {
     let mut ids = Vec::new();
     let mut cursor: Option<String> = None;
     let mut complete = true;
+    let mut page = 0usize;
 
     loop {
+        // Pace the pagination. A 260-friend roster is six pages, and firing
+        // them back to back is enough on its own to trip Roblox's limiter —
+        // which then poisons every request that follows in this load.
+        if page > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+        }
+        page += 1;
+
+        // 50 is the maximum this endpoint accepts; 100 returns
+        // 400 "Invalid parameters" and silently truncates the roster.
         let mut url = format!("{FRIENDS}/users/{user_id}/friends/find?limit=50");
         if let Some(c) = &cursor {
             url.push_str(&format!("&cursor={c}"));
@@ -185,11 +196,24 @@ impl Default for RawPresence {
 pub async fn presence(client: &Client, user_ids: &[i64]) -> Result<Vec<Presence>> {
     let mut out = Vec::with_capacity(user_ids.len());
 
-    for chunk in user_ids.chunks(100) {
+    for (i, chunk) in user_ids.chunks(100).enumerate() {
+        if i > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        }
+
         let body = serde_json::json!({ "userIds": chunk });
-        let resp: PresenceResponse = client
-            .post_json(&format!("{PRESENCE}/presence/users"), &body)
-            .await?;
+        let resp: PresenceResponse = match client
+            .post_json::<PresenceResponse>(&format!("{PRESENCE}/presence/users"), &body)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                // Partial presence beats none: the roster still renders, just
+                // with some friends shown as offline until the next refresh.
+                tracing::warn!(error = %e, resolved = out.len(), "presence batch interrupted");
+                break;
+            }
+        };
 
         out.extend(resp.user_presences.into_iter().map(|p| Presence {
             user_id: p.user_id,

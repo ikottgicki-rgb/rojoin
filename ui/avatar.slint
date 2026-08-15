@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, Spinner, EmptyState, Skeleton } from "components.slint";
+import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, Spinner, BusySlot, EmptyState, Skeleton } from "components.slint";
 import { WearItem, DetailItem } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
 
@@ -111,8 +111,10 @@ export component AvatarScreen inherits Rectangle {
                     Rectangle { horizontal-stretch: 1; }
                     VerticalLayout {
                         alignment: center;
-                        if root.busy: Spinner { size_px: 14px; }
-                        if !root.busy: IconBtn { glyph: "⟳"; clicked => { root.refresh(); } }
+                        BusySlot {
+                            busy: root.busy;
+                            IconBtn { glyph: "⟳"; clicked => { root.refresh(); } }
+                        }
                     }
                 }
 

@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Avatar, Btn, IconBtn, Chip, Segmented, Badge, EmptyState, Spinner } from "components.slint";
+import { Avatar, Btn, IconBtn, Chip, Segmented, Badge, EmptyState, Spinner, BusySlot } from "components.slint";
 import { DetailItem } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
 
@@ -337,10 +337,20 @@ export component SettingsScreen inherits Rectangle {
                         hint: root.update_status;
                         VerticalLayout {
                             alignment: center;
-                            if root.checking_update: Spinner { size_px: 16px; }
-                            if !root.checking_update: Btn {
-                                label: "Check for updates";
-                                clicked => { root.check_update(); }
+                            // Fixed width, or the row jumps when the button is
+                            // replaced by a much narrower spinner.
+                            Rectangle {
+                                width: 148px;
+                                height: 32px;
+                                if root.checking_update: Spinner {
+                                    size_px: 16px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+                                if !root.checking_update: Btn {
+                                    label: "Check for updates";
+                                    clicked => { root.check_update(); }
+                                }
                             }
                         }
                     }

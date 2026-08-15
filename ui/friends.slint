@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Avatar, Btn, IconBtn, Chip, Badge, Spinner, EmptyState, MetaStat } from "components.slint";
+import { Avatar, Btn, IconBtn, Chip, Badge, Spinner, BusySlot, EmptyState, MetaStat } from "components.slint";
 import { FriendRow, DetailItem } from "types.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -74,6 +74,22 @@ component FriendListRow inherits Rectangle {
         height: 100%;
         background: fta.has-hover ? Theme.bg_2 : transparent;
         animate background { duration: Motion.instant; easing: Motion.ease; }
+
+        // Declared FIRST on purpose. Slint paints later siblings on top, so a
+        // row-wide TouchArea declared last sits over the star, bell and Join
+        // and eats every click meant for them.
+        fta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.open(); }
+            pointer-event(e) => {
+                if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down) {
+                    root.context_menu(
+                        self.absolute-position.x + self.mouse-x,
+                        self.absolute-position.y + self.mouse-y
+                    );
+                }
+            }
+        }
 
         HorizontalLayout {
             padding-left: Space.lg;
@@ -199,18 +215,6 @@ component FriendListRow inherits Rectangle {
             }
         }
 
-        fta := TouchArea {
-            mouse-cursor: pointer;
-            clicked => { root.open(); }
-            pointer-event(e) => {
-                if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down) {
-                    root.context_menu(
-                        self.absolute-position.x + self.mouse-x,
-                        self.absolute-position.y + self.mouse-y
-                    );
-                }
-            }
-        }
     }
 }
 
@@ -317,8 +321,10 @@ export component FriendsScreen inherits Rectangle {
 
                 VerticalLayout {
                     alignment: center;
-                    if root.loading: Spinner { size_px: 14px; }
-                    if !root.loading: IconBtn { glyph: "⟳"; clicked => { root.refresh(); } }
+                    BusySlot {
+                        busy: root.loading;
+                        IconBtn { glyph: "⟳"; clicked => { root.refresh(); } }
+                    }
                 }
             }
         }

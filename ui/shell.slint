@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Btn, IconBtn, Badge, Avatar, Spinner } from "components.slint";
+import { Btn, IconBtn, Badge, Avatar, Spinner, BusySlot } from "components.slint";
 
 // The navigation shell: sidebar, top bar, and the sliding active-item pill.
 // Screens plug into the content host in app.slint.
@@ -248,9 +248,9 @@ export component TopBar inherits Rectangle {
 
         Rectangle { horizontal-stretch: 1; }
 
-        if root.busy: VerticalLayout {
+        VerticalLayout {
             alignment: center;
-            Spinner { size_px: 16px; }
+            BusySlot { busy: root.busy; slot: 20px; Rectangle {} }
         }
 
         VerticalLayout {

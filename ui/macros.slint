@@ -321,62 +321,6 @@ export component MacrosScreen inherits Rectangle {
                     hint: "Something went wrong loading the presets.";
                 }
 
-                // --- honesty + credit -------------------------------------
-                Rectangle {
-                    background: Theme.bg_1;
-                    border-radius: Theme.radius;
-                    border-width: Theme.hairline;
-                    border-color: Theme.line;
-                    height: notelay.preferred-height;
-
-                    notelay := VerticalLayout {
-                        padding: Space.lg;
-                        spacing: Space.sm;
-
-                        Text {
-                            text: "About these presets";
-                            color: Theme.text_dim;
-                            font-size: Type.small;
-                            font-weight: Type.w_bold;
-                        }
-                        Text {
-                            text: "The bundled timings are starting points, not values verified against a live game. Roblox physics changes between updates, so expect to tune them — every step is editable.";
-                            color: Theme.text_mute;
-                            font-size: Type.caption;
-                            wrap: word-wrap;
-                        }
-                        HorizontalLayout {
-                            spacing: Space.xs;
-                            alignment: start;
-                            Text {
-                                text: "Inspired by";
-                                color: Theme.text_mute;
-                                font-size: Type.caption;
-                                vertical-alignment: center;
-                            }
-                            Rectangle {
-                                width: link.preferred-width;
-                                height: link.preferred-height;
-                                link := Text {
-                                    text: "Spencer Macro Utilities";
-                                    color: lta.has-hover ? Theme.accent : Theme.text_dim;
-                                    font-size: Type.caption;
-                                    animate color { duration: Motion.fast; easing: Motion.ease; }
-                                }
-                                lta := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.open_credit(); }
-                                }
-                            }
-                            Text {
-                                text: "— an independent implementation, no shared code.";
-                                color: Theme.text_mute;
-                                font-size: Type.caption;
-                                vertical-alignment: center;
-                            }
-                        }
-                    }
-                }
             }
         }
     }

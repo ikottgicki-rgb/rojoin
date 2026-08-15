@@ -155,6 +155,12 @@ impl Client {
         Err(Error::Api(format!("{url} kept refusing the CSRF token")))
     }
 
+    /// Authenticated GET returning the raw body, for inspecting a shape.
+    pub async fn fetch_json_raw(&self, url: &str) -> Result<String> {
+        let bytes = self.send(Method::Get, url, None).await?;
+        Ok(String::from_utf8_lossy(&bytes).to_string())
+    }
+
     pub async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
         let resp = self.http.get(url).send().await?;
         if !resp.status().is_success() {

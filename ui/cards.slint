@@ -21,6 +21,21 @@ export component GameCard inherits Rectangle {
     animate background, border-color { duration: Motion.fast; easing: Motion.ease; }
     clip: true;
 
+    // Declared FIRST: a card-wide TouchArea declared last paints over the
+    // Play overlay and the favourite star and swallows their clicks.
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down) {
+                root.context_menu(
+                    self.absolute-position.x + self.mouse-x,
+                    self.absolute-position.y + self.mouse-y
+                );
+            }
+        }
+    }
+
     VerticalLayout {
         spacing: 0;
 
@@ -108,18 +123,6 @@ export component GameCard inherits Rectangle {
         }
     }
 
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-        pointer-event(e) => {
-            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down) {
-                root.context_menu(
-                    self.absolute-position.x + self.mouse-x,
-                    self.absolute-position.y + self.mouse-y
-                );
-            }
-        }
-    }
 }
 
 /// Responsive game grid. Give it a width and it works out the rest.
@@ -182,6 +185,12 @@ export component GameListRow inherits Rectangle {
     height: 64px;
     background: ta.has-hover ? Theme.bg_2 : transparent;
     animate background { duration: Motion.instant; easing: Motion.ease; }
+
+    // First, so the favourite star and Play stay clickable.
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
 
     HorizontalLayout {
         padding-left: Space.md;
@@ -272,10 +281,6 @@ export component GameListRow inherits Rectangle {
         }
     }
 
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
 }
 
 /// Square-ish tile grid for badges, passes, inventory and worn items.

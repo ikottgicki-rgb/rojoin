@@ -13,6 +13,40 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Deserialize a field that Roblox may send as an explicit `null`, falling
+/// back to `Default` instead of failing the whole response.
+///
+/// `#[serde(default)]` does NOT cover this: it applies when a key is *missing*,
+/// not when it is present-but-null. Roblox does the latter constantly, and one
+/// null string is enough to blank an entire screen.
+pub fn null_default<'de, D, T>(d: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
+/// Deserialize an id that Roblox sends as either a number or a string.
+pub fn flexible_id<'de, D>(d: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Either {
+        S(String),
+        N(i64),
+        Null,
+    }
+
+    Ok(match Either::deserialize(d)? {
+        Either::S(s) => s,
+        Either::N(n) => n.to_string(),
+        Either::Null => String::new(),
+    })
+}
+
 /// Wrapper for Roblox's ubiquitous `{ "data": [...] }` envelope.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DataList<T> {

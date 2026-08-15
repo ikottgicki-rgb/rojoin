@@ -19,100 +19,103 @@
 
 use serde::Deserialize;
 
+use crate::models::{flexible_id, null_default};
 use crate::{Client, Result};
 
 const CHAT: &str = "https://apis.roblox.com/platform-chat-api/v1";
 
+/// A conversation as `get-user-conversations` actually returns it.
+///
+/// The payload is **snake_case**, unlike the rest of the Roblox API, so there
+/// is no `rename_all` here — the Rust field names already match.
+///
+/// Two shapes matter and neither is obvious:
+///   * `id` is **null** when `source == "friends"`. Those are friends you have
+///     never messaged: Roblox lists them as potential conversations that do
+///     not exist yet. Calling any conversation endpoint with a null id gives
+///     `400 empty conversationId`.
+///   * Participants arrive as `participant_user_ids` plus a `user_data` map
+///     keyed by stringified user id — there is no `participants` array.
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(default)]
 pub struct Conversation {
-    pub id: String,
-    #[serde(alias = "title")]
+    /// None for a friend you have not messaged yet.
+    pub id: Option<String>,
+    pub source: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// Already the display title Roblox wants shown.
     pub name: String,
-    /// "OneToOne" or "Group".
-    pub conversation_type: String,
-    pub participants: Option<Vec<Participant>>,
-    pub last_updated: Option<String>,
+    pub participant_user_ids: Vec<i64>,
+    pub user_data: std::collections::HashMap<String, UserData>,
+    pub messages: Vec<Message>,
     pub unread_message_count: i64,
-    pub latest_messages: Option<Vec<Message>>,
+    pub updated_at: Option<String>,
+    pub sort_index: i64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct UserData {
+    pub id: i64,
+    /// `name` and `display_name` are routinely null; `combined_name` is what
+    /// Roblox actually renders.
+    pub name: Option<String>,
+    pub display_name: Option<String>,
+    pub combined_name: String,
+    pub is_verified: bool,
 }
 
 impl Conversation {
-    /// For a one-to-one chat the useful title is the *other* person, not the
-    /// conversation's own name (which is often empty or your own id).
+    /// A conversation you can actually fetch or post to.
+    pub fn is_real(&self) -> bool {
+        self.id.as_deref().is_some_and(|id| !id.is_empty())
+    }
+
     pub fn display_title(&self, me: i64) -> String {
-        if !self.name.is_empty() && self.conversation_type != "OneToOne" {
+        if !self.name.is_empty() {
             return self.name.clone();
         }
-        self.participants
-            .as_ref()
-            .and_then(|ps| ps.iter().find(|p| p.user_id != me))
-            .map(|p| {
-                if p.display_name.is_empty() {
-                    p.name.clone()
-                } else {
-                    p.display_name.clone()
-                }
-            })
+        self.other_participant(me)
+            .and_then(|id| self.user_data.get(&id.to_string()))
+            .map(|u| u.combined_name.clone())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                if self.name.is_empty() {
-                    "Conversation".into()
-                } else {
-                    self.name.clone()
-                }
-            })
+            .unwrap_or_else(|| "Conversation".into())
     }
 
     pub fn other_participant(&self, me: i64) -> Option<i64> {
-        self.participants
-            .as_ref()?
+        self.participant_user_ids
             .iter()
-            .find(|p| p.user_id != me)
-            .map(|p| p.user_id)
+            .copied()
+            .find(|id| *id != me)
+            // A self-conversation still needs someone to show.
+            .or_else(|| self.participant_user_ids.first().copied())
     }
 
     pub fn preview(&self) -> String {
-        self.latest_messages
-            .as_ref()
-            .and_then(|m| m.first())
-            .map(|m| m.content.clone())
-            .unwrap_or_default()
+        self.messages.first().map(|m| m.content.clone()).unwrap_or_default()
     }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct Participant {
-    #[serde(alias = "id", alias = "userId")]
-    pub user_id: i64,
-    #[serde(alias = "username")]
-    pub name: String,
-    pub display_name: String,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(default)]
 pub struct Message {
-    pub id: String,
-    #[serde(alias = "messageContent", alias = "text")]
+    pub id: Option<String>,
+    #[serde(alias = "message_content", alias = "text")]
     pub content: String,
-    #[serde(alias = "senderUserId")]
+    #[serde(alias = "sender_user_id", alias = "sender_target_id")]
     pub sender_id: i64,
-    #[serde(alias = "createdTime", alias = "sentTime")]
-    pub created: String,
-    pub message_type: Option<String>,
+    #[serde(alias = "created_at", alias = "sent_at")]
+    pub created: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct ConversationsResponse {
     #[serde(default = "Vec::new", alias = "data")]
     conversations: Vec<Conversation>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct MessagesResponse {
     #[serde(default = "Vec::new", alias = "data")]
     messages: Vec<Message>,
@@ -121,6 +124,7 @@ struct MessagesResponse {
 /// The conversation list, newest activity first.
 pub async fn conversations(client: &Client, page_size: u32) -> Result<Vec<Conversation>> {
     let url = format!("{CHAT}/get-user-conversations?pageNumber=1&pageSize={page_size}");
+
     let resp: ConversationsResponse = client.get_json(&url).await?;
     Ok(resp.conversations)
 }
@@ -131,6 +135,10 @@ pub async fn messages(
     conversation_id: &str,
     page_size: u32,
 ) -> Result<Vec<Message>> {
+    // A friend-derived conversation has no id yet; there is nothing to fetch.
+    if conversation_id.is_empty() {
+        return Ok(Vec::new());
+    }
     let url = format!(
         "{CHAT}/get-conversation-messages?conversationId={conversation_id}&pageSize={page_size}"
     );
@@ -140,6 +148,11 @@ pub async fn messages(
 
 /// Send a message. Note the plural endpoint name — the singular 404s.
 pub async fn send(client: &Client, conversation_id: &str, text: &str) -> Result<()> {
+    if conversation_id.is_empty() {
+        return Err(crate::Error::Api(
+            "that conversation does not exist yet — send from the profile to start it".into(),
+        ));
+    }
     let body = serde_json::json!({
         "conversationId": conversation_id,
         "messages": [{ "content": text }],
@@ -172,11 +185,14 @@ pub async fn create_with(client: &Client, user_id: i64) -> Result<String> {
         .conversations
         .into_iter()
         .next()
-        .map(|c| c.id)
+        .and_then(|c| c.id)
         .ok_or_else(|| crate::Error::Api("Roblox created no conversation".into()))
 }
 
 pub async fn mark_read(client: &Client, conversation_id: &str) -> Result<()> {
+    if conversation_id.is_empty() {
+        return Ok(());
+    }
     let body = serde_json::json!({
         "conversations": [{ "conversationId": conversation_id, "hasUnreadMessages": false }],
     });
@@ -194,98 +210,83 @@ pub fn total_unread(conversations: &[Conversation]) -> i64 {
 mod tests {
     use super::*;
 
-    fn one_to_one() -> Conversation {
-        Conversation {
-            id: "c1".into(),
-            name: String::new(),
-            conversation_type: "OneToOne".into(),
-            participants: Some(vec![
-                Participant { user_id: 1, name: "me".into(), display_name: "Me".into() },
-                Participant { user_id: 2, name: "henry".into(), display_name: "UsedHenry06".into() },
-            ]),
-            last_updated: None,
-            unread_message_count: 3,
-            latest_messages: Some(vec![Message {
-                id: "m1".into(),
-                content: "yeah im on now".into(),
-                sender_id: 2,
-                created: String::new(),
-                message_type: None,
-            }]),
-        }
+    /// Verbatim from a live `get-user-conversations` response.
+    const REAL: &str = r#"{"conversations":[
+        {"source":"friends","id":null,"type":"one_to_one","name":"Goopchan",
+         "is_default_name":true,"created_by":null,
+         "participant_user_ids":[343552312,3626863294],
+         "user_data":{"3626863294":{"id":3626863294,"name":null,"display_name":null,
+                      "combined_name":"Goopchan","is_verified":false}},
+         "messages":[],"unread_message_count":0,
+         "updated_at":"2026-06-15T16:47:54.255Z","sort_index":1781542074255},
+        {"source":"channels","id":"0f8dd898-e5a4-517f-bf30-1abc2b1c9af7",
+         "type":"one_to_one","name":"pantera_nera99","created_by":1528509367,
+         "participant_user_ids":[343552312,1528509367],
+         "user_data":{"1528509367":{"id":1528509367,"name":null,"display_name":null,
+                      "combined_name":"pantera_nera99","is_verified":false}},
+         "messages":[],"unread_message_count":3,
+         "updated_at":"2026-04-09T23:13:36.309Z","sort_index":1775776416309}
+    ]}"#;
+
+    fn parsed() -> Vec<Conversation> {
+        serde_json::from_str::<ConversationsResponse>(REAL).unwrap().conversations
     }
 
     #[test]
-    fn one_to_one_title_is_the_other_person() {
-        // Not "Me", and not the conversation's own empty name.
-        assert_eq!(one_to_one().display_title(1), "UsedHenry06");
-        assert_eq!(one_to_one().display_title(2), "Me");
+    fn parses_the_real_snake_case_payload() {
+        let c = parsed();
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].name, "Goopchan");
+        assert_eq!(c[1].unread_message_count, 3);
+        assert_eq!(c[1].kind, "one_to_one");
     }
 
     #[test]
-    fn group_conversation_keeps_its_own_name() {
-        let mut c = one_to_one();
-        c.conversation_type = "Group".into();
-        c.name = "Paradoxum Fans".into();
-        assert_eq!(c.display_title(1), "Paradoxum Fans");
+    fn a_friend_conversation_with_a_null_id_is_not_real() {
+        // These are friends you have never messaged. Calling any conversation
+        // endpoint with them returns 400 "empty conversationId".
+        let c = parsed();
+        assert!(!c[0].is_real(), "null id must not be treated as fetchable");
+        assert!(c[1].is_real());
+        assert_eq!(c[1].id.as_deref(), Some("0f8dd898-e5a4-517f-bf30-1abc2b1c9af7"));
     }
 
     #[test]
-    fn a_nameless_conversation_with_no_participants_still_renders() {
-        let c = Conversation {
-            id: "x".into(),
-            conversation_type: "OneToOne".into(),
-            ..Default::default()
-        };
+    fn the_other_participant_is_found_for_avatars() {
+        // This is what was blank: participants come as ids plus a user_data
+        // map, not as a participants array.
+        let c = parsed();
+        assert_eq!(c[0].other_participant(343552312), Some(3626863294));
+        assert_eq!(c[1].other_participant(343552312), Some(1528509367));
+    }
+
+    #[test]
+    fn titles_fall_back_to_combined_name_when_name_is_blank() {
+        let mut c = parsed().remove(0);
+        c.name = String::new();
+        // name and display_name are null in the real payload; combined_name is
+        // the only usable one.
+        assert_eq!(c.display_title(343552312), "Goopchan");
+    }
+
+    #[test]
+    fn a_conversation_with_nothing_usable_still_renders() {
+        let c = Conversation::default();
         assert_eq!(c.display_title(1), "Conversation");
-        assert!(c.other_participant(1).is_none());
-    }
-
-    #[test]
-    fn falls_back_to_username_when_display_name_is_blank() {
-        let mut c = one_to_one();
-        if let Some(ps) = c.participants.as_mut() {
-            ps[1].display_name = String::new();
-        }
-        assert_eq!(c.display_title(1), "henry");
-    }
-
-    #[test]
-    fn preview_uses_the_latest_message() {
-        assert_eq!(one_to_one().preview(), "yeah im on now");
-        assert_eq!(Conversation::default().preview(), "");
+        assert!(!c.is_real());
+        assert_eq!(c.preview(), "");
     }
 
     #[test]
     fn unread_totals_across_conversations() {
-        let mut b = one_to_one();
-        b.unread_message_count = 7;
-        assert_eq!(total_unread(&[one_to_one(), b]), 10);
+        assert_eq!(total_unread(&parsed()), 3);
         assert_eq!(total_unread(&[]), 0);
     }
 
-    #[test]
-    fn message_parsing_accepts_the_field_aliases() {
-        // Roblox has shipped more than one spelling of these fields; the
-        // aliases mean a rename does not blank the chat.
-        let m: Message =
-            serde_json::from_str(r#"{"id":"1","messageContent":"hi","senderUserId":5,"sentTime":"t"}"#)
-                .unwrap();
-        assert_eq!(m.content, "hi");
-        assert_eq!(m.sender_id, 5);
-        assert_eq!(m.created, "t");
-    }
-
-    #[test]
-    fn conversation_list_accepts_data_or_conversations_key() {
-        let a: ConversationsResponse =
-            serde_json::from_str(r#"{"conversations":[{"id":"1"}]}"#).unwrap();
-        assert_eq!(a.conversations.len(), 1);
-
-        let b: ConversationsResponse = serde_json::from_str(r#"{"data":[{"id":"2"}]}"#).unwrap();
-        assert_eq!(b.conversations.len(), 1);
-
-        let c: ConversationsResponse = serde_json::from_str("{}").unwrap();
-        assert!(c.conversations.is_empty());
+    #[tokio::test]
+    async fn sending_to_a_nonexistent_conversation_explains_itself() {
+        let client = Client::new().unwrap();
+        let err = send(&client, "", "hello").await.unwrap_err();
+        assert!(err.to_string().contains("does not exist yet"));
     }
 }

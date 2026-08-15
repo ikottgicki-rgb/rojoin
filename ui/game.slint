@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, MetaStat, Skeleton, EmptyState, Spinner } from "components.slint";
+import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, MetaStat, Skeleton, EmptyState, Spinner, BusySlot } from "components.slint";
 import { GameGrid, ItemGrid } from "cards.slint";
 import { GameTile, GameDetailData, SubPlace, ServerRow, DetailItem } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -519,9 +519,9 @@ export component GameScreen inherits Rectangle {
                             clicked => { root.server_sort = 2; root.set_server_sort(2); }
                         }
                         Rectangle { horizontal-stretch: 1; }
-                        if root.servers_loading: VerticalLayout {
+                        VerticalLayout {
                             alignment: center;
-                            Spinner { size_px: 14px; }
+                            BusySlot { busy: root.servers_loading; slot: 20px; Rectangle {} }
                         }
                     }
 

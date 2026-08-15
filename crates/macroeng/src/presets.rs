@@ -13,14 +13,7 @@
 use crate::{Key, Macro, Mode, MouseButton, Step};
 
 pub fn all() -> Vec<Macro> {
-    vec![
-        bunnyhop(),
-        wallhop(),
-        speed_glitch(),
-        wall_walk(),
-        key_spam(),
-        auto_clicker(),
-    ]
+    vec![bunnyhop(), wallhop(), wall_walk(), key_spam(), auto_clicker()]
 }
 
 /// Repeated jumps while holding forward.
@@ -62,27 +55,6 @@ pub fn wallhop() -> Macro {
             Step::Wait { ms: 45 },
             Step::KeyUp { key: Key::D },
             Step::Wait { ms: 60 },
-        ],
-        ..Default::default()
-    }
-}
-
-/// Rapid direction reversals to accumulate horizontal speed.
-pub fn speed_glitch() -> Macro {
-    Macro {
-        id: "speedglitch".into(),
-        name: "Speed glitch".into(),
-        description: "Rapidly reverses strafe direction to build speed.".into(),
-        mode: Mode::Hold,
-        hotkey: Some(Key::F3),
-        cycle_gap_ms: 0,
-        steps: vec![
-            Step::KeyDown { key: Key::A },
-            Step::Wait { ms: 20 },
-            Step::KeyUp { key: Key::A },
-            Step::KeyDown { key: Key::D },
-            Step::Wait { ms: 20 },
-            Step::KeyUp { key: Key::D },
         ],
         ..Default::default()
     }
@@ -179,8 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn strafe_presets_leave_nothing_held() {
-        assert!(speed_glitch().held_keys().is_empty());
+    fn click_preset_leaves_nothing_held() {
         assert!(auto_clicker().held_buttons().is_empty());
     }
 

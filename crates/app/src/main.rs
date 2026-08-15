@@ -82,6 +82,12 @@ pub(crate) struct App {
     watching: std::sync::atomic::AtomicBool,
     /// Held so the listener threads live as long as the app does.
     hotkeys: Mutex<Option<rojoin_macro::hotkeys::Listener>>,
+    /// Usernames and head-shot URLs resolved once and kept forever.
+    ///
+    /// This is the single most important cache in the app. Resolving names on
+    /// demand is what gets the *account* rate-limited — not just RoJoin — and
+    /// it shows up as friends rendering as "User 12345" or vanishing entirely.
+    names: Mutex<rojoin_store::NameCache>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -115,6 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         bridge: Mutex::new(None),
         watching: std::sync::atomic::AtomicBool::new(false),
         hotkeys: Mutex::new(None),
+        names: Mutex::new(rojoin_store::NameCache::load()),
     });
     *app.bridge.lock().unwrap() = Some(bridge.clone());
 
@@ -239,12 +246,16 @@ fn enter_app(
         }
     });
 
+    // Home is what you are looking at, so it loads immediately. The rest are
+    // staggered: firing four multi-request loads at once is what earned a
+    // string of 429s from users.roblox.com on the very first run.
     load_home(ui, app, bridge, imgs);
-    load_friends(ui, app, bridge, imgs);
-    load_conversations(ui, app, bridge, imgs);
-    load_avatar(ui, app, bridge, imgs);
     render_library(ui, app);
     render_settings(ui, app);
+
+    stagger(ui, app, bridge, imgs, 600, load_friends);
+    stagger(ui, app, bridge, imgs, 2_000, load_conversations);
+    stagger(ui, app, bridge, imgs, 3_500, load_avatar);
 
     // One presence watcher per session. It reads the subscription lists on
     // every sweep, so toggling a bell takes effect without a restart.
@@ -252,6 +263,43 @@ fn enter_app(
         let watcher = notify::Watcher::new(app.client.clone(), app.clone());
         bridge.spawn(async move { watcher.run().await });
     }
+}
+
+/// Run a loader after `delay_ms`, dropping it if the account changed meanwhile.
+fn stagger(
+    ui: &MainWindow,
+    app: &Arc<App>,
+    bridge: &Arc<Bridge>,
+    imgs: &Images,
+    delay_ms: u64,
+    load: fn(&MainWindow, &Arc<App>, &Arc<Bridge>, &Images),
+) {
+    let weak = ui.as_weak();
+    let app = app.clone();
+    let bridge = bridge.clone();
+    let imgs = imgs.clone();
+    let gen = SESSION_GEN.load(Ordering::SeqCst);
+
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::SingleShot,
+        std::time::Duration::from_millis(delay_ms),
+        move || {
+            if gen != SESSION_GEN.load(Ordering::SeqCst) {
+                return;
+            }
+            if let Some(ui) = weak.upgrade() {
+                load(&ui, &app, &bridge, &imgs);
+            }
+        },
+    );
+    // A Timer stops when dropped, so it has to outlive this function.
+    STAGGER_TIMERS.with(|t| t.borrow_mut().push(timer));
+}
+
+thread_local! {
+    static STAGGER_TIMERS: std::cell::RefCell<Vec<slint::Timer>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 // ---------------------------------------------------------------------------
@@ -386,8 +434,10 @@ fn load_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
     let imgs2 = imgs.clone();
     let gen = SESSION_GEN.load(Ordering::SeqCst);
 
+    let cached = app.names.lock().unwrap().users.clone();
+
     bridge.call_res(
-        move || async move { fetch_friends(&client, me).await },
+        move || async move { fetch_friends(&client, me, cached).await },
         move |ui, result| {
             // Drop the result if the account changed while it was in flight,
             // or one account's roster lands under another account's name.
@@ -421,6 +471,18 @@ fn load_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
                     imgs2.load(&url, move |ui, img| {
                         set_item_thumb(&ui.get_requests_list(), i, img)
                     });
+                }
+            }
+
+            // Fold anything newly resolved into the cache and persist it, so
+            // these names never cost another request.
+            if !load.resolved.is_empty() {
+                let mut names = app2.names.lock().unwrap();
+                for (id, entry) in load.resolved {
+                    names.users.insert(id.to_string(), entry);
+                }
+                if let Err(e) = names.save() {
+                    tracing::warn!(error = %e, "could not persist the name cache");
                 }
             }
 
@@ -516,9 +578,15 @@ struct FriendsLoad {
     friends: Vec<ad::FriendInput>,
     requests: Vec<rojoin_roblox::models::User>,
     avatars: std::collections::HashMap<i64, String>,
+    /// Users resolved this round, to be folded into the persistent cache.
+    resolved: Vec<(i64, rojoin_store::CachedUser)>,
 }
 
-async fn fetch_friends(client: &Client, me: i64) -> rojoin_roblox::Result<FriendsLoad> {
+async fn fetch_friends(
+    client: &Client,
+    me: i64,
+    cached: std::collections::HashMap<String, rojoin_store::CachedUser>,
+) -> rojoin_roblox::Result<FriendsLoad> {
     let list = friends::friend_ids(client, me).await?;
     if !list.complete {
         // Deliberately not fatal: showing a partial roster beats showing none.
@@ -526,14 +594,95 @@ async fn fetch_friends(client: &Client, me: i64) -> rojoin_roblox::Result<Friend
         tracing::warn!(count = list.ids.len(), "friends list may be incomplete");
     }
 
-    let users = users::batch(client, &list.ids).await.unwrap_or_default();
+    // Only ask Roblox about people we have never seen. On a settled install
+    // this is empty and the whole name/avatar round trip disappears.
+    let unknown: Vec<i64> = list
+        .ids
+        .iter()
+        .copied()
+        .filter(|id| !cached.contains_key(&id.to_string()))
+        .collect();
+
+    // Resolve at most one batch per load. A fresh install with hundreds of
+    // friends would otherwise fire several batches back to back and get the
+    // account throttled; instead the cache fills in over successive refreshes
+    // and is permanent once resolved.
+    let to_resolve: Vec<i64> = unknown.iter().copied().take(users::BATCH).collect();
+
+    let fetched = if to_resolve.is_empty() {
+        Vec::new()
+    } else {
+        tracing::info!(
+            resolving = to_resolve.len(),
+            outstanding = unknown.len(),
+            "resolving unseen users"
+        );
+        users::batch(client, &to_resolve).await.unwrap_or_default()
+    };
+
+    // Presence is genuinely live and cannot be cached.
     let presence = friends::presence(client, &list.ids).await.unwrap_or_default();
     let requests = friends::requests(client, 25).await.unwrap_or_default();
 
-    // One batch for friends and pending requesters together.
-    let mut avatar_ids = list.ids.clone();
+    // Head shots only for the ones we just resolved, plus any pending requester.
+    let mut avatar_ids: Vec<i64> = fetched.iter().map(|u| u.id).collect();
     avatar_ids.extend(requests.iter().map(|u| u.id));
-    let avatars = thumbnails::headshots(client, &avatar_ids).await.unwrap_or_default();
+    let mut avatars = if avatar_ids.is_empty() {
+        Default::default()
+    } else {
+        thumbnails::headshots(client, &avatar_ids).await.unwrap_or_default()
+    };
+    // Fill the rest from cache.
+    for (id, entry) in &cached {
+        if let Ok(id) = id.parse::<i64>() {
+            if !entry.avatar_url.is_empty() {
+                avatars.entry(id).or_insert_with(|| entry.avatar_url.clone());
+            }
+        }
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    let resolved: Vec<(i64, rojoin_store::CachedUser)> = fetched
+        .iter()
+        .map(|u| {
+            (
+                u.id,
+                rojoin_store::CachedUser {
+                    username: u.name.clone(),
+                    display_name: u.display_name.clone(),
+                    avatar_url: avatars.get(&u.id).cloned().unwrap_or_default(),
+                    verified: u.has_verified_badge,
+                    ts: now,
+                },
+            )
+        })
+        .collect();
+
+    // The roster is every friend, whether their name came from cache or wire.
+    let users: Vec<rojoin_roblox::models::User> = list
+        .ids
+        .iter()
+        .map(|id| {
+            if let Some(u) = fetched.iter().find(|u| u.id == *id) {
+                return u.clone();
+            }
+            match cached.get(&id.to_string()) {
+                Some(c) => rojoin_roblox::models::User {
+                    id: *id,
+                    name: c.username.clone(),
+                    display_name: c.display_name.clone(),
+                    has_verified_badge: c.verified,
+                    ..Default::default()
+                },
+                None => rojoin_roblox::models::User {
+                    id: *id,
+                    name: format!("User {id}"),
+                    display_name: format!("User {id}"),
+                    ..Default::default()
+                },
+            }
+        })
+        .collect();
 
     let friends = users
         .iter()
@@ -560,7 +709,7 @@ async fn fetch_friends(client: &Client, me: i64) -> rojoin_roblox::Result<Friend
         })
         .collect();
 
-    Ok(FriendsLoad { friends, requests, avatars })
+    Ok(FriendsLoad { friends, requests, avatars, resolved })
 }
 
 // ---------------------------------------------------------------------------
@@ -1154,7 +1303,12 @@ fn wire_chat(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
             ui.set_chat_selected(index);
             ui.set_chat_title(conv.display_title(*app.me.lock().unwrap()).into());
             ui.set_chat_msgs(ad::model(Vec::new()));
-            load_messages(&ui, &app, &bridge2, &imgs2, &conv.id);
+
+            // A friend you have never messaged has no conversation yet, so
+            // there is no history to fetch — the first send creates it.
+            if let Some(id) = conv.id.as_deref() {
+                load_messages(&ui, &app, &bridge2, &imgs2, id);
+            }
         });
     }
 
@@ -1171,10 +1325,11 @@ fn wire_chat(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
             }
 
             let index = ui.get_chat_selected();
-            let conv_id = {
+            let (conv_id, other) = {
                 let convs = app.conversations.lock().unwrap();
+                let me = *app.me.lock().unwrap();
                 match convs.get(index as usize) {
-                    Some(c) => c.id.clone(),
+                    Some(c) => (c.id.clone(), c.other_participant(me)),
                     None => return,
                 }
             };
@@ -1189,14 +1344,29 @@ fn wire_chat(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
             let app2 = app.clone();
             let bridge3 = bridge2.clone();
             let imgs3 = imgs2.clone();
-            let cid = conv_id.clone();
 
             bridge2.call_res(
-                move || async move { chat::send(&client, &cid, &text).await },
+                move || async move {
+                    // No conversation yet? Create it, then send. This is the
+                    // path for messaging a friend for the first time.
+                    let id = match conv_id {
+                        Some(id) if !id.is_empty() => id,
+                        _ => match other {
+                            Some(uid) => chat::create_with(&client, uid).await?,
+                            None => {
+                                return Err(rojoin_roblox::Error::Api(
+                                    "no one to send this to".into(),
+                                ))
+                            }
+                        },
+                    };
+                    chat::send(&client, &id, &text).await?;
+                    Ok(id)
+                },
                 move |ui, result| {
                     ui.set_chat_sending(false);
                     match result {
-                        Ok(()) => load_messages(&ui, &app2, &bridge3, &imgs3, &conv_id),
+                        Ok(id) => load_messages(&ui, &app2, &bridge3, &imgs3, &id),
                         Err(e) => bridge::report(&ui, e),
                     }
                 },
@@ -1285,11 +1455,11 @@ fn load_conversations(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, img
             let rows: Vec<ChatConv> = convs
                 .iter()
                 .map(|c| ChatConv {
-                    id: c.id.clone().into(),
+                    id: c.id.clone().unwrap_or_default().into(),
                     title: c.display_title(me).into(),
                     preview: c.preview().into(),
                     time: c
-                        .last_updated
+                        .updated_at
                         .as_deref()
                         .map(ad::time_ago)
                         .unwrap_or_default()
@@ -1359,9 +1529,9 @@ fn load_messages(
             for m in &ordered {
                 let mine = m.sender_id == me;
                 rows.push(ChatMsg {
-                    id: m.id.clone().into(),
+                    id: m.id.clone().unwrap_or_default().into(),
                     body: m.content.clone().into(),
-                    time: ad::time_ago(&m.created).into(),
+                    time: m.created.as_deref().map(ad::time_ago).unwrap_or_default().into(),
                     mine,
                     sender: if mine { "You".into() } else { slint::SharedString::default() },
                     avatar: slint::Image::default(),
