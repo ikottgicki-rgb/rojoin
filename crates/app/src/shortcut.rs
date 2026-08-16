@@ -152,6 +152,64 @@ pub fn create(place_id: i64, name: &str, icon: Option<&Path>) -> Result<PathBuf,
     Ok(path)
 }
 
+/// A shortcut this app put on the Desktop.
+pub struct Entry {
+    pub place_id: i64,
+    pub name: String,
+    pub path: PathBuf,
+}
+
+/// Everything on the Desktop that RoJoin created.
+///
+/// Identified by content, not by a side-car list: a file the user deleted by
+/// hand should disappear from the settings screen too, and a list kept in the
+/// config would keep claiming it exists.
+pub fn list() -> Vec<Entry> {
+    let Some(dir) = desktop_dir() else { return Vec::new() };
+    let Ok(read) = std::fs::read_dir(&dir) else { return Vec::new() };
+
+    let mut out = Vec::new();
+    for entry in read.flatten() {
+        let path = entry.path();
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let Some(place_id) = place_id_of(&text) else { continue };
+        out.push(Entry {
+            place_id,
+            name: name_of(&text).unwrap_or_else(|| format!("Place {place_id}")),
+            path,
+        });
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out
+}
+
+/// Pull the place id out of a `.desktop` Exec line, and only ours: the marker
+/// is the `roblox://experiences/start?placeId=` argument we wrote.
+fn place_id_of(text: &str) -> Option<i64> {
+    let line = text.lines().find(|l| l.starts_with("Exec="))?;
+    let rest = line.split("placeId=").nth(1)?;
+    rest.trim()
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .ok()
+}
+
+fn name_of(text: &str) -> Option<String> {
+    text.lines()
+        .find(|l| l.starts_with("Name="))
+        .map(|l| l["Name=".len()..].trim().to_string())
+        .filter(|n| !n.is_empty())
+}
+
+/// Delete a shortcut, and the icon that only existed to serve it.
+pub fn remove(path: &Path, place_id: i64) -> Result<(), String> {
+    std::fs::remove_file(path).map_err(|e| format!("could not remove the shortcut: {e}"))?;
+    let _ = std::fs::remove_file(icon_dir().join(format!("{place_id}.png")));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,6 +238,22 @@ mod tests {
     #[test]
     fn long_names_are_truncated() {
         assert!(safe_stem(&"a".repeat(500)).len() <= 48);
+    }
+
+    #[test]
+    fn reads_the_place_id_back_out_of_an_entry_we_wrote() {
+        let entry = "[Desktop Entry]\n\
+                     Type=Application\n\
+                     Name=Tower Defense Simulator\n\
+                     Exec=\"/opt/rojoin\" roblox://experiences/start?placeId=3260590327\n";
+        assert_eq!(place_id_of(entry), Some(3_260_590_327));
+        assert_eq!(name_of(entry).as_deref(), Some("Tower Defense Simulator"));
+    }
+
+    #[test]
+    fn someone_elses_desktop_file_is_not_claimed_as_ours() {
+        let firefox = "[Desktop Entry]\nType=Application\nName=Firefox\nExec=/usr/bin/firefox\n";
+        assert_eq!(place_id_of(firefox), None);
     }
 
     #[test]

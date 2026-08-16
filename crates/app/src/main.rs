@@ -346,6 +346,7 @@ fn enter_app(
     render_library(ui, app);
     render_settings(ui, app);
 
+    stagger(ui, app, bridge, imgs, 300, load_favorites);
     stagger(ui, app, bridge, imgs, 600, load_friends);
     stagger(ui, app, bridge, imgs, 2_000, load_avatar);
 
@@ -2783,21 +2784,33 @@ fn render_settings(ui: &MainWindow, app: &Arc<App>) {
     ui.set_presence_secs(cfg.presence_refresh_secs() as i32);
     ui.set_confirm_destructive(cfg.settings.confirm_destructive);
 
+    // Account head shots. The stored `avatar_url` is only filled in at sign-in
+    // and goes stale as soon as someone changes their avatar, so ask Roblox
+    // rather than trusting whatever the config happens to hold.
+    let ids: Vec<i64> = cfg.accounts.iter().filter_map(|a| a.id.parse().ok()).collect();
     let imgs = app.imgs.lock().unwrap().clone();
-    for (i, a) in cfg.accounts.iter().enumerate() {
-        let Some(loader) = imgs.as_ref() else { break };
-        let Some(entry) = app.names.lock().unwrap().users.get(&a.id).cloned() else { continue };
-        if entry.avatar_url.is_empty() {
-            continue;
+    if let (Some(bridge), Some(loader)) = (app.bridge.lock().unwrap().clone(), imgs) {
+        if !ids.is_empty() {
+            let client = app.client.clone();
+            let order = ids.clone();
+            bridge.call_res(
+                move || async move { thumbnails::headshots(&client, &ids).await },
+                move |_ui, result| {
+                    let Ok(map) = result else { return };
+                    for (i, id) in order.iter().enumerate() {
+                        let Some(url) = map.get(id).cloned() else { continue };
+                        loader.load(&url, move |ui, img| {
+                            use slint::Model;
+                            let model = ui.get_accounts();
+                            if let Some(mut row) = model.row_data(i) {
+                                row.avatar = img;
+                                model.set_row_data(i, row);
+                            }
+                        });
+                    }
+                },
+            );
         }
-        loader.load(&entry.avatar_url, move |ui, img| {
-            use slint::Model;
-            let model = ui.get_accounts();
-            if let Some(mut row) = model.row_data(i) {
-                row.avatar = img;
-                model.set_row_data(i, row);
-            }
-        });
     }
 
     let cached = app.names.lock().unwrap().users.len();
@@ -2919,7 +2932,7 @@ fn load_pinned(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
                 .iter()
                 .map(|d| {
                     let v = load.votes.iter().find(|v| v.id == d.id);
-                    ad::tile_from_detail(d, v, true)
+                    ad::tile_from_detail(d, v, favorited_ids(&ui).contains(&d.id))
                 })
                 .collect();
             ui.set_pinned(ad::model(tiles));
@@ -3263,6 +3276,65 @@ struct GroupLoad {
     art: std::collections::HashMap<i64, String>,
 }
 
+/// Universe ids currently sitting in the favourites model, so a tile built for
+/// another grid can start with the right star instead of an empty one.
+fn favorited_ids(ui: &MainWindow) -> std::collections::HashSet<i64> {
+    use slint::Model;
+    ui.get_favorites()
+        .iter()
+        .filter_map(|t| t.universe_id.parse::<i64>().ok())
+        .collect()
+}
+
+/// The signed-in user's favourited games, for Home and the Library tab.
+///
+/// Nothing else fills that model, so without this both surfaces sit empty and
+/// the star on a tile has nothing to toggle against.
+fn load_favorites(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
+    let me = *app.me.lock().unwrap();
+    if me == 0 {
+        return;
+    }
+
+    let client = app.client.clone();
+    let imgs2 = imgs.clone();
+    let gen = SESSION_GEN.load(Ordering::SeqCst);
+
+    bridge.call_res(
+        move || async move {
+            let games = games::user_favorites(&client, me, 50).await?;
+            let ids: Vec<i64> = games.iter().map(|g| g.id).collect();
+            let art = thumbnails::game_art(&client, &ids).await.unwrap_or_default();
+            Ok((games, art))
+        },
+        move |ui, result| {
+            if gen != SESSION_GEN.load(Ordering::SeqCst) {
+                return;
+            }
+            let Ok((games, art)) = result else { return };
+
+            let tiles: Vec<GameTile> = games
+                .iter()
+                .map(|d| ad::tile_from_detail(d, None, true))
+                .collect();
+            ui.set_favorites(ad::model(tiles));
+
+            // Now that the real answer is known, correct the star on every
+            // other grid showing the same game.
+            for d in &games {
+                set_tile_favorited(&ui, &d.id.to_string(), true);
+            }
+
+            for (i, d) in games.iter().enumerate() {
+                let Some(url) = art.get(&d.id).cloned() else { continue };
+                imgs2.load(&url, move |ui, img| {
+                    set_tile_thumb(&ui.get_favorites(), i, img)
+                });
+            }
+        },
+    );
+}
+
 fn load_home(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
     let history: Vec<(i64, i64)> = {
         let cfg = app.config.lock().unwrap();
@@ -3475,6 +3547,7 @@ fn wire_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
     {
         let app = app.clone();
         let bridge2 = bridge.clone();
+        let imgs = imgs.clone();
         let weak = ui.as_weak();
         ui.on_toggle_favorite(move |universe_id| {
             let ui = weak.unwrap();
@@ -3499,6 +3572,9 @@ fn wire_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
 
             let client = app.client.clone();
             let uni = universe_id.clone();
+            let app2 = app.clone();
+            let bridge3 = bridge2.clone();
+            let imgs2 = imgs.clone();
             bridge2.call_res(
                 move || async move { games::set_favorited(&client, uid, target).await },
                 move |ui, result| {
@@ -3511,7 +3587,11 @@ fn wire_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
                         }
                         set_tile_favorited(&ui, &uni, !target);
                         bridge::report(&ui, e);
+                        return;
                     }
+                    // The favourites grid is a list, not a flag, so it has to
+                    // be refetched rather than nudged.
+                    load_favorites(&ui, &app2, &bridge3, &imgs2);
                 },
             );
         });
