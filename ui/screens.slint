@@ -44,7 +44,6 @@ export component HomeScreen inherits Rectangle {
     in property <bool> show_pinned: true;
     in property <bool> show_recent: true;
     in property <bool> show_favorites: true;
-    in-out property <bool> editing: false;
 
     callback open(string);
     callback play(string);
@@ -52,7 +51,6 @@ export component HomeScreen inherits Rectangle {
     callback play_hero();
     callback go_friends();
     callback go_play();
-    callback toggle_section(int);
     callback unpin(string);
 
     background: Theme.bg_0;
@@ -75,32 +73,6 @@ export component HomeScreen inherits Rectangle {
                     text: root.date_label;
                     color: Theme.text_mute;
                     font-size: Type.small;
-                }
-            }
-
-            HorizontalLayout {
-                spacing: Space.sm;
-                alignment: start;
-
-                IconBtn {
-                    glyph: root.editing ? "✓" : "⚙";
-                    clicked => { root.editing = !root.editing; }
-                }
-
-                for opt[i] in [
-                    { label: "Friends", kind: 0, on: root.show_friends },
-                    { label: "Jump back in", kind: 1, on: root.show_hero },
-                    { label: "Pinned", kind: 2, on: root.show_pinned },
-                    { label: "Recent", kind: 3, on: root.show_recent },
-                    { label: "Favourites", kind: 4, on: root.show_favorites },
-                ]: VerticalLayout {
-                    alignment: center;
-                    Chip {
-                        label: opt.label;
-                        selected: opt.on;
-                        visible: root.editing;
-                        clicked => { root.toggle_section(opt.kind); }
-                    }
                 }
             }
 

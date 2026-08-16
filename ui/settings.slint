@@ -119,6 +119,11 @@ export component SettingsScreen inherits Rectangle {
     in property <int> presence_secs: 60;
     in property <bool> confirm_destructive: true;
     in property <string> cache_summary;
+    in property <bool> show_friends: true;
+    in property <bool> show_hero: true;
+    in property <bool> show_pinned: true;
+    in property <bool> show_recent: true;
+    in property <bool> show_favorites: true;
 
     callback switch_account(string);
     callback remove_account(string);
@@ -138,6 +143,7 @@ export component SettingsScreen inherits Rectangle {
     callback set_presence_secs(int);
     callback set_confirm_destructive(bool);
     callback clear_caches();
+    callback toggle_home_section(int);
 
     background: Theme.bg_0;
 
@@ -234,6 +240,60 @@ export component SettingsScreen inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             Btn { label: "Add"; primary: true; clicked => { root.add_account(); } }
+                        }
+                    }
+                }
+
+                Card {
+                    title: "HOME";
+                    Row {
+                        title: "Friends";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.show_friends;
+                                toggled => { root.toggle_home_section(0); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Jump back in";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.show_hero;
+                                toggled => { root.toggle_home_section(1); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Pinned";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.show_pinned;
+                                toggled => { root.toggle_home_section(2); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Recently played";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.show_recent;
+                                toggled => { root.toggle_home_section(3); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Favourites";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.show_favorites;
+                                toggled => { root.toggle_home_section(4); }
+                            }
                         }
                     }
                 }
