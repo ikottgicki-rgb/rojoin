@@ -90,18 +90,35 @@ pub async fn games(
 }
 
 pub async fn users(client: &Client, query: &str, limit: u32) -> Result<Vec<UserSearchResult>> {
+    let limit = page_limit(limit);
     let url = format!("{USERS}/users/search?keyword={}&limit={limit}", urlencode(query));
     let page: Page<UserSearchResult> = client.get_json(&url).await?;
     Ok(page.data)
 }
 
 pub async fn groups(client: &Client, query: &str, limit: u32) -> Result<Vec<GroupSearchResult>> {
+    let limit = page_limit(limit);
     let url = format!(
         "{GROUPS}/groups/search?keyword={}&limit={limit}&prioritizeExactMatch=true",
         urlencode(query)
     );
     let page: Page<GroupSearchResult> = client.get_json(&url).await?;
     Ok(page.data)
+}
+
+/// Round a page size up to one Roblox will accept.
+///
+/// These endpoints take *only* 10, 25, 50 or 100 — anything else is a 400
+/// (`Allowed values: 10, 25, 50, 100`), not a clamp. Asking for 12 users
+/// therefore returns nothing at all rather than 12, which looks exactly like
+/// "there are no results" from the caller's side.
+fn page_limit(requested: u32) -> u32 {
+    match requested {
+        0..=10 => 10,
+        11..=25 => 25,
+        26..=50 => 50,
+        _ => 100,
+    }
 }
 
 /// Minimal percent-encoding for query strings. Pulling in a crate for this
@@ -217,5 +234,28 @@ mod tests {
 
         assert_eq!(games.len(), 1);
         assert_eq!(games[0].name, "Real");
+    }
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::page_limit;
+
+    #[test]
+    fn only_ever_asks_for_a_size_roblox_accepts() {
+        for requested in 0..=200u32 {
+            assert!(
+                matches!(page_limit(requested), 10 | 25 | 50 | 100),
+                "{requested} produced a limit Roblox rejects"
+            );
+        }
+    }
+
+    #[test]
+    fn rounds_up_so_a_request_is_never_short_changed() {
+        assert_eq!(page_limit(8), 10);
+        assert_eq!(page_limit(12), 25);
+        assert_eq!(page_limit(50), 50);
+        assert_eq!(page_limit(500), 100);
     }
 }

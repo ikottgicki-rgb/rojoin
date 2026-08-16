@@ -3642,8 +3642,18 @@ fn search_people(
 
     bridge.call_res(
         move || async move {
-            let users = search::users(&client, &q, 12).await.unwrap_or_default();
-            let groups = search::groups(&client, &q, 8).await.unwrap_or_default();
+            // Tolerated separately: user search and group search throttle on
+            // their own schedules, and losing one should not cost the other.
+            // Logged, because swallowing these silently once made a rejected
+            // page size look exactly like "no such user".
+            let users = search::users(&client, &q, 25)
+                .await
+                .inspect_err(|e| tracing::warn!(error = %e, "user search failed"))
+                .unwrap_or_default();
+            let groups = search::groups(&client, &q, 10)
+                .await
+                .inspect_err(|e| tracing::warn!(error = %e, "group search failed"))
+                .unwrap_or_default();
 
             let user_ids: Vec<i64> = users.iter().map(|u| u.id).collect();
             let group_ids: Vec<i64> = groups.iter().map(|g| g.id).collect();
