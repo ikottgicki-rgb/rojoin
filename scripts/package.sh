@@ -32,10 +32,6 @@ Run RoJoin.exe. There is nothing to install and no other files are needed.
 
 Sign-in happens in your own browser: RoJoin shows a code, you approve it on
 roblox.com or in the Roblox mobile app. No password is ever typed into RoJoin.
-
-The macro tab is an independent implementation inspired by Spencer Macro
-Utilities (github.com/Spencer0187/Spencer-Macro-Utilities). No code is shared
-between the projects.
 EOF
 
 (cd dist/windows && zip -q -r "../RoJoin-windows-x64.zip" .)

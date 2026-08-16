@@ -1,18 +1,17 @@
 //! Update checking and self-update.
 //!
-//! Points at a GitHub releases feed. Set `RELEASE_REPO` to `owner/repo` once
-//! there is a public repository and the whole flow works: check, download the
-//! matching asset, and replace the running binary in place.
+//! Points at a GitHub releases feed: check, download the matching asset, and
+//! replace the running binary in place.
 //!
-//! Until then `check` reports plainly that updates are not set up. That is
-//! deliberate — the previous version returned an error, which surfaced in the
-//! UI as "failed" and read like a broken feature rather than an unconfigured
-//! one.
+//! With `RELEASE_REPO` unset, `check` reports plainly that updates are not set
+//! up rather than returning an error — an error surfaces in the UI as "failed"
+//! and reads like a broken feature rather than an unconfigured one.
 
 use serde::Deserialize;
 
-/// `owner/repo` on GitHub. `None` until RoJoin has a public home.
-const RELEASE_REPO: Option<&str> = None;
+/// `owner/repo` on GitHub. Must be a public repository: the releases API is
+/// called without credentials, and a private repo answers 404.
+const RELEASE_REPO: Option<&str> = Some("ikottgicki-rgb/rojoin");
 
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
@@ -107,7 +106,7 @@ pub async fn check() -> Status {
 /// partial download never leaves a broken binary. The running process keeps
 /// its open file handle, so the swap takes effect on next launch.
 pub async fn install(url: &str) -> Result<std::path::PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("cannot locate myself: {e}"))?;
+    let exe = target_path().map_err(|e| format!("cannot locate myself: {e}"))?;
 
     let client = reqwest::Client::builder()
         .build()
@@ -140,6 +139,22 @@ pub async fn install(url: &str) -> Result<std::path::PathBuf, String> {
     Ok(exe)
 }
 
+/// The file an update should overwrite.
+///
+/// Inside an AppImage, `current_exe()` points at the read-only squashfs mount
+/// under /tmp, not at the AppImage the user actually launched — writing there
+/// either fails or is silently discarded on unmount. The runtime exports
+/// `APPIMAGE` with the real path, so prefer it when present.
+fn target_path() -> std::io::Result<std::path::PathBuf> {
+    if let Some(appimage) = std::env::var_os("APPIMAGE") {
+        let path = std::path::PathBuf::from(appimage);
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    std::env::current_exe()
+}
+
 /// Compares numeric components left to right so "0.10.0" beats "0.9.0" — a
 /// plain string compare gets that backwards.
 fn is_newer(candidate: &str, current: &str) -> bool {
@@ -165,6 +180,14 @@ fn is_newer(candidate: &str, current: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_appimage_update_targets_the_bundle_not_the_mount() {
+        // Only asserts the fallback, since setting APPIMAGE to a real file
+        // would need one; the point is that a missing value is not fatal.
+        std::env::remove_var("APPIMAGE");
+        assert_eq!(target_path().unwrap(), std::env::current_exe().unwrap());
+    }
 
     #[test]
     fn numeric_components_compare_numerically() {
