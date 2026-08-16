@@ -43,6 +43,8 @@ component Toggle inherits Rectangle {
 component Row inherits Rectangle {
     in property <string> title;
     in property <string> hint;
+    /// Optional explanation, revealed by hovering the "?" beside the title.
+    in property <string> help;
     height: Math.max(46px, rlay.preferred-height + Space.sm * 2);
 
     rlay := HorizontalLayout {
@@ -53,10 +55,45 @@ component Row inherits Rectangle {
         VerticalLayout {
             alignment: center;
             spacing: 2px;
-            Text {
-                text: root.title;
-                color: Theme.text;
-                font-size: Type.body;
+            HorizontalLayout {
+                spacing: Space.sm;
+                alignment: start;
+                Text {
+                    text: root.title;
+                    color: Theme.text;
+                    font-size: Type.body;
+                }
+                // Mounted even with no help text: an id declared inside an
+                // `if` cannot be read from a sibling, and the hint below needs
+                // this TouchArea's hover state.
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        visible: root.help != "";
+                        width: root.help != "" ? 15px : 0px;
+                        height: 15px;
+                        border-radius: 8px;
+                        border-width: Theme.hairline;
+                        border-color: hta.has-hover ? Theme.accent : Theme.line_strong;
+                        animate border-color { duration: Motion.fast; easing: Motion.ease; }
+                        Text {
+                            text: "?";
+                            color: hta.has-hover ? Theme.accent : Theme.text_mute;
+                            font-size: Type.micro;
+                            font-weight: Type.w_bold;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                            animate color { duration: Motion.fast; easing: Motion.ease; }
+                        }
+                        hta := TouchArea { mouse-cursor: pointer; }
+                    }
+                }
+            }
+            if hta.has-hover: Text {
+                text: root.help;
+                color: Theme.text_dim;
+                font-size: Type.caption;
+                wrap: word-wrap;
             }
             if root.hint != "": Text {
                 text: root.hint;
@@ -97,6 +134,7 @@ component Card inherits Rectangle {
 
 export component SettingsScreen inherits Rectangle {
     in property <[AccountRow]> accounts;
+    in property <[DetailItem]> shortcuts;
     in property <[DetailItem]> notify_friends;
     in property <[DetailItem]> notify_games;
     in property <bool> dark: true;
@@ -132,6 +170,7 @@ export component SettingsScreen inherits Rectangle {
     callback set_notify_requests(bool);
     callback set_link_handler(bool);
     callback unsub_friend(string);
+    callback remove_shortcut(string);
     callback unsub_game(string);
     callback open_data_dir();
     callback check_update();
@@ -324,6 +363,7 @@ export component SettingsScreen inherits Rectangle {
 
                     Row {
                         title: "Watched friends";
+                        help: "Friends you have starred with the bell. RoJoin notifies you when one of them comes online or joins a game.";
                         hint: root.notify_friends.length == 0
                               ? "None. Use the bell on a friend to watch them."
                               : root.notify_friends.length + " watched";
@@ -352,6 +392,7 @@ export component SettingsScreen inherits Rectangle {
 
                     Row {
                         title: "Watched games";
+                        help: "Games you have starred with the bell. RoJoin notifies you when a friend starts playing one of them.";
                         hint: root.notify_games.length == 0
                               ? "None. Use the bell on a game page to watch it."
                               : root.notify_games.length + " watched";
@@ -494,6 +535,39 @@ export component SettingsScreen inherits Rectangle {
                             Toggle {
                                 on: root.confirm_destructive;
                                 toggled => { root.set_confirm_destructive(!root.confirm_destructive); }
+                            }
+                        }
+                    }
+                }
+
+                Card {
+                    title: "DESKTOP SHORTCUTS";
+                    Row {
+                        title: "Shortcuts on your desktop";
+                        help: "Made from a game's page with the shortcut button. Clicking one launches Roblox straight into that game.";
+                        hint: root.shortcuts.length == 0
+                              ? "None yet."
+                              : root.shortcuts.length + " on your desktop";
+                    }
+                    for sc in root.shortcuts: Rectangle {
+                        height: 36px;
+                        HorizontalLayout {
+                            padding-left: Space.xxl;
+                            padding-right: Space.lg;
+                            spacing: Space.sm;
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: sc.name;
+                                    color: Theme.text_dim;
+                                    font-size: Type.small;
+                                    overflow: elide;
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            VerticalLayout {
+                                alignment: center;
+                                IconBtn { glyph: "×"; clicked => { root.remove_shortcut(sc.id); } }
                             }
                         }
                     }

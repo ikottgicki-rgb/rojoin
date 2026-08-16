@@ -1385,6 +1385,22 @@ fn wire_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
         let app = app.clone();
         let bridge2 = bridge.clone();
         let weak = ui.as_weak();
+        ui.on_profile_accept_request(move || {
+            answer_request(&weak.unwrap(), &app, &bridge2, true);
+        });
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let weak = ui.as_weak();
+        ui.on_profile_decline_request(move || {
+            answer_request(&weak.unwrap(), &app, &bridge2, false);
+        });
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let weak = ui.as_weak();
         ui.on_profile_unfriend(move || {
             let ui = weak.unwrap();
             let Ok(uid) = ui.get_profile().id.parse::<i64>() else { return };
@@ -2744,6 +2760,22 @@ fn wire_more_settings(ui: &MainWindow, app: &Arc<App>) {
     {
         let app = app.clone();
         let weak = ui.as_weak();
+        ui.on_remove_shortcut(move |id| {
+            let ui = weak.unwrap();
+            let Ok(place_id) = id.parse::<i64>() else { return };
+            for entry in shortcut::list() {
+                if entry.place_id == place_id {
+                    if let Err(e) = shortcut::remove(&entry.path, place_id) {
+                        ui.set_launch_error(e.into());
+                    }
+                }
+            }
+            render_settings(&ui, &app);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
         ui.on_clear_caches(move || {
             let ui = weak.unwrap();
             {
@@ -2775,6 +2807,18 @@ fn render_settings(ui: &MainWindow, app: &Arc<App>) {
         })
         .collect();
     ui.set_accounts(ad::model(rows));
+    ui.set_shortcuts(ad::model(
+        shortcut::list()
+            .into_iter()
+            .map(|e| DetailItem {
+                id: e.place_id.to_string().into(),
+                name: e.name.into(),
+                subtitle: Default::default(),
+                thumb: slint::Image::default(),
+                kind: 0,
+            })
+            .collect::<Vec<_>>(),
+    ));
     ui.set_notify_requests(cfg.settings.notify_friend_requests);
     ui.set_macros_enabled(cfg.settings.macros_enabled);
     ui.set_only_when_focused(cfg.settings.macros_only_when_focused);
@@ -2993,6 +3037,49 @@ fn push_view(ui: &MainWindow, app: &Arc<App>, kind: i32) {
     ui.set_can_back(true);
 }
 
+/// Accept or decline the friend request open on the profile being viewed.
+///
+/// Records the answer the same way the Friends tab does, so the row does not
+/// come back on the next refresh — Roblox keeps serving a handled request for
+/// a while after it is answered.
+fn answer_request(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, accept: bool) {
+    let Ok(uid) = ui.get_profile().id.parse::<i64>() else { return };
+
+    let mut p = ui.get_profile();
+    p.has_incoming_request = false;
+    p.is_friend = accept;
+    ui.set_profile(p);
+
+    app.handled_requests.lock().unwrap().insert(uid.to_string());
+    {
+        let mut cfg = app.config.lock().unwrap();
+        let data = cfg.data_mut();
+        if !data.handled_requests.contains(&uid.to_string()) {
+            data.handled_requests.push(uid.to_string());
+        }
+        let _ = cfg.save();
+    }
+    drop_request_row(ui, uid);
+
+    let client = app.client.clone();
+    ui.set_profile_busy(true);
+    bridge.call_res(
+        move || async move {
+            if accept {
+                friends::accept(&client, uid).await
+            } else {
+                friends::decline(&client, uid).await
+            }
+        },
+        move |ui, result| {
+            ui.set_profile_busy(false);
+            if let Err(e) = result {
+                bridge::report(&ui, e);
+            }
+        },
+    );
+}
+
 fn open_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images, user_id: i64) {
     push_view(ui, app, 2);
     ui.set_profile_loading(true);
@@ -3062,6 +3149,13 @@ fn open_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
                     .unwrap_or_default()
                     .into(),
                 is_friend: friend_ids.contains(&user_id),
+                // Answered from the requests already on screen rather than a
+                // fresh call: the list is short and this runs on every profile.
+                has_incoming_request: {
+                    use slint::Model;
+                    let key = user_id.to_string();
+                    ui.get_requests_list().iter().any(|r| r.id == key)
+                },
                 is_following: false,
                 is_self: user_id == me,
                 avatar: slint::Image::default(),
@@ -3468,6 +3562,8 @@ fn run_search(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
         ui.set_play_searching(false);
         ui.set_play_last_query("".into());
         ui.set_play_games(ad::model(Vec::new()));
+        ui.set_play_players(ad::model(Vec::new()));
+        ui.set_play_groups(ad::model(Vec::new()));
         return;
     }
 
@@ -3481,6 +3577,10 @@ fn run_search(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
 
     ui.set_play_searching(true);
     let gen = SEARCH_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+
+    // People and groups run alongside the games request, so both need their own
+    // handles before the games closure takes ownership of these.
+    search_people(ui, app, bridge, imgs, &query, gen);
 
     let client = app.client.clone();
     let imgs = imgs.clone();
@@ -3518,6 +3618,83 @@ fn run_search(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
                     ui.set_play_games(ad::model(Vec::new()));
                     bridge::report(&ui, e);
                 }
+            }
+        },
+    );
+}
+
+/// People and groups matching the same query.
+///
+/// Kept off the games request on purpose: user search is a separate service
+/// that rate-limits on its own schedule, and a throttle there should not cost
+/// the game results that already came back.
+fn search_people(
+    ui: &MainWindow,
+    app: &Arc<App>,
+    bridge: &Arc<Bridge>,
+    imgs: &Images,
+    query: &str,
+    gen: i64,
+) {
+    let client = app.client.clone();
+    let imgs = imgs.clone();
+    let q = query.to_string();
+
+    bridge.call_res(
+        move || async move {
+            let users = search::users(&client, &q, 12).await.unwrap_or_default();
+            let groups = search::groups(&client, &q, 8).await.unwrap_or_default();
+
+            let user_ids: Vec<i64> = users.iter().map(|u| u.id).collect();
+            let group_ids: Vec<i64> = groups.iter().map(|g| g.id).collect();
+
+            let heads = thumbnails::headshots(&client, &user_ids).await.unwrap_or_default();
+            let icons = thumbnails::group_icons(&client, &group_ids).await.unwrap_or_default();
+
+            Ok::<_, rojoin_roblox::Error>((users, groups, heads, icons))
+        },
+        move |ui, result| {
+            if gen != SEARCH_GEN.load(Ordering::SeqCst) {
+                return;
+            }
+            let Ok((users, groups, heads, icons)) = result else { return };
+
+            ui.set_play_players(ad::model(
+                users
+                    .iter()
+                    .map(|u| DetailItem {
+                        id: u.id.to_string().into(),
+                        name: u.display_name.clone().into(),
+                        subtitle: format!("@{}", u.name).into(),
+                        thumb: slint::Image::default(),
+                        kind: 0,
+                    })
+                    .collect::<Vec<_>>(),
+            ));
+            ui.set_play_groups(ad::model(
+                groups
+                    .iter()
+                    .map(|g| DetailItem {
+                        id: g.id.to_string().into(),
+                        name: g.name.clone().into(),
+                        subtitle: format!("{} members", ad::compact(g.member_count)).into(),
+                        thumb: slint::Image::default(),
+                        kind: 0,
+                    })
+                    .collect::<Vec<_>>(),
+            ));
+
+            for (i, u) in users.iter().enumerate() {
+                let Some(url) = heads.get(&u.id).cloned() else { continue };
+                imgs.load(&url, move |ui, img| {
+                    set_item_thumb(&ui.get_play_players(), i, img)
+                });
+            }
+            for (i, g) in groups.iter().enumerate() {
+                let Some(url) = icons.get(&g.id).cloned() else { continue };
+                imgs.load(&url, move |ui, img| {
+                    set_item_thumb(&ui.get_play_groups(), i, img)
+                });
             }
         },
     );

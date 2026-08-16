@@ -150,6 +150,8 @@ export component MainWindow inherits Window {
 
     callback profile_join();
     callback profile_add_friend();
+    callback profile_accept_request();
+    callback profile_decline_request();
     callback profile_unfriend();
     callback profile_follow();
     callback profile_message();
@@ -228,6 +230,8 @@ export component MainWindow inherits Window {
     in-out property <int> library_tab: 0;
 
     in property <[AccountRow]> accounts;
+    in property <[DetailItem]> shortcuts;
+    callback remove_shortcut(string);
     in property <[DetailItem]> notify_friends_list;
     in property <[DetailItem]> notify_games_list;
     in property <bool> dark: true;
@@ -397,6 +401,8 @@ export component MainWindow inherits Window {
                             tab <=> root.profile_tab;
                             join => { root.profile_join(); }
                             add_friend => { root.profile_add_friend(); }
+                            accept_request => { root.profile_accept_request(); }
+                            decline_request => { root.profile_decline_request(); }
                             unfriend => { root.profile_unfriend(); }
                             follow => { root.profile_follow(); }
                             message => { root.profile_message(); }
@@ -574,6 +580,8 @@ export component MainWindow inherits Window {
                             set_notify_requests(v) => { root.set_notify_requests(v); }
                             set_link_handler(v) => { root.set_link_handler(v); }
                             unsub_friend(id) => { root.unsub_friend(id); }
+                            shortcuts: root.shortcuts;
+                            remove_shortcut(id) => { root.remove_shortcut(id); }
                             unsub_game(id) => { root.unsub_game(id); }
                             open_data_dir => { root.open_data_dir(); }
                             check_update => { root.check_update(); }

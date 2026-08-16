@@ -19,6 +19,7 @@ export struct ProfileData {
     presence_label: string,
     place_id: string,
     is_friend: bool,
+    has_incoming_request: bool,
     is_following: bool,
     is_self: bool,
     avatar: image,
@@ -53,6 +54,8 @@ export component ProfileScreen inherits Rectangle {
 
     callback join();
     callback add_friend();
+    callback accept_request();
+    callback decline_request();
     callback unfriend();
     callback follow();
     callback message();
@@ -190,7 +193,19 @@ export component ProfileScreen inherits Rectangle {
                             jta := TouchArea { mouse-cursor: pointer; clicked => { root.join(); } }
                         }
 
-                        Btn {
+                        // Someone who already asked gets answered, not asked back.
+                        if root.profile.has_incoming_request: Btn {
+                            label: "Accept";
+                            primary: true;
+                            enabled: !root.busy;
+                            clicked => { root.accept_request(); }
+                        }
+                        if root.profile.has_incoming_request: Btn {
+                            label: "Decline";
+                            enabled: !root.busy;
+                            clicked => { root.decline_request(); }
+                        }
+                        if !root.profile.has_incoming_request: Btn {
                             label: root.profile.is_friend ? "Remove friend" : "Add friend";
                             enabled: !root.busy;
                             clicked => {
