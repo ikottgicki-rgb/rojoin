@@ -40,11 +40,20 @@ pub fn is_running() -> bool {
 }
 
 /// Launch a `roblox://` URI.
+/// Launch a `roblox://` URI through Sober.
+///
+/// Runs the flatpak directly rather than going through `xdg-open`. The scheme
+/// handler on a given desktop may point anywhere — on this box it opened the
+/// link in Chromium — so relying on it makes Play a coin flip.
+///
+/// Null stdio and a separate process group are not optional: Sober is very
+/// chatty on stdout, and inheriting a pipe makes it block on write() and hang
+/// at startup with no window.
 pub fn launch_uri(uri: &str) -> Result<()> {
     tracing::info!(uri, "launching via Sober");
 
-    let mut cmd = Command::new("xdg-open");
-    cmd.arg(uri)
+    let mut cmd = Command::new("flatpak");
+    cmd.args(["run", FLATPAK_ID, uri])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -60,7 +69,7 @@ pub fn launch_uri(uri: &str) -> Result<()> {
         .env_remove("GSK_RENDERER");
 
     cmd.spawn()
-        .map_err(|e| Error::Launch(format!("could not spawn xdg-open: {e}")))?;
+        .map_err(|e| Error::Launch(format!("could not start Sober: {e}")))?;
 
     Ok(())
 }
