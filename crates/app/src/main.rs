@@ -224,6 +224,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         launch(&ui, &app, req);
     }
 
+    // Restore the saved zoom. It has to wait for the event loop: before the
+    // window is shown it has no size, and the scale is applied relative to it.
+    // Without this the setting silently reset to 1.0 on every launch while
+    // Settings still displayed the saved value.
+    {
+        let weak = ui.as_weak();
+        let scale = app.config.lock().unwrap().ui_scale();
+        if (scale - 1.0).abs() > f32::EPSILON {
+            let timer = Box::leak(Box::new(slint::Timer::default()));
+            timer.start(
+                slint::TimerMode::SingleShot,
+                std::time::Duration::from_millis(120),
+                move || {
+                    if let Some(ui) = weak.upgrade() {
+                        apply_ui_scale(&ui, scale);
+                    }
+                },
+            );
+        }
+    }
+
     ui.run()?;
     Ok(())
 }
@@ -1336,6 +1357,32 @@ fn maybe_auto_update(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
             }
             Err(e) => tracing::warn!(error = %e, "auto-update could not finish"),
         }
+    });
+}
+
+/// Apply an interface zoom level.
+///
+/// `ScaleFactorChanged` on its own only changes how logical pixels map to
+/// physical ones — the OS window keeps its old size, so the content either
+/// overflows past the edge or leaves a dead margin inside it. Slint has to be
+/// told the new *logical* size as well, which is the same physical window
+/// measured in the new units. The window itself deliberately does not move or
+/// resize: this is a zoom, not a resize.
+fn apply_ui_scale(ui: &MainWindow, scale: f32) {
+    let window = ui.window();
+    let physical = window.size();
+    if physical.width == 0 || physical.height == 0 {
+        return;
+    }
+
+    window.dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
+        scale_factor: scale,
+    });
+    window.dispatch_event(slint::platform::WindowEvent::Resized {
+        size: slint::LogicalSize::new(
+            physical.width as f32 / scale,
+            physical.height as f32 / scale,
+        ),
     });
 }
 
@@ -2630,9 +2677,38 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
             let weak2 = weak.clone();
             bridge2.spawn(async move {
                 let status = updater::check().await;
+
+                // Finding an update and then doing nothing with it is what the
+                // button used to do: it reported "0.1.1 is available" and threw
+                // the download URL away. Checking implies installing.
+                let updater::Status::Available { version, url } = status else {
+                    let _ = weak2.upgrade_in_event_loop(move |ui| {
+                        ui.set_checking_update(false);
+                        ui.set_update_status(status.message().into());
+                    });
+                    return;
+                };
+
+                let v = version.clone();
+                let _ = weak2.upgrade_in_event_loop(move |ui| {
+                    ui.set_update_status(format!("Downloading {v}…").into());
+                });
+
+                let result = updater::install(&url).await;
                 let _ = weak2.upgrade_in_event_loop(move |ui| {
                     ui.set_checking_update(false);
-                    ui.set_update_status(status.message().into());
+                    match result {
+                        Ok(_) => {
+                            ui.set_update_status(
+                                format!("Version {version} installed. Restart to use it.").into(),
+                            );
+                            toast(&ui, "Update installed — restart to apply");
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "update install failed");
+                            ui.set_update_status(format!("Could not install: {e}").into());
+                        }
+                    }
                 });
             });
         });
@@ -2776,9 +2852,7 @@ fn wire_more_settings(ui: &MainWindow, app: &Arc<App>) {
                 let _ = cfg.save();
             }
             let scale = app.config.lock().unwrap().ui_scale();
-            ui.window().dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
-                scale_factor: scale,
-            });
+            apply_ui_scale(&ui, scale);
             render_settings(&ui, &app);
         });
     }
