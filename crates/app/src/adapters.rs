@@ -182,7 +182,7 @@ pub fn badges(list: &[Badge]) -> Vec<DetailItem> {
         .map(|b| DetailItem {
             id: b.id.to_string().into(),
             name: b.name.clone().into(),
-            subtitle: SharedString::default(),
+            subtitle: b.description.clone().unwrap_or_default().into(),
             thumb: Image::default(),
             kind: 3,
         })

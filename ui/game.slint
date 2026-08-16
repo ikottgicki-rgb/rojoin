@@ -196,7 +196,9 @@ export component GameScreen inherits Rectangle {
 
     in-out property <int> tab: 0;          // 0 About · 1 Servers
     in-out property <int> server_sort: 0;
-    in-out property <bool> places_open: false;  // 0 Default · 1 Fullest · 2 Emptiest
+    in-out property <bool> places_open: false;
+    in-out property <string> badge_title;
+    in-out property <string> badge_text;  // 0 Default · 1 Fullest · 2 Emptiest
 
     callback play();
     callback play_sub_place(string);
@@ -205,6 +207,7 @@ export component GameScreen inherits Rectangle {
     callback toggle_notify();
     callback copy_link();
     callback copy_id();
+    callback inspect_badge(string);
     callback open_browser();
     callback set_server_sort(int);
     callback open_related(string);
@@ -212,6 +215,53 @@ export component GameScreen inherits Rectangle {
     callback open_creator();
 
     background: Theme.bg_0;
+
+    if root.badge_title != "": Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000CC;
+        TouchArea { clicked => { root.badge_title = ""; root.badge_text = ""; } }
+
+        Rectangle {
+            width: Math.min(460px, parent.width - Space.xxl * 2);
+            height: blay.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Theme.bg_1;
+            border-radius: Theme.radius;
+            border-width: Theme.hairline;
+            border-color: Theme.line_strong;
+            TouchArea {}
+
+            blay := VerticalLayout {
+                padding: Space.xl;
+                spacing: Space.md;
+                HorizontalLayout {
+                    Text {
+                        text: root.badge_title;
+                        color: Theme.text;
+                        font-size: Type.title;
+                        font-weight: Type.w_bold;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    VerticalLayout {
+                        alignment: start;
+                        IconBtn {
+                            glyph: "×";
+                            clicked => { root.badge_title = ""; root.badge_text = ""; }
+                        }
+                    }
+                }
+                Text {
+                    text: root.badge_text;
+                    color: Theme.text_dim;
+                    font-size: Type.body;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
 
     if root.loading: VerticalLayout {
         padding: Space.xl;
@@ -494,7 +544,10 @@ export component GameScreen inherits Rectangle {
                             font-size: Type.lead;
                             font-weight: Type.w_bold;
                         }
-                        ItemGrid { items: root.badges; }
+                        ItemGrid {
+                            items: root.badges;
+                            open(id, kind) => { root.inspect_badge(id); }
+                        }
                     }
 
                     if root.related.length > 0: VerticalLayout {

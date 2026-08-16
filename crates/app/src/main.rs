@@ -1065,6 +1065,20 @@ fn wire_nav(ui: &MainWindow, app: &Arc<App>) {
     }
     {
         let weak = ui.as_weak();
+        ui.on_inspect_badge(move |id| {
+            use slint::Model;
+            let ui = weak.unwrap();
+            let Some(b) = ui.get_badges().iter().find(|b| b.id == id) else { return };
+            ui.set_badge_title(b.name.clone());
+            ui.set_badge_text(if b.subtitle.is_empty() {
+                "No description.".into()
+            } else {
+                b.subtitle.clone()
+            });
+        });
+    }
+    {
+        let weak = ui.as_weak();
         ui.on_copy_id(move || {
             let ui = weak.unwrap();
             let id = match ui.get_view_kind() {

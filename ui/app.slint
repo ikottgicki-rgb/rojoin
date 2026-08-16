@@ -119,6 +119,8 @@ export component MainWindow inherits Window {
     in property <[GameTile]> related;
     in-out property <int> game_tab: 0;
     in-out property <int> server_sort: 0;
+    in-out property <string> badge_title;
+    in-out property <string> badge_text;
 
     callback open_game(string);
     callback play_game(string);
@@ -128,6 +130,7 @@ export component MainWindow inherits Window {
     callback toggle_notify();
     callback copy_link();
     callback copy_id();
+    callback inspect_badge(string);
     callback open_browser();
     callback set_server_sort(int);
     callback open_player(string);
@@ -359,6 +362,8 @@ export component MainWindow inherits Window {
                             related: root.related;
                             tab <=> root.game_tab;
                             server_sort <=> root.server_sort;
+                            badge_title <=> root.badge_title;
+                            badge_text <=> root.badge_text;
                             play => { root.play_game(root.game.root_place_id); }
                             play_sub_place(id) => { root.play_sub_place(id); }
                             join_server(id) => { root.join_server(id); }
@@ -368,6 +373,7 @@ export component MainWindow inherits Window {
                             copy_id => { root.copy_id(); }
                             open_browser => { root.open_browser(); }
                             set_server_sort(s) => { root.set_server_sort(s); }
+                            inspect_badge(id) => { root.inspect_badge(id); }
                             open_related(id) => { root.open_game(id); }
                             favorite_related(id) => { root.toggle_favorite(id); }
                             open_creator => { root.open_creator(); }
