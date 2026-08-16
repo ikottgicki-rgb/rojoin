@@ -160,12 +160,17 @@ export component TopBar inherits Rectangle {
         padding-right: Space.md;
         spacing: Space.md;
 
+        // Collapses rather than just fading: an invisible-but-present arrow
+        // reserved ~40px and pushed the search box away from the sidebar edge.
         VerticalLayout {
             alignment: center;
+            width: root.can_back ? 30px : 0px;
+            animate width { duration: Motion.fast; easing: Motion.ease; }
             IconBtn {
                 glyph: "←";
                 size_px: 30px;
                 clicked => { root.back(); }
+                visible: root.can_back;
                 opacity: root.can_back ? 1.0 : 0.0;
                 animate opacity { duration: Motion.fast; easing: Motion.ease; }
             }

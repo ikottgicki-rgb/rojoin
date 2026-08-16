@@ -38,7 +38,7 @@ static SEARCH_GEN: AtomicI64 = AtomicI64::new(0);
 /// source of truth for navigation.
 const NAV: &[(&str, &str)] = &[
     ("Home", "⌂"),
-    ("Play", "▷"),
+    ("Search", "⌕"),
     ("Friends", "◑"),
     ("Library", "▤"),
     ("Avatar", "☺"),

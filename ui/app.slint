@@ -80,6 +80,7 @@ export component MainWindow inherits Window {
     callback unpin_game(string);
 
     in-out property <string> play_query;
+    in-out property <int> play_filter: 0;
     in property <bool> play_searching: false;
     in property <string> play_last_query;
     in property <[GameTile]> play_games;
@@ -330,7 +331,10 @@ export component MainWindow inherits Window {
                     entries: root.nav;
                     active: root.section < root.nav.length ? root.section : -1;
                     app_version: root.app_version;
-                    navigate(i) => { root.navigate(i); }
+                    navigate(i) => {
+                        root.navigate(i);
+                        if (i == 1) { topbar.focus_search(); }
+                    }
                     open_settings => { root.open_settings(); }
                 }
                 Rectangle { width: Theme.hairline; background: Theme.line; }
@@ -454,13 +458,14 @@ export component MainWindow inherits Window {
                             favorite(id) => { root.toggle_favorite(id); }
                             play_hero => { root.play_game(root.hero.id); }
                             go_friends => { root.navigate(2); }
-                            go_play => { root.navigate(1); }
+                            go_play => { root.navigate(1); topbar.focus_search(); }
                         }
 
                         if root.view_kind == 0 && root.section == 1: PlayScreen {
                             width: 100%;
                             height: 100%;
                             query <=> root.play_query;
+                            filter <=> root.play_filter;
                             searching: root.play_searching;
                             last_query: root.play_last_query;
                             games: root.play_games;

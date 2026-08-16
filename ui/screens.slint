@@ -280,8 +280,15 @@ export component PlayScreen inherits Rectangle {
     callback open_group(string);
     callback clear_recents();
 
+    /// 0 All · 1 Games · 2 People · 3 Groups
+    in-out property <int> filter: 0;
+
     property <bool> has_results:
         root.games.length > 0 || root.players.length > 0 || root.groups.length > 0;
+
+    property <bool> show_games: root.filter == 0 || root.filter == 1;
+    property <bool> show_people: root.filter == 0 || root.filter == 2;
+    property <bool> show_groups: root.filter == 0 || root.filter == 3;
 
     background: Theme.bg_0;
 
@@ -291,50 +298,12 @@ export component PlayScreen inherits Rectangle {
             padding: Space.xl;
             spacing: Space.xl;
 
-            Rectangle {
-                height: 42px;
-                background: Theme.bg_2;
-                border-radius: Theme.radius;
-                border-width: Theme.hairline;
-                border-color: field.has-focus ? Theme.accent : Theme.line;
-                animate border-color { duration: Motion.fast; easing: Motion.ease; }
 
-                HorizontalLayout {
-                    padding-left: Space.md;
-                    padding-right: Space.sm;
-                    spacing: Space.sm;
-
-                    VerticalLayout {
-                        alignment: center;
-                        Text { text: "⌕"; color: Theme.text_mute; font-size: Type.title; }
-                    }
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        field := TextInput {
-                            width: 100%;
-                            height: 100%;
-                            text <=> root.query;
-                            color: Theme.text;
-                            font-size: Type.lead;
-                            vertical-alignment: center;
-                            single-line: true;
-                            accepted => { root.search(self.text); }
-                        }
-                        if root.query == "": Text {
-                            x: 0;
-                            width: 100%;
-                            height: 100%;
-                            text: "Search or paste a link";
-                            color: Theme.text_mute;
-                            font-size: Type.lead;
-                            vertical-alignment: center;
-                            horizontal-alignment: left;
-                        }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        BusySlot { busy: root.searching; slot: 20px; Rectangle {} }
-                    }
+            if root.has_results || root.searching: HorizontalLayout {
+                alignment: start;
+                Segmented {
+                    options: ["All", "Games", "People", "Groups"];
+                    current <=> root.filter;
                 }
             }
 
@@ -367,7 +336,7 @@ export component PlayScreen inherits Rectangle {
             EmptyState {
                 height: 200px;
                 title: "Search Roblox";
-                hint: "Type a game name, a username, or paste a link to jump straight there.";
+                hint: "Use the bar at the top for a game, a person, a group, or a link.";
             }
 
             if !root.has_results && !root.searching && root.last_query != "": EmptyState {
@@ -376,7 +345,7 @@ export component PlayScreen inherits Rectangle {
                 hint: "Try a different spelling, or paste the game's link instead.";
             }
 
-            if root.games.length > 0: VerticalLayout {
+            if root.show_games && root.games.length > 0: VerticalLayout {
                 spacing: Space.md;
                 SectionHead { title: "Games"; count_label: root.games.length + ""; }
                 GameGrid {
@@ -387,7 +356,7 @@ export component PlayScreen inherits Rectangle {
                 }
             }
 
-            if root.players.length > 0: VerticalLayout {
+            if root.show_people && root.players.length > 0: VerticalLayout {
                 spacing: Space.md;
                 SectionHead { title: "People"; count_label: root.players.length + ""; }
                 ItemGrid {
@@ -397,7 +366,7 @@ export component PlayScreen inherits Rectangle {
                 }
             }
 
-            if root.groups.length > 0: VerticalLayout {
+            if root.show_groups && root.groups.length > 0: VerticalLayout {
                 spacing: Space.md;
                 SectionHead { title: "Groups"; count_label: root.groups.length + ""; }
                 ItemGrid {
