@@ -44,7 +44,6 @@ pub fn anti_afk() -> Macro {
         description: String::new(),
         mode: Mode::Toggle,
         hotkey: Some(Key::F4),
-        // Well inside Roblox's idle window, and rare enough to be invisible.
         cycle_gap_ms: 120_000,
         steps: vec![
             Step::MouseMove { dx: 1, dy: 0 },
@@ -88,7 +87,6 @@ mod tests {
 
     #[test]
     fn preset_ids_and_hotkeys_are_unique() {
-        // A duplicate hotkey would fire two macros from one press.
         let mut ids = HashSet::new();
         let mut keys = HashSet::new();
         for m in all() {
@@ -101,7 +99,6 @@ mod tests {
 
     #[test]
     fn anti_afk_undoes_its_own_movement() {
-        // Net zero, or it would slowly drag the camera across the screen.
         let m = anti_afk();
         let net: i32 = m
             .steps
@@ -116,7 +113,6 @@ mod tests {
 
     #[test]
     fn anti_afk_fires_well_inside_robloxs_idle_window() {
-        // Roblox kicks at roughly 20 minutes.
         assert!(anti_afk().cycle_ms() < 20 * 60 * 1000);
     }
 
@@ -127,7 +123,6 @@ mod tests {
 
     #[test]
     fn every_preset_has_a_nonzero_cycle() {
-        // A zero-length cycle would spin the play loop at 100% CPU.
         for m in all() {
             assert!(m.cycle_ms() > 0, "{} has a zero-length cycle", m.name);
         }

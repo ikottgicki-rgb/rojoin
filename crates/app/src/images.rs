@@ -111,7 +111,6 @@ impl Images {
 
         let url = url.to_string();
 
-        // Cache hit: still deferred.
         if let Some(decoded) = self.cache.lock().ok().and_then(|c| c.get(&url)) {
             let ui = self.ui.clone();
             let key = url.clone();
@@ -121,8 +120,6 @@ impl Images {
             return;
         }
 
-        // Join an in-flight fetch rather than firing a second one — but keep
-        // the callback so every caller gets the image.
         {
             let mut inflight = match self.inflight.lock() {
                 Ok(g) => g,
@@ -206,8 +203,6 @@ fn to_image(url: &str, decoded: &Decoded) -> Image {
         buf.make_mut_bytes().copy_from_slice(&decoded.rgba);
         let img = Image::from_rgba8(buf);
 
-        // Keep the UI-side memo bounded too, or it grows without limit across
-        // a long session even though the shared cache is capped.
         if memo.len() > CAPACITY {
             memo.clear();
         }
@@ -250,8 +245,6 @@ mod tests {
 
     #[test]
     fn waiters_queue_rather_than_replace() {
-        // The bug this guards: the second request for a URL used to be
-        // dropped, so an image shown in two places only appeared in one.
         let mut inflight: HashMap<String, Vec<u32>> = HashMap::new();
         inflight.entry("u".into()).or_default().push(1);
         inflight.entry("u".into()).or_default().push(2);

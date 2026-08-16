@@ -1,12 +1,6 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Btn, IconBtn, Spinner, EmptyState } from "components.slint";
 
-// Sign-in via Roblox's cross-device quick-login.
-//
-// This is a real browser login — the user approves in their own signed-in
-// browser or the Roblox mobile app — but nothing is embedded in our process.
-// No WebKitGTK, no WebView2, and the binary stays a single small executable.
-
 export enum SignInPhase {
     idle,
     requesting,
@@ -48,7 +42,6 @@ export component SignInScreen inherits Rectangle {
                     spacing: Space.lg;
                     alignment: start;
 
-                    // --- heading ---------------------------------------------
                     VerticalLayout {
                         spacing: Space.xs;
                         Text {
@@ -67,7 +60,6 @@ export component SignInScreen inherits Rectangle {
                         }
                     }
 
-                    // --- idle ------------------------------------------------
                     if root.phase == SignInPhase.idle: VerticalLayout {
                         spacing: Space.lg;
 
@@ -90,7 +82,6 @@ export component SignInScreen inherits Rectangle {
                         }
                     }
 
-                    // --- requesting ------------------------------------------
                     if root.phase == SignInPhase.requesting: VerticalLayout {
                         spacing: Space.lg;
                         HorizontalLayout {
@@ -105,12 +96,9 @@ export component SignInScreen inherits Rectangle {
                         }
                     }
 
-                    // --- waiting for approval --------------------------------
                     if root.phase == SignInPhase.waiting: VerticalLayout {
                         spacing: Space.lg;
 
-                        // The code, made big enough to read off the screen while
-                        // typing it on a phone.
                         Rectangle {
                             height: 76px;
                             background: Theme.bg_2;
@@ -191,7 +179,6 @@ export component SignInScreen inherits Rectangle {
                         }
                     }
 
-                    // --- approved --------------------------------------------
                     if root.phase == SignInPhase.approved: VerticalLayout {
                         spacing: Space.md;
                         Text {
@@ -209,7 +196,6 @@ export component SignInScreen inherits Rectangle {
                         }
                     }
 
-                    // --- failed ----------------------------------------------
                     if root.phase == SignInPhase.failed: VerticalLayout {
                         spacing: Space.lg;
                         Text {

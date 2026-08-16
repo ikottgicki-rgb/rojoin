@@ -1,11 +1,3 @@
-// Shared UI structs.
-//
-// Slint gotcha: a struct is only generated for Rust if it is reachable from the
-// compiled component tree. Declaring one here is not enough — it must actually
-// be used by a component property, or the Rust side will not see it.
-//
-// Roblox IDs travel as `string`. Slint's `int` is i32 and Roblox place/user IDs
-// already exceed that range.
 
 export struct GameTile {
     id: string,
@@ -74,7 +66,6 @@ export struct FriendRow {
     notify: bool,
     place_id: string,
 
-    // Header-row fields; ignored when is_header is false.
     is_header: bool,
     header_label: string,
     collapsible: bool,

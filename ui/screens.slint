@@ -26,14 +26,6 @@ component SectionHead inherits HorizontalLayout {
     Rectangle { horizontal-stretch: 1; }
 }
 
-// ===========================================================================
-// Home
-//
-// Personal only. No algorithmic recommendation shelves: this app exists partly
-// to get away from Roblox pushing things at you, so Home shows what *you*
-// have played and pinned, and nothing it decided you should see.
-// ===========================================================================
-
 export component HomeScreen inherits Rectangle {
     in property <string> greeting;
     in property <string> date_label;
@@ -47,8 +39,6 @@ export component HomeScreen inherits Rectangle {
     in property <[GameTile]> pinned;
     in property <int> friends_online: 0;
     in property <int> friend_requests: 0;
-    // One flag per section. Slint has no loops inside functions, and five
-    // booleans read better at the call site than a list membership test.
     in property <bool> show_friends: true;
     in property <bool> show_hero: true;
     in property <bool> show_pinned: true;
@@ -73,7 +63,6 @@ export component HomeScreen inherits Rectangle {
             padding: Space.xl;
             spacing: Space.xl;
 
-            // --- greeting ------------------------------------------------
             VerticalLayout {
                 spacing: Space.xxs;
                 Text {
@@ -89,10 +78,6 @@ export component HomeScreen inherits Rectangle {
                 }
             }
 
-            // --- customise bar --------------------------------------------
-            //
-            // Left-aligned. A trailing stretch parked the gear against the far
-            // right edge of the window, miles from anything it relates to.
             HorizontalLayout {
                 spacing: Space.sm;
                 alignment: start;
@@ -119,7 +104,6 @@ export component HomeScreen inherits Rectangle {
                 }
             }
 
-            // --- friends strip --------------------------------------------
             if root.show_friends: HorizontalLayout {
                 spacing: Space.md;
                 alignment: start;
@@ -164,7 +148,6 @@ export component HomeScreen inherits Rectangle {
                 }
             }
 
-            // --- hero -------------------------------------------------------
             if root.show_hero && root.has_hero: VerticalLayout {
                 spacing: Space.md;
                 SectionHead { title: "Jump back in"; }
@@ -245,7 +228,6 @@ export component HomeScreen inherits Rectangle {
                 }
             }
 
-            // --- pinned -----------------------------------------------------
             if root.show_pinned && root.pinned.length > 0: VerticalLayout {
                 spacing: Space.md;
                 SectionHead { title: "Pinned"; count_label: root.pinned.length + ""; }
@@ -257,7 +239,6 @@ export component HomeScreen inherits Rectangle {
                 }
             }
 
-            // --- recent -----------------------------------------------------
             if root.show_recent && (root.recent.length > 0 || root.loading): VerticalLayout {
                 spacing: Space.md;
                 SectionHead { title: "Recently played"; }
@@ -270,7 +251,6 @@ export component HomeScreen inherits Rectangle {
                 }
             }
 
-            // --- favourites -------------------------------------------------
             if root.show_favorites && root.favorites.length > 0: VerticalLayout {
                 spacing: Space.md;
                 SectionHead {
@@ -285,7 +265,6 @@ export component HomeScreen inherits Rectangle {
                 }
             }
 
-            // --- first run ---------------------------------------------------
             if !root.loading && !root.has_hero && root.recent.length == 0 && root.favorites.length == 0:
             Rectangle {
                 height: 230px;
@@ -310,10 +289,6 @@ export component HomeScreen inherits Rectangle {
         }
     }
 }
-
-// ===========================================================================
-// Play — search
-// ===========================================================================
 
 export component PlayScreen inherits Rectangle {
     in-out property <string> query;
@@ -344,7 +319,6 @@ export component PlayScreen inherits Rectangle {
             padding: Space.xl;
             spacing: Space.xl;
 
-            // --- search field ------------------------------------------------
             Rectangle {
                 height: 42px;
                 background: Theme.bg_2;
@@ -392,7 +366,6 @@ export component PlayScreen inherits Rectangle {
                 }
             }
 
-            // --- recent searches (idle state) ---------------------------------
             if !root.has_results && !root.searching && root.last_query == "" && root.recents.length > 0:
             VerticalLayout {
                 spacing: Space.md;
@@ -418,7 +391,6 @@ export component PlayScreen inherits Rectangle {
                 }
             }
 
-            // --- initial state --------------------------------------------------
             if !root.has_results && !root.searching && root.last_query == "" && root.recents.length == 0:
             EmptyState {
                 height: 200px;
@@ -426,14 +398,12 @@ export component PlayScreen inherits Rectangle {
                 hint: "Type a game name, a username, or paste a link to jump straight there.";
             }
 
-            // --- no results ------------------------------------------------------
             if !root.has_results && !root.searching && root.last_query != "": EmptyState {
                 height: 200px;
                 title: "No results for \"" + root.last_query + "\"";
                 hint: "Try a different spelling, or paste the game's link instead.";
             }
 
-            // --- games -------------------------------------------------------------
             if root.games.length > 0: VerticalLayout {
                 spacing: Space.md;
                 SectionHead { title: "Games"; count_label: root.games.length + ""; }
@@ -445,7 +415,6 @@ export component PlayScreen inherits Rectangle {
                 }
             }
 
-            // --- players ------------------------------------------------------------
             if root.players.length > 0: VerticalLayout {
                 spacing: Space.md;
                 SectionHead { title: "People"; count_label: root.players.length + ""; }
@@ -456,7 +425,6 @@ export component PlayScreen inherits Rectangle {
                 }
             }
 
-            // --- groups --------------------------------------------------------------
             if root.groups.length > 0: VerticalLayout {
                 spacing: Space.md;
                 SectionHead { title: "Groups"; count_label: root.groups.length + ""; }

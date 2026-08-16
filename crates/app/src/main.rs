@@ -1,5 +1,3 @@
-// No console window on Windows. This single line is the difference between
-// shipping "a .exe" and shipping "a .exe that flashes a black box on launch".
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::{Arc, Mutex};
@@ -180,8 +178,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         restore_session(&ui, &app, &bridge, &imgs);
     }
 
-    // A `roblox://` link passed on the command line (from the browser, via the
-    // registered handler) launches straight into that place.
     if let Some((place_id, instance)) = std::env::args()
         .skip(1)
         .find_map(|a| linkhandler::parse_uri(&a))
@@ -197,10 +193,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.run()?;
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Session
-// ---------------------------------------------------------------------------
 
 /// Try the stored cookie. A failure here is not an error the user should see —
 /// it just means the sign-in screen instead of the app.
@@ -251,7 +243,6 @@ fn enter_app(
     ui.set_accounts_count(app.config.lock().unwrap().accounts.len() as i32);
     *app.me.lock().unwrap() = user_id;
 
-    // The account's own head shot in the top bar.
     let imgs2 = imgs.clone();
     let client = app.client.clone();
     bridge.spawn(async move {
@@ -262,9 +253,6 @@ fn enter_app(
         }
     });
 
-    // Home is what you are looking at, so it loads immediately. The rest are
-    // staggered: firing four multi-request loads at once is what earned a
-    // string of 429s from users.roblox.com on the very first run.
     ui.set_section(
         app.config
             .lock()
@@ -285,8 +273,6 @@ fn enter_app(
     stagger(ui, app, bridge, imgs, 600, load_friends);
     stagger(ui, app, bridge, imgs, 2_000, load_avatar);
 
-    // One presence watcher per session. It reads the subscription lists on
-    // every sweep, so toggling a bell takes effect without a restart.
     if !app.watching.swap(true, Ordering::SeqCst) {
         let watcher = notify::Watcher::new(app.client.clone(), app.clone());
         bridge.spawn(async move { watcher.run().await });
@@ -321,7 +307,6 @@ fn stagger(
             }
         },
     );
-    // A Timer stops when dropped, so it has to outlive this function.
     STAGGER_TIMERS.with(|t| t.borrow_mut().push(timer));
 }
 
@@ -353,8 +338,6 @@ fn check_client_account(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
         return;
     }
 
-    // Different session — resolve whose it is so the notice can name them
-    // rather than saying "a different account".
     bridge.call_res(
         move || async move {
             let probe = Client::new()?;
@@ -366,15 +349,10 @@ fn check_client_account(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
                 ui.set_client_account(who.display_name.into());
                 ui.set_account_mismatch(true);
             }
-            // An unreadable client session is not worth nagging about.
             Err(e) => tracing::debug!(error = %e, "could not identify the client's account"),
         },
     );
 }
-
-// ---------------------------------------------------------------------------
-// Friends
-// ---------------------------------------------------------------------------
 
 fn wire_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
     {
@@ -385,8 +363,6 @@ fn wire_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
         ui.on_refresh_friends(move || load_friends(&weak.unwrap(), &app, &bridge2, &imgs2));
     }
 
-    // Filter, pin and collapse all re-render from the cached roster — no
-    // network round trip, so typing in the filter box stays instant.
     {
         let app = app.clone();
         let imgs2 = imgs.clone();
@@ -449,8 +425,6 @@ fn wire_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
             let ui = weak.unwrap();
             let Ok(fid) = id.parse::<i64>() else { return };
 
-            // Join *their* server, not a random one: presence gives us both the
-            // place and the specific game instance.
             let target = app
                 .roster
                 .lock()
@@ -509,8 +483,6 @@ fn load_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
     bridge.call_res(
         move || async move { fetch_friends(&client, me, cached).await },
         move |ui, result| {
-            // Drop the result if the account changed while it was in flight,
-            // or one account's roster lands under another account's name.
             if gen != SESSION_GEN.load(Ordering::SeqCst) {
                 return;
             }
@@ -533,8 +505,6 @@ fn load_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
                 })
                 .collect();
 
-            // Anything already handled this session stays gone, even if
-            // Roblox is still listing it.
             let handled = app2.handled_requests.lock().unwrap().clone();
             let requests: Vec<DetailItem> = requests
                 .into_iter()
@@ -552,8 +522,6 @@ fn load_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
                 }
             }
 
-            // Fold anything newly resolved into the cache and persist it, so
-            // these names never cost another request.
             if !load.resolved.is_empty() {
                 let mut names = app2.names.lock().unwrap();
                 for (id, entry) in load.resolved {
@@ -595,8 +563,6 @@ fn recompute_friends(ui: &MainWindow, app: &Arc<App>, imgs: &Images) {
     ui.set_friends_in_game(view.in_game);
     ui.set_friends_online(view.online);
 
-    // Capture the avatar URL for each rendered row before handing the model
-    // over, so image application can address rows by index.
     let urls: Vec<(usize, String)> = view
         .rows
         .iter()
@@ -632,9 +598,6 @@ fn respond_to_request(
         return;
     };
 
-    // One at a time. Roblox rate-limits these hard, and firing several at once
-    // got every one of them 429'd — which looked exactly like the buttons
-    // doing nothing.
     if app.request_busy.swap(true, Ordering::SeqCst) {
         ui.set_request_status("One at a time — still working on the last one.".into());
         return;
@@ -655,8 +618,6 @@ fn respond_to_request(
             } else {
                 friends::decline(&client, user_id).await
             };
-            // Roblox counts these against a tight window; a pause here is the
-            // difference between the next click working and being throttled.
             tokio::time::sleep(std::time::Duration::from_millis(800)).await;
             r
         },
@@ -668,9 +629,6 @@ fn respond_to_request(
                     tracing::info!(user_id, "friend request handled");
                     ui.set_request_status("".into());
 
-                    // Only hide it now: the request is genuinely gone
-                    // server-side. Roblox keeps listing it for a while, so
-                    // remember it and filter it out of every refetch.
                     {
                         let key = user_id.to_string();
                         app2.handled_requests.lock().unwrap().insert(key.clone());
@@ -689,8 +647,6 @@ fn respond_to_request(
                     load_friends(&ui, &app2, &bridge2, &imgs2);
                 }
                 Err(rojoin_roblox::Error::RateLimited) => {
-                    // Say so, rather than hiding the row and letting the
-                    // refetch put it back — that read as "the button is broken".
                     ui.set_request_status(
                         "Roblox is rate-limiting friend requests. Wait a moment and try again."
                             .into(),
@@ -716,7 +672,6 @@ fn drop_request_row(ui: &MainWindow, user_id: i64) {
     ui.set_friend_requests(remaining);
 }
 
-
 struct FriendsLoad {
     friends: Vec<ad::FriendInput>,
     requests: Vec<rojoin_roblox::models::User>,
@@ -732,13 +687,9 @@ async fn fetch_friends(
 ) -> rojoin_roblox::Result<FriendsLoad> {
     let list = friends::friend_ids(client, me).await?;
     if !list.complete {
-        // Deliberately not fatal: showing a partial roster beats showing none.
-        // It is logged so a systematically truncated list is diagnosable.
         tracing::warn!(count = list.ids.len(), "friends list may be incomplete");
     }
 
-    // Only ask Roblox about people we have never seen. On a settled install
-    // this is empty and the whole name/avatar round trip disappears.
     let unknown: Vec<i64> = list
         .ids
         .iter()
@@ -746,10 +697,6 @@ async fn fetch_friends(
         .filter(|id| !cached.contains_key(&id.to_string()))
         .collect();
 
-    // Resolve at most one batch per load. A fresh install with hundreds of
-    // friends would otherwise fire several batches back to back and get the
-    // account throttled; instead the cache fills in over successive refreshes
-    // and is permanent once resolved.
     let to_resolve: Vec<i64> = unknown.iter().copied().take(users::BATCH).collect();
 
     let fetched = if to_resolve.is_empty() {
@@ -763,11 +710,9 @@ async fn fetch_friends(
         users::batch(client, &to_resolve).await.unwrap_or_default()
     };
 
-    // Presence is genuinely live and cannot be cached.
     let presence = friends::presence(client, &list.ids).await.unwrap_or_default();
     let requests = friends::requests(client, 25).await.unwrap_or_default();
 
-    // Head shots only for the ones we just resolved, plus any pending requester.
     let mut avatar_ids: Vec<i64> = fetched.iter().map(|u| u.id).collect();
     avatar_ids.extend(requests.iter().map(|u| u.id));
     let mut avatars = if avatar_ids.is_empty() {
@@ -775,7 +720,6 @@ async fn fetch_friends(
     } else {
         thumbnails::headshots(client, &avatar_ids).await.unwrap_or_default()
     };
-    // Fill the rest from cache.
     for (id, entry) in &cached {
         if let Ok(id) = id.parse::<i64>() {
             if !entry.avatar_url.is_empty() {
@@ -801,7 +745,6 @@ async fn fetch_friends(
         })
         .collect();
 
-    // The roster is every friend, whether their name came from cache or wire.
     let users: Vec<rojoin_roblox::models::User> = list
         .ids
         .iter()
@@ -855,10 +798,6 @@ async fn fetch_friends(
     Ok(FriendsLoad { friends, requests, avatars, resolved })
 }
 
-// ---------------------------------------------------------------------------
-// Sign-in (cross-device quick login)
-// ---------------------------------------------------------------------------
-
 fn wire_signin(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
     {
         let app = app.clone();
@@ -910,8 +849,6 @@ fn wire_signin(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
     {
         let app = app.clone();
         ui.on_signin_open_browser(move || {
-            // The user's own default browser, where they are already signed in.
-            // Nothing is embedded and no password passes through this app.
             let url = app
                 .signin
                 .lock().unwrap()
@@ -965,8 +902,6 @@ async fn poll_until_approved(
 ) {
     let mut csrf: Option<String> = None;
     let mut elapsed = std::time::Duration::ZERO;
-    // Roblox codes last a few minutes; stop well after that rather than
-    // polling a dead code forever.
     let budget = std::time::Duration::from_secs(360);
 
     loop {
@@ -1010,7 +945,6 @@ async fn poll_until_approved(
                 }
             }
 
-            // A transient poll failure is not fatal — keep waiting.
             Err(e) => {
                 tracing::debug!(error = %e, "sign-in poll hiccup");
                 continue;
@@ -1066,10 +1000,6 @@ async fn finish_signin(
         enter_app(&ui, &app, &bridge, &imgs, &me.display_name, me.id);
     });
 }
-
-// ---------------------------------------------------------------------------
-// Navigation
-// ---------------------------------------------------------------------------
 
 fn wire_nav(ui: &MainWindow, app: &Arc<App>) {
     {
@@ -1129,8 +1059,6 @@ fn wire_nav(ui: &MainWindow, app: &Arc<App>) {
             let ui = weak.unwrap();
             let url = current_url(&ui);
             if !url.is_empty() {
-                // Slint has no clipboard API, so this shells out to whatever
-                // the session provides rather than pulling in a backend crate.
                 copy_to_clipboard(&url);
             }
         });
@@ -1139,7 +1067,6 @@ fn wire_nav(ui: &MainWindow, app: &Arc<App>) {
         let weak = ui.as_weak();
         ui.on_copy_id(move || {
             let ui = weak.unwrap();
-            // Just the digits — the id is what people paste into other tools.
             let id = match ui.get_view_kind() {
                 1 => ui.get_game().root_place_id.to_string(),
                 2 => ui.get_profile().id.to_string(),
@@ -1192,7 +1119,6 @@ fn copy_to_clipboard(text: &str) {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    // Try each tool in turn; the first that accepts the text wins.
     for (bin, args) in [
         ("wl-copy", &[][..]),
         ("xclip", &["-selection", "clipboard"][..]),
@@ -1221,12 +1147,7 @@ fn copy_to_clipboard(text: &str) {
     tracing::warn!("no clipboard tool available (tried wl-copy, xclip, xsel)");
 }
 
-// ---------------------------------------------------------------------------
-// Profiles and groups
-// ---------------------------------------------------------------------------
-
 fn wire_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
-    // Every entry point into a profile funnels through one loader.
     for hook in ["player", "friend", "creator"] {
         let app = app.clone();
         let bridge2 = bridge.clone();
@@ -1252,8 +1173,6 @@ fn wire_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
         ui.on_open_creator(move || {
             let ui = weak.unwrap();
             let game = ui.get_game();
-            // The creator's NAME was being parsed as an id here, so this
-            // silently did nothing for every game.
             let Ok(id) = game.creator_id.parse::<i64>() else { return };
             if id == 0 {
                 return;
@@ -1288,10 +1207,6 @@ fn wire_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
         });
     }
 
-    // --- social writes ---------------------------------------------------
-    //
-    // Each flips the button optimistically and reverts if Roblox refuses, so
-    // the UI never sits in a state the server disagrees with.
     {
         let app = app.clone();
         let bridge2 = bridge.clone();
@@ -1375,7 +1290,6 @@ fn wire_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
         });
     }
 
-    // --- group writes ------------------------------------------------------
     {
         let app = app.clone();
         let bridge2 = bridge.clone();
@@ -1444,12 +1358,6 @@ fn wire_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
 
 }
 
-// ---------------------------------------------------------------------------
-// Avatar
-//
-// Owned items only — no catalog, no prices, nothing to buy.
-// ---------------------------------------------------------------------------
-
 fn wire_avatar(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
     ui.set_av_categories(ad::strings(
         rojoin_roblox::avatar::CATEGORIES
@@ -1473,9 +1381,6 @@ fn wire_avatar(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
         ui.on_av_pick_category(move |_| load_wardrobe(&weak.unwrap(), &app, &bridge2, &imgs2));
     }
 
-    // Toggling an item sends the *complete* worn list — that is the only
-    // mechanism Roblox still offers — so the local list is the source of truth
-    // and is rolled back if the call fails.
     {
         let app = app.clone();
         let bridge2 = bridge.clone();
@@ -1510,7 +1415,6 @@ fn wire_avatar(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
                 move |ui, result| {
                     ui.set_av_busy(false);
                     match result {
-                        // Re-render the avatar so the preview matches.
                         Ok(()) => refresh_avatar_render(&ui, &app2, &bridge3, &imgs3),
                         Err(e) => {
                             *app2.worn.lock().unwrap() = before.clone();
@@ -1823,10 +1727,6 @@ fn refresh_avatar_render(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, 
     );
 }
 
-// ---------------------------------------------------------------------------
-// Macros
-// ---------------------------------------------------------------------------
-
 fn wire_macros(ui: &MainWindow, app: &Arc<App>) {
     let available = rojoin_macro::backend::available();
     ui.set_macro_available(available);
@@ -1837,7 +1737,6 @@ fn wire_macros(ui: &MainWindow, app: &Arc<App>) {
     );
     ui.set_macro_backend(if cfg!(windows) { "SendInput".into() } else { "uinput".into() });
 
-    // Presets are the starting set; anything the user has saved wins.
     {
         let mut macros = app.macros.lock().unwrap();
         let saved = app.config.lock().unwrap().settings.macros.clone();
@@ -1880,7 +1779,6 @@ fn wire_macros(ui: &MainWindow, app: &Arc<App>) {
                 let mut macros = app.macros.lock().unwrap();
                 if let Some(mac) = macros.iter_mut().find(|m| m.id == id.as_str()) {
                     mac.enabled = !mac.enabled;
-                    // Disabling a running macro must actually stop it.
                     if !mac.enabled {
                         if let Some(engine) = app.engine.lock().unwrap().as_ref() {
                             engine.stop(&mac.id);
@@ -1905,7 +1803,6 @@ fn wire_macros(ui: &MainWindow, app: &Arc<App>) {
         });
     }
 
-    // The hotkey chip on a card opens the editor already capturing.
     {
         let app = app.clone();
         let weak = ui.as_weak();
@@ -1926,10 +1823,6 @@ fn wire_macros(ui: &MainWindow, app: &Arc<App>) {
         let weak = ui.as_weak();
         ui.on_macro_open_credit(|| {});
 
-    // --- share macros -----------------------------------------------------
-    //
-    // A plain file in the data folder rather than a file picker: Slint has no
-    // native dialog, and shelling out to one is a dependency per desktop.
     {
         let app = app.clone();
         let weak = ui.as_weak();
@@ -1956,7 +1849,6 @@ fn wire_macros(ui: &MainWindow, app: &Arc<App>) {
         let weak = ui.as_weak();
         ui.on_macro_import(move || {
             let ui = weak.unwrap();
-            // Accept either the file we export or one dropped in beside it.
             let dir = rojoin_store::config_dir();
             let candidates = [dir.join("macros-import.json"), dir.join("macros-export.json")];
 
@@ -2027,8 +1919,6 @@ fn spawn_hotkey_listener(ui: &MainWindow, app: &Arc<App>) {
 
     let (tx, rx) = std::sync::mpsc::channel();
     let Some(listener) = Listener::spawn(tx) else {
-        // Output works but input listening does not — say so rather than
-        // leaving the hotkey chips looking functional.
         ui.set_macro_hint(
             "Macros work, but RoJoin cannot watch for hotkeys — start them from this screen."
                 .into(),
@@ -2041,14 +1931,12 @@ fn spawn_hotkey_listener(ui: &MainWindow, app: &Arc<App>) {
     let weak = ui.as_weak();
 
     std::thread::spawn(move || {
-        // Which macros a held key started, so the release stops exactly those.
         let mut held: std::collections::HashMap<rojoin_macro::Key, Vec<String>> =
             std::collections::HashMap::new();
 
         while let Ok(event) = rx.recv() {
             let Some(engine) = app.engine.lock().unwrap().clone() else { continue };
 
-            // Settings is waiting for a panic key.
             if app.binding_panic.load(Ordering::SeqCst) {
                 if let HotkeyEvent::Pressed(key) = event {
                     app.binding_panic.store(false, Ordering::SeqCst);
@@ -2066,8 +1954,6 @@ fn spawn_hotkey_listener(ui: &MainWindow, app: &Arc<App>) {
                 continue;
             }
 
-            // While the editor is waiting for a key, the next press binds it
-            // rather than firing anything.
             if app.capturing.load(Ordering::SeqCst) {
                 if let HotkeyEvent::Pressed(key) = event {
                     app.capturing.store(false, Ordering::SeqCst);
@@ -2075,10 +1961,8 @@ fn spawn_hotkey_listener(ui: &MainWindow, app: &Arc<App>) {
                         let id = app.editing.lock().unwrap().clone();
                         if let Some(id) = id {
                             let mut macros = app.macros.lock().unwrap();
-                            // Escape clears the binding instead of setting it.
                             let bind = (key != rojoin_macro::Key::Escape).then_some(key);
                             for m in macros.iter_mut() {
-                                // A hotkey may only drive one macro.
                                 if m.hotkey == bind && m.id != id {
                                     m.hotkey = None;
                                 }
@@ -2110,8 +1994,6 @@ fn spawn_hotkey_listener(ui: &MainWindow, app: &Arc<App>) {
                 )
             };
 
-            // The panic key works even with macros switched off and even when
-            // the game is not focused — it is the way out of a stuck state.
             if event == HotkeyEvent::Pressed(panic_key) {
                 engine.stop_all();
                 held.clear();
@@ -2125,11 +2007,7 @@ fn spawn_hotkey_listener(ui: &MainWindow, app: &Arc<App>) {
                 continue;
             }
 
-            // Without this gate a hotkey fires wherever you are — F3 would
-            // freeze the game while you are typing in a browser.
             if gate_on_focus && !rojoin_macro::focus::current().allows_macros() {
-                // A release still has to stop whatever a press started, or
-                // tabbing away mid-hold leaves a key down forever.
                 if let HotkeyEvent::Released(key) = event {
                     if let Some(ids) = held.remove(&key) {
                         for id in ids {
@@ -2173,16 +2051,11 @@ fn spawn_hotkey_listener(ui: &MainWindow, app: &Arc<App>) {
                 }
             }
 
-            // Reflect the new running state, if the window is still up.
             let app2 = app.clone();
             let _ = weak.upgrade_in_event_loop(move |ui| render_macros(&ui, &app2));
         }
     });
 }
-
-// ---------------------------------------------------------------------------
-// Macro step editor
-// ---------------------------------------------------------------------------
 
 fn wire_editor(ui: &MainWindow, app: &Arc<App>) {
     ui.set_editor_keys(ad::strings(
@@ -2242,12 +2115,10 @@ fn wire_editor(ui: &MainWindow, app: &Arc<App>) {
     });
     edit!(on_editor_set_amount, |m, i: i32, v: i32| {
         if let Some(step) = m.steps.get_mut(i.max(0) as usize) {
-            // 0ms would spin the play loop, so the floor is 1.
             let v = v.max(1) as u64;
             match step {
                 rojoin_macro::Step::Tap { hold_ms, .. } => *hold_ms = v,
                 rojoin_macro::Step::Wait { ms } => *ms = v,
-                // Clamped: an unbounded freeze is a hung game.
                 rojoin_macro::Step::Freeze { ms } => {
                     *ms = rojoin_macro::process::clamp_freeze(v)
                 }
@@ -2301,11 +2172,9 @@ fn wire_editor(ui: &MainWindow, app: &Arc<App>) {
         });
     });
     edit!(on_editor_reset, |m| {
-        // Restore the shipped preset, if this macro is one.
         if let Some(preset) = rojoin_macro::presets::all().into_iter().find(|p| p.id == m.id) {
             let hotkey = m.hotkey;
             *m = preset;
-            // Keep whatever the user bound; only the steps reset.
             m.hotkey = hotkey;
         }
     });
@@ -2468,10 +2337,6 @@ fn persist_macros(app: &Arc<App>) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Library and settings
-// ---------------------------------------------------------------------------
-
 /// Section index for Settings. Deliberately past the end of NAV — Settings is
 /// reached by the gear, not by a sidebar row.
 const SETTINGS_SECTION: i32 = 6;
@@ -2580,7 +2445,6 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
         });
     }
 
-    // --- account switching -------------------------------------------------
     {
         let app = app.clone();
         let bridge2 = bridge.clone();
@@ -2599,7 +2463,6 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
                 let _ = cfg.save();
             }
 
-            // A switch invalidates every in-flight load and every cached image.
             SESSION_GEN.fetch_add(1, Ordering::SeqCst);
             imgs2.clear();
 
@@ -2638,8 +2501,6 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
         let weak = ui.as_weak();
         ui.on_add_account(move || {
             let ui = weak.unwrap();
-            // Reuse the sign-in screen; it knows it is adding rather than
-            // signing in for the first time from accounts_count.
             ui.set_signed_in(false);
             ui.set_signin_phase(SignInPhase::Idle);
         });
@@ -2708,7 +2569,6 @@ fn wire_more_settings(ui: &MainWindow, app: &Arc<App>, imgs: &Images) {
                 cfg.settings.ui_scale = v;
                 let _ = cfg.save();
             }
-            // Applied immediately rather than on next launch.
             let scale = app.config.lock().unwrap().ui_scale();
             ui.window().dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
                 scale_factor: scale,
@@ -2775,8 +2635,6 @@ fn render_settings(ui: &MainWindow, app: &Arc<App>) {
         format!("{cached} names remembered, so they never need re-fetching").into(),
     );
 
-    // Watched friends resolve to names from the roster where possible; an id
-    // is still shown for anyone no longer on the list, so they can be removed.
     let roster = app.roster.lock().unwrap();
     let friends: Vec<DetailItem> = cfg
         .settings
@@ -2891,7 +2749,6 @@ fn load_pinned(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
                 .iter()
                 .map(|d| {
                     let v = load.votes.iter().find(|v| v.id == d.id);
-                    // Pinned games show a filled star, and clicking it unpins.
                     ad::tile_from_detail(d, v, true)
                 })
                 .collect();
@@ -2935,7 +2792,6 @@ fn render_library(ui: &MainWindow, app: &Arc<App>) {
                 h.name.clone().into()
             },
             value: ad::fmt_duration(h.playtime_secs).into(),
-            // Guard the divide: every entry can legitimately be zero.
             fraction: if top > 0 { h.playtime_secs as f32 / top as f32 } else { 0.0 },
         })
         .collect();
@@ -3088,8 +2944,6 @@ struct ProfileLoad {
 }
 
 async fn fetch_profile(client: &Client, user_id: i64) -> rojoin_roblox::Result<ProfileLoad> {
-    // Only the user lookup is allowed to fail the whole screen; the rest
-    // degrade to empty so one dead endpoint cannot blank a profile.
     let user = users::get(client, user_id).await?;
     let previous_names = users::previous_usernames(client, user_id).await.unwrap_or_default();
     let counts = friends::counts(client, user_id).await;
@@ -3239,10 +3093,6 @@ struct GroupLoad {
     art: std::collections::HashMap<i64, String>,
 }
 
-// ---------------------------------------------------------------------------
-// Home
-// ---------------------------------------------------------------------------
-
 fn load_home(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
     let history: Vec<(i64, i64)> = {
         let cfg = app.config.lock().unwrap();
@@ -3285,8 +3135,6 @@ fn load_home(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
                 Err(e) => return bridge::report(&ui, e),
             };
 
-            // Tiles are built here, on the UI thread, because `slint::Image`
-            // is not Send and so cannot be constructed inside the async task.
             let tiles: Vec<GameTile> = load
                 .details
                 .iter()
@@ -3319,10 +3167,6 @@ fn load_home(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
     );
 }
 
-// ---------------------------------------------------------------------------
-// Search
-// ---------------------------------------------------------------------------
-
 fn wire_search(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
     {
         let app = app.clone();
@@ -3340,7 +3184,6 @@ fn wire_search(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
         let weak = ui.as_weak();
         ui.on_top_submit(move |q| {
             let ui = weak.unwrap();
-            // A pasted link or a long bare id jumps straight to the game.
             if let Some(place_id) = search::resolve_place_id(q.as_str()) {
                 open_game(&ui, &app, &bridge2, &imgs2, place_id);
                 return;
@@ -3354,8 +3197,6 @@ fn wire_search(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
     {
         let weak = ui.as_weak();
         ui.on_top_live_search(move |q| {
-            // Clearing the box must also invalidate any in-flight response, or
-            // a slow reply repopulates results the user just dismissed.
             if q.is_empty() {
                 SEARCH_GEN.fetch_add(1, Ordering::SeqCst);
                 let ui = weak.unwrap();
@@ -3432,8 +3273,6 @@ fn run_search(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
                     }
                 }
                 Err(e) => {
-                    // Clear stale results so the screen never shows the last
-                    // query's hits under this query's heading.
                     ui.set_play_games(ad::model(Vec::new()));
                     bridge::report(&ui, e);
                 }
@@ -3441,10 +3280,6 @@ fn run_search(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
         },
     );
 }
-
-// ---------------------------------------------------------------------------
-// Game detail
-// ---------------------------------------------------------------------------
 
 fn wire_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
     {
@@ -3474,7 +3309,6 @@ fn wire_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
             let ui = weak.unwrap();
             let Ok(uid) = universe_id.parse::<i64>() else { return };
 
-            // Optimistic: flip immediately, reconcile if Roblox disagrees.
             let mut g = ui.get_game();
             let target = !g.favorited;
             g.favorited = target;
@@ -3529,8 +3363,6 @@ fn open_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
             let icons = thumbnails::game_icons(&client, &[universe_id]).await.unwrap_or_default();
             let art = thumbnails::game_art(&client, &[universe_id]).await.unwrap_or_default();
 
-            // Badge and pass artwork was never fetched, which is why those
-            // grids rendered as empty tiles.
             let badge_ids: Vec<i64> = badges.iter().map(|b| b.id).collect();
             let badge_icons = thumbnails::badges(&client, &badge_ids).await.unwrap_or_default();
             let pass_ids: Vec<i64> = passes.iter().map(|p| p.id).collect();
@@ -3615,7 +3447,6 @@ struct GameLoad {
 }
 
 fn fetch_servers(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, sort: i32) {
-    // Servers key on placeId, never universeId — a universe id returns 400.
     let place_id = *app.current_place.lock().unwrap();
     if place_id == 0 {
         return;
@@ -3644,10 +3475,6 @@ fn fetch_servers(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, sort: i3
     );
 }
 
-// ---------------------------------------------------------------------------
-// Launch
-// ---------------------------------------------------------------------------
-
 fn wire_launch(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
     {
         let app = app.clone();
@@ -3666,8 +3493,6 @@ fn wire_launch(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
             let ui = weak.unwrap();
             let Ok(place_id) = id.parse::<i64>() else { return };
 
-            // Launch the chosen sub-place, but keep history and per-game
-            // settings attributed to the game's root place.
             let root = ui.get_game().root_place_id.parse::<i64>().unwrap_or(place_id);
             launch(&ui, &app, JoinRequest::sub_place(place_id, root));
         });
@@ -3692,8 +3517,6 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
     let name = ui.get_game().name.to_string();
     {
         let mut cfg = app.config.lock().unwrap();
-        // History is keyed on the ROOT place, so a sub-place launch counts
-        // towards the game rather than creating a separate entry.
         let key = if req.root_place_id != 0 { req.root_place_id } else { req.place_id };
         cfg.record_launch(&key.to_string(), &name, chrono::Utc::now().timestamp());
         let _ = cfg.save();
@@ -3702,9 +3525,6 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
 
     match rojoin_launcher::detect() {
         rojoin_launcher::Backend::Sober => {
-            // Sober keeps its OWN session, so a roblox:// link joins as
-            // whoever Sober is signed into — not whoever RoJoin is showing.
-            // Point it at the active account first.
             if let Some(id) = app.config.lock().unwrap().active_account.clone() {
                 match secrets::load(&id) {
                     Some(cookie) => match rojoin_launcher::sober::set_cookie(&cookie) {
@@ -3736,9 +3556,6 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
         }
 
         rojoin_launcher::Backend::WindowsClient => {
-            // Windows has no cookie-swap equivalent: identity travels in a
-            // single-use authentication ticket, minted per launch because it
-            // expires within seconds.
             let Some(bridge) = app.bridge.lock().unwrap().clone() else {
                 tracing::error!("no bridge available to mint a ticket");
                 ui.set_launching(false);
@@ -3772,10 +3589,6 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
 /// Everything Home needs, in `Send`-safe form. No `slint::Image` here —
 /// images are not `Send`, so the tile structs are assembled on the UI thread.
 struct HomeLoad {
@@ -3785,8 +3598,6 @@ struct HomeLoad {
 }
 
 async fn fetch_home(client: &Client, place_ids: &[i64]) -> rojoin_roblox::Result<HomeLoad> {
-    // Resolve places to universes, dropping any that no longer resolve rather
-    // than failing the whole screen because one game was taken down.
     let mut universes = Vec::new();
     for place in place_ids {
         if let Ok(u) = games::universe_of(client, *place).await {
@@ -3841,9 +3652,6 @@ fn set_group_icon(model: &slint::ModelRc<GroupRow>, index: usize, img: slint::Im
 fn set_friend_avatar(model: &slint::ModelRc<FriendRow>, index: usize, img: slint::Image) {
     use slint::Model;
     if let Some(mut row) = model.row_data(index) {
-        // The model may have been rebuilt (filter typed, group collapsed)
-        // between the request and the reply, so a header now sitting at this
-        // index means the image belongs to a list that no longer exists.
         if row.is_header {
             return;
         }

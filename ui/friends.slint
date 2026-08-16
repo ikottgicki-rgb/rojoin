@@ -3,13 +3,6 @@ import { Avatar, Btn, IconBtn, Chip, Badge, Spinner, BusySlot, Bell, EmptyState,
 import { FriendRow, DetailItem } from "types.slint";
 import { ListView } from "std-widgets.slint";
 
-// Friends.
-//
-// Ordering answers "who can I join right now": in-game first, then online,
-// then everyone else. Pinned friends are lifted into their own section at the
-// very top regardless of presence, and removed from the groups below so
-// nobody appears twice.
-
 component PresenceDot inherits Rectangle {
     in property <int> presence;
     width: 7px;
@@ -33,7 +26,6 @@ component FriendListRow inherits Rectangle {
 
     height: root.entry.is_header ? 34px : 56px;
 
-    // --- group header ---------------------------------------------------
     if root.entry.is_header: Rectangle {
         width: 100%;
         height: 100%;
@@ -68,16 +60,12 @@ component FriendListRow inherits Rectangle {
         }
     }
 
-    // --- friend ----------------------------------------------------------
     if !root.entry.is_header: Rectangle {
         width: 100%;
         height: 100%;
         background: fta.has-hover ? Theme.bg_2 : transparent;
         animate background { duration: Motion.instant; easing: Motion.ease; }
 
-        // Declared FIRST on purpose. Slint paints later siblings on top, so a
-        // row-wide TouchArea declared last sits over the star, bell and Join
-        // and eats every click meant for them.
         fta := TouchArea {
             mouse-cursor: pointer;
             clicked => { root.open(); }
@@ -155,10 +143,6 @@ component FriendListRow inherits Rectangle {
                 HorizontalLayout {
                     spacing: Space.xxs;
 
-                    // Always visible, never hover-revealed. Hovering the icon
-                    // itself steals the hover from the row's TouchArea, so a
-                    // hover-gated opacity made them vanish as you reached for
-                    // them. Dim means off, accent means on.
                     Rectangle {
                         width: 28px;
                         height: 28px;
@@ -174,7 +158,6 @@ component FriendListRow inherits Rectangle {
                         pinta := TouchArea { mouse-cursor: pointer; clicked => { root.pin(); } }
                     }
 
-                    // Notification bell: tells you when this friend joins a game.
                     Rectangle {
                         width: 28px;
                         height: 28px;
@@ -188,8 +171,6 @@ component FriendListRow inherits Rectangle {
                         notta := TouchArea { mouse-cursor: pointer; clicked => { root.notify(); } }
                     }
 
-                    // The slot is always reserved, so the star and bell keep
-                    // the same x whether or not a friend is joinable.
                     Rectangle {
                         width: 60px;
                         height: 28px;
@@ -244,7 +225,6 @@ export component FriendsScreen inherits Rectangle {
     VerticalLayout {
         spacing: 0;
 
-        // --- header ------------------------------------------------------
         Rectangle {
             height: 56px;
             background: Theme.bg_1;
@@ -332,7 +312,6 @@ export component FriendsScreen inherits Rectangle {
         }
         Rectangle { height: Theme.hairline; background: Theme.line; }
 
-        // --- pending requests --------------------------------------------
         if root.requests.length > 0 && root.filter == "": Rectangle {
             height: 92px;
             background: Theme.bg_1;
@@ -367,10 +346,6 @@ export component FriendsScreen inherits Rectangle {
                 HorizontalLayout {
                     spacing: Space.sm;
                     alignment: start;
-                    // Absolute positioning rather than a HorizontalLayout:
-                    // in a layout the username competes with the buttons for
-                    // width, and a long name squeezed them to nothing — they
-                    // were still drawn but had no clickable area left.
                     for r in root.requests: Rectangle {
                         width: 236px;
                         height: 40px;
@@ -388,8 +363,6 @@ export component FriendsScreen inherits Rectangle {
 
                         Text {
                             x: Space.sm + 26px + Space.sm;
-                            // Width is whatever is left after the fixed button
-                            // block, so the name elides instead of pushing.
                             width: parent.width - (Space.sm + 26px + Space.sm) - 60px;
                             height: 100%;
                             text: r.name;
@@ -400,7 +373,6 @@ export component FriendsScreen inherits Rectangle {
                             vertical-alignment: center;
                         }
 
-                        // Fixed 56px block pinned to the right edge.
                         Rectangle {
                             x: parent.width - 56px;
                             y: (parent.height - self.height) / 2;
@@ -425,7 +397,6 @@ export component FriendsScreen inherits Rectangle {
             }
         }
 
-        // --- list ---------------------------------------------------------
         if !root.loading && root.rows.length == 0: EmptyState {
             vertical-stretch: 1;
             title: root.filter != "" ? "No friends match \"" + root.filter + "\"" : "No friends yet";

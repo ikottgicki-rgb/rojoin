@@ -68,8 +68,6 @@ pub struct Scales {
 
 impl Default for Scales {
     fn default() -> Self {
-        // Roblox's neutral R15 defaults; a zeroed struct would render a
-        // flattened avatar if a fetch failed and we sent it back.
         Self { height: 1.0, width: 1.0, head: 1.0, depth: 1.0, proportion: 0.0, body_type: 0.0 }
     }
 }
@@ -117,8 +115,6 @@ pub struct Outfit {
     pub is_editable: bool,
 }
 
-// --- reads ------------------------------------------------------------------
-
 /// Anyone's avatar. Public, so it powers profile previews too.
 pub async fn of_user(client: &Client, user_id: i64) -> Result<Avatar> {
     client.get_json(&format!("{AVATAR}/v1/users/{user_id}/avatar")).await
@@ -158,7 +154,6 @@ pub async fn inventory_for_category(
 
     let mut out: Vec<InventoryItem> = Vec::new();
     for t in types {
-        // One dead asset type must not empty the whole category.
         if let Ok(items) = inventory(client, user_id, *t, limit).await {
             for item in items {
                 if !out.iter().any(|e| e.asset_id == item.asset_id) {
@@ -186,8 +181,6 @@ pub async fn outfits(client: &Client, user_id: i64, per_page: u32) -> Result<Vec
 pub async fn outfit_details(client: &Client, outfit_id: i64) -> Result<Avatar> {
     client.get_json(&format!("{AVATAR}/v1/outfits/{outfit_id}/details")).await
 }
-
-// --- writes -----------------------------------------------------------------
 
 /// Set the complete list of worn assets.
 ///
@@ -296,8 +289,6 @@ mod tests {
 
     #[test]
     fn scales_default_to_roblox_neutral_not_zero() {
-        // A zeroed scale set would flatten the avatar if we ever sent a
-        // default back after a failed fetch.
         let s = Scales::default();
         assert_eq!(s.height, 1.0);
         assert_eq!(s.width, 1.0);
@@ -326,7 +317,6 @@ mod tests {
             "assetName":"Sakura Antlers","collectibleItemId":null,"serialNumber":null}"#;
         let i: InventoryItem = serde_json::from_str(json).unwrap();
         assert_eq!(i.asset_name, "Sakura Antlers");
-        // Beyond i32 — the reason ids are i64 throughout.
         assert_eq!(i.asset_id, 82762961686618);
     }
 

@@ -122,7 +122,6 @@ pub async fn poll(
 
     let mut resp = send_with_csrf(client, STATUS_URL, &body, csrf).await?;
 
-    // One retry: the token can rotate mid-session.
     if resp.status() == reqwest::StatusCode::FORBIDDEN {
         capture_csrf(&resp, csrf);
         resp = send_with_csrf(client, STATUS_URL, &body, csrf).await?;
@@ -210,8 +209,6 @@ pub async fn authentication_ticket(client: &crate::Client) -> Result<String> {
         .ok_or_else(|| Error::Api("Roblox returned no authentication ticket".into()))
 }
 
-// --- helpers ---------------------------------------------------------------
-
 async fn send_with_csrf(
     client: &reqwest::Client,
     url: &str,
@@ -261,8 +258,6 @@ mod tests {
 
     #[test]
     fn ignores_empty_roblosecurity() {
-        // Roblox sends an empty one to clear the cookie; treating that as a
-        // successful login would sign the user into nothing.
         assert_eq!(extract_roblosecurity(".ROBLOSECURITY=; path=/"), None);
     }
 

@@ -12,8 +12,6 @@ use std::rc::Rc;
 
 use crate::{DetailItem, GameDetailData, GameTile, ServerRow, SubPlace};
 
-// --- formatters -------------------------------------------------------------
-
 /// Compact player/visit counts: 1234 -> "1.2K", 4500000 -> "4.5M".
 pub fn compact(n: i64) -> String {
     match n {
@@ -70,8 +68,6 @@ pub fn today_label() -> String {
     chrono::Local::now().format("%A, %-d %B").to_string()
 }
 
-// --- game tiles -------------------------------------------------------------
-
 pub fn tile_from_detail(d: &GameDetail, votes: Option<&Votes>, favorited: bool) -> GameTile {
     GameTile {
         id: d.root_place_id.to_string().into(),
@@ -103,8 +99,6 @@ pub fn detail_data(d: &GameDetail, votes: Option<&Votes>, notify: bool) -> GameD
         name: d.name.clone().into(),
         creator: d.creator.name.clone().into(),
         creator_id: d.creator.id.to_string().into(),
-        // Roblox reports "User" or "Group"; a group creator has no user
-        // profile, so the click has to route differently.
         creator_is_group: d.creator.kind.eq_ignore_ascii_case("Group"),
         description: d.description.clone().unwrap_or_default().into(),
         playing: compact(d.playing).into(),
@@ -195,8 +189,6 @@ pub fn badges(list: &[Badge]) -> Vec<DetailItem> {
         .collect()
 }
 
-// --- friends ----------------------------------------------------------------
-
 /// "3m ago", "2h ago", "5d ago". Empty for anything unparseable, because a raw
 /// timestamp under someone's name is worse than no subtitle at all.
 pub fn time_ago(iso: &str) -> String {
@@ -255,7 +247,6 @@ pub fn friend_rows(
     };
 
     let in_game = friends.iter().filter(|f| f.presence == 2).count() as i32;
-    // Counts In-Studio too, matching what the ONLINE group actually contains.
     let online = friends.iter().filter(|f| f.presence == 1 || f.presence == 3).count() as i32;
 
     let visible: Vec<&FriendInput> = friends.iter().filter(|f| matches(f)).collect();
@@ -296,7 +287,6 @@ pub fn friend_rows(
 
     let mut rows = Vec::new();
 
-    // Pinned first, ordered by presence within the section.
     let mut pins: Vec<&&FriendInput> = visible
         .iter()
         .filter(|f| pinned.contains(&f.id.to_string()))
@@ -366,8 +356,6 @@ fn subtitle_for(f: &FriendInput) -> String {
         }
     }
 }
-
-// --- model helpers ----------------------------------------------------------
 
 pub fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
     ModelRc::from(Rc::new(VecModel::from(items)))
@@ -460,7 +448,6 @@ mod tests {
 
     #[test]
     fn ids_survive_as_strings_beyond_i32() {
-        // The whole reason ids are strings: this would overflow Slint's int.
         let d = GameDetail { root_place_id: 6_068_496_210, ..Default::default() };
         let t = tile_from_detail(&d, None, false);
         assert_eq!(t.id, "6068496210");
@@ -474,8 +461,6 @@ mod tests {
         let v = Votes { id: 1, up_votes: 0, down_votes: 0 };
         assert_eq!(tile_from_detail(&d, Some(&v), false).rating, -1);
     }
-
-    // --- friends ---------------------------------------------------------
 
     fn friend(id: i64, name: &str, presence: i32) -> FriendInput {
         FriendInput {
@@ -518,8 +503,6 @@ mod tests {
 
     #[test]
     fn pinned_friends_appear_once_only() {
-        // The bug this guards: a pinned friend showing in both PINNED and
-        // their presence group.
         let friends = vec![friend(1, "Alice", 2), friend(2, "Bob", 1)];
         let mut pins = empty();
         pins.insert("1".to_string());
@@ -554,15 +537,11 @@ mod tests {
         let ids: Vec<String> = view.rows.iter().filter(|r| !r.is_header).map(|r| r.id.to_string()).collect();
         assert_eq!(ids, vec!["1"]);
 
-        // Counts describe the whole roster, not the filtered view — otherwise
-        // typing in the filter box would appear to log your friends out.
         assert_eq!(view.online, 2);
     }
 
     #[test]
     fn online_count_includes_in_studio_like_the_group_does() {
-        // The ONLINE group renders studio users, so the header count must
-        // agree with it or the two contradict each other on screen.
         let friends = vec![friend(1, "Web", 1), friend(2, "Studio", 3)];
         let view = friend_rows(&friends, &empty(), &empty(), "", false);
         assert_eq!(view.online, 2);
@@ -608,7 +587,6 @@ mod tests {
 
     #[test]
     fn a_future_timestamp_does_not_produce_negative_time() {
-        // Clock skew between the machine and Roblox is common enough to matter.
         let future = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
         assert_eq!(time_ago(&future), "just now");
     }

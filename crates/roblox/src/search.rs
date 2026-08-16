@@ -78,8 +78,6 @@ pub async fn games(
 
     let resp: OmniResponse = client.get_json(&url).await?;
 
-    // Sponsored slots are ads. This app is a Roblox *replacement*, not a
-    // funnel for Roblox's promotions, so they are dropped.
     let games = resp
         .search_results
         .into_iter()
@@ -176,7 +174,6 @@ mod tests {
     #[test]
     fn bare_long_id_resolves_but_short_digits_stay_a_search() {
         assert_eq!(resolve_place_id("606849621"), Some(606849621));
-        // A game called "99" must search, not jump to place 99.
         assert_eq!(resolve_place_id("99"), None);
         assert_eq!(resolve_place_id("1234567"), None, "7 digits is below the floor");
     }

@@ -110,8 +110,6 @@ pub fn launch_windows(req: &JoinRequest, ticket: &str, launch_time_ms: i64) -> R
 pub fn game_running() -> bool {
     match detect() {
         Backend::Sober => sober::is_running(),
-        // The Windows client is detected by process name at the call site;
-        // there is no equivalent of `flatpak ps` to lean on.
         Backend::WindowsClient => false,
     }
 }
@@ -132,8 +130,6 @@ mod tests {
 
     #[test]
     fn sub_place_launches_the_chosen_place_not_the_root() {
-        // The whole point of the feature: joining the sub-place directly rather
-        // than being dumped in the root lobby.
         let r = JoinRequest::sub_place(999, 606849621);
         assert!(r.is_sub_place());
         assert!(r.roblox_uri().contains("placeId=999"));
@@ -159,7 +155,6 @@ mod tests {
 
     #[test]
     fn missing_root_is_not_mistaken_for_a_sub_place() {
-        // Guards the default-constructed case, where root_place_id is 0.
         let r = JoinRequest { place_id: 5, root_place_id: 0, ..Default::default() };
         assert!(!r.is_sub_place());
     }

@@ -52,8 +52,6 @@ pub fn set_registered(on: bool) -> std::io::Result<()> {
             std::fs::create_dir_all(parent)?;
         }
 
-        // Exec is quoted: an unquoted path with a space silently breaks the
-        // handler, and it fails at click time rather than at registration.
         let contents = format!(
             "[Desktop Entry]\n\
              Type=Application\n\
@@ -141,8 +139,6 @@ mod tests {
 
     #[test]
     fn an_empty_instance_id_is_treated_as_absent() {
-        // Roblox emits a trailing empty gameInstanceId sometimes; passing it
-        // through would ask for a server named "".
         let (_, instance) = parse_uri("roblox://start?placeId=5&gameInstanceId=").unwrap();
         assert!(instance.is_none());
     }

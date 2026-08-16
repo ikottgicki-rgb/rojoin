@@ -89,7 +89,6 @@ pub struct Settings {
     /// User macros. Empty means "use the bundled presets".
     pub macros: Vec<rojoin_macro::Macro>,
 
-    // --- macro behaviour ---------------------------------------------------
     /// Master switch. When off, no hotkey fires anything.
     pub macros_enabled: bool,
     /// Only run macros while Roblox is the focused window.
@@ -100,7 +99,6 @@ pub struct Settings {
     /// Key that stops every running macro and releases any freeze.
     pub panic_key: String,
 
-    // --- interface ---------------------------------------------------------
     /// 1.0 = normal. Clamped when applied.
     pub ui_scale: f32,
     /// Section index to open on launch.
@@ -115,7 +113,6 @@ pub struct Settings {
     /// a declined request reappears and looks like the click did nothing.
     pub handled_requests: Vec<String>,
 
-    // --- home layout -------------------------------------------------------
     /// Which home sections are shown, in order. Kinds:
     /// 0 status · 1 jump back in · 2 pinned · 3 recent · 4 favourites
     pub home_sections: Vec<i32>,
@@ -329,7 +326,6 @@ mod tests {
 
     #[test]
     fn history_and_pins_are_scoped_per_account() {
-        // The exact leak v1 had: two accounts must not see each other's data.
         let mut c = Config::default();
         c.upsert_account(acct("1"));
         c.upsert_account(acct("2"));
@@ -352,7 +348,6 @@ mod tests {
         c.upsert_account(acct("1"));
         c.upsert_account(acct("2"));
 
-        // Launched as 1, then the user switched to 2 mid-session.
         c.active_account = Some("2".into());
         c.add_playtime("1", "606849621", 300);
 
@@ -419,7 +414,6 @@ mod tests {
         assert_eq!(c.ui_scale(), 1.6);
         c.settings.ui_scale = 0.01;
         assert_eq!(c.ui_scale(), 0.8);
-        // A NaN in the config file must not produce a NaN-sized window.
         c.settings.ui_scale = f32::NAN;
         assert_eq!(c.ui_scale(), 1.0);
     }
@@ -447,8 +441,6 @@ mod tests {
         c.upsert_account(acct("1"));
         c.push_recent_search("   ");
 
-        // Returning early means the bucket is never even created, which is the
-        // stronger guarantee: a blank query leaves no trace at all.
         let recorded = c.data().map(|d| d.recent_searches.len()).unwrap_or(0);
         assert_eq!(recorded, 0);
     }

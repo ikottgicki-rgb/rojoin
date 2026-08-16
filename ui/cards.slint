@@ -2,10 +2,6 @@ import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Thumb, Avatar, MetaStat, Skeleton, EmptyState } from "components.slint";
 import { GameTile, DetailItem } from "types.slint";
 
-// Reusable game presentation. The responsive grid lives here because Slint has
-// no flow layout and no grid spans — every grid in the app computes its own
-// column count from available width and places children absolutely.
-
 export component GameCard inherits Rectangle {
     in property <GameTile> game;
     in property <bool> show_play: true;
@@ -21,8 +17,6 @@ export component GameCard inherits Rectangle {
     animate background, border-color { duration: Motion.fast; easing: Motion.ease; }
     clip: true;
 
-    // Declared FIRST: a card-wide TouchArea declared last paints over the
-    // Play overlay and the favourite star and swallows their clicks.
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
@@ -47,9 +41,6 @@ export component GameCard inherits Rectangle {
                 width: 100%;
                 height: 100%;
                 background: #00000099;
-                // Includes the button's own hover: hovering it steals the
-                // hover from the card, which used to make it vanish under the
-                // cursor.
                 opacity: ta.has-hover || pta.has-hover ? 1.0 : 0.0;
                 animate opacity { duration: Motion.fast; easing: Motion.ease; }
 
@@ -189,7 +180,6 @@ export component GameListRow inherits Rectangle {
     background: ta.has-hover ? Theme.bg_2 : transparent;
     animate background { duration: Motion.instant; easing: Motion.ease; }
 
-    // First, so the favourite star and Play stay clickable.
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
@@ -241,8 +231,6 @@ export component GameListRow inherits Rectangle {
             HorizontalLayout {
                 spacing: Space.sm;
 
-                // Always visible: a hover-gated icon vanishes the moment its
-                // own TouchArea takes the hover from the row.
                 Rectangle {
                     width: 26px;
                     height: 26px;

@@ -26,10 +26,6 @@ fn is_game(comm: &str) -> bool {
     NEEDLES.iter().any(|n| c == *n)
 }
 
-// ---------------------------------------------------------------------------
-// Linux
-// ---------------------------------------------------------------------------
-
 #[cfg(unix)]
 pub fn find_game_pids() -> Vec<u32> {
     let Ok(entries) = std::fs::read_dir("/proc") else {
@@ -38,14 +34,9 @@ pub fn find_game_pids() -> Vec<u32> {
 
     let mut pids = Vec::new();
     for entry in entries.flatten() {
-        // `continue`, never `?`. Using `?` here returned from the whole
-        // function at the first non-numeric /proc entry, so this found
-        // nothing at all — the original freeze bug.
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
         let Ok(pid) = name.parse::<u32>() else { continue };
 
-        // `comm` is the executable name, which survives the bwrap wrapping
-        // that makes the cmdline useless here.
         let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) else { continue };
         if is_game(&comm) {
             pids.push(pid);
@@ -56,8 +47,6 @@ pub fn find_game_pids() -> Vec<u32> {
 
 #[cfg(unix)]
 fn signal(pid: u32, sig: i32) -> Result<()> {
-    // SAFETY: kill() with a pid read from /proc; a dead pid returns ESRCH
-    // rather than doing anything dangerous.
     let rc = unsafe { libc::kill(pid as i32, sig) };
     if rc != 0 {
         return Err(Error::Input(format!(
@@ -77,10 +66,6 @@ fn suspend_one(pid: u32) -> Result<()> {
 fn resume_one(pid: u32) -> Result<()> {
     signal(pid, libc::SIGCONT)
 }
-
-// ---------------------------------------------------------------------------
-// Windows
-// ---------------------------------------------------------------------------
 
 #[cfg(windows)]
 pub fn find_game_pids() -> Vec<u32> {
@@ -173,10 +158,6 @@ fn resume_one(_pid: u32) -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Shared
-// ---------------------------------------------------------------------------
-
 /// Suspend every process that is the game. Returns how many were stopped.
 ///
 /// All of them, not just one: Sober runs several processes under the same
@@ -244,7 +225,6 @@ mod tests {
     fn freeze_duration_is_clamped_to_something_survivable() {
         assert_eq!(clamp_freeze(0), 1);
         assert_eq!(clamp_freeze(250), 250);
-        // A macro asking for a minute-long freeze is a hung game, not a freeze.
         assert_eq!(clamp_freeze(60_000), MAX_FREEZE_MS);
     }
 
@@ -261,9 +241,6 @@ mod tests {
 
     #[test]
     fn scanning_processes_does_not_bail_early() {
-        // The original bug: `?` inside the loop returned from the whole
-        // function at the first non-numeric /proc entry, so this always came
-        // back empty. It must at least complete the scan.
         let _ = find_game_pids();
     }
 
@@ -275,7 +252,6 @@ mod tests {
 
     #[test]
     fn suspending_with_no_game_reports_that_clearly() {
-        // Only meaningful when no game is running, which is the CI case.
         if find_game_pids().is_empty() {
             let err = suspend_game().unwrap_err();
             assert!(err.to_string().contains("no running game"));

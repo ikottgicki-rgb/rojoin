@@ -81,8 +81,6 @@ mod linux {
         let mut started = 0;
 
         for (path, device) in evdev::enumerate() {
-            // Only real keyboards: a device that cannot report a letter key is
-            // a mouse, a lid switch, or our own virtual output device.
             let is_keyboard = device
                 .supported_keys()
                 .map(|keys| keys.contains(evdev::KeyCode::KEY_A))
@@ -91,8 +89,6 @@ mod linux {
             if !is_keyboard {
                 continue;
             }
-            // Never listen to our own virtual device, or a macro that presses
-            // its own hotkey would retrigger itself forever.
             if device.name().unwrap_or_default().contains("RoJoin") {
                 continue;
             }
@@ -113,7 +109,6 @@ mod linux {
                     let events = match device.fetch_events() {
                         Ok(e) => e,
                         Err(e) => {
-                            // A device unplugged mid-read is normal.
                             tracing::debug!(device = %name, error = %e, "hotkey device closed");
                             return;
                         }
@@ -127,8 +122,6 @@ mod linux {
                             continue;
                         };
 
-                        // 1 = press, 0 = release, 2 = autorepeat (ignored, or a
-                        // held key would fire continuously).
                         let sent = match event.value() {
                             1 => tx.send(HotkeyEvent::Pressed(key)),
                             0 => tx.send(HotkeyEvent::Released(key)),
@@ -164,7 +157,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unknown_codes_map_to_nothing() {
-        // 0 is KEY_RESERVED, 700 is well past anything we bind.
         assert_eq!(key_from_evdev(0), None);
         assert_eq!(key_from_evdev(700), None);
     }

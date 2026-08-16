@@ -17,7 +17,6 @@ pub fn store(account_id: &str, cookie: &str) -> anyhow::Result<()> {
     match keyring::Entry::new(SERVICE, account_id) {
         Ok(entry) => match entry.set_password(cookie) {
             Ok(()) => {
-                // A previous fallback file must not linger with a stale cookie.
                 let _ = std::fs::remove_file(fallback_path(account_id));
                 return Ok(());
             }
@@ -52,8 +51,6 @@ pub fn delete(account_id: &str) {
 }
 
 fn fallback_path(account_id: &str) -> PathBuf {
-    // Account ids come from Roblox and are numeric, but sanitise anyway rather
-    // than trusting remote data to be path-safe.
     let safe: String = account_id.chars().filter(char::is_ascii_alphanumeric).collect();
     rojoin_store::config_dir().join(format!("session-{safe}"))
 }
@@ -80,8 +77,6 @@ mod tests {
 
     #[test]
     fn fallback_path_strips_anything_path_shaped() {
-        // Roblox ids are numeric, but a malformed or hostile id must not be
-        // able to escape the config directory.
         let p = fallback_path("../../etc/passwd");
         let name = p.file_name().unwrap().to_string_lossy().to_string();
         assert_eq!(name, "session-etcpasswd");

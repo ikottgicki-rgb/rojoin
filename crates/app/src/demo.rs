@@ -52,7 +52,6 @@ pub fn seed(ui: &MainWindow) {
     ui.set_recent(ad::model(tiles.clone()));
     ui.set_favorites(ad::model(tiles.iter().take(4).cloned().collect()));
 
-    // A game detail, complete with the sub-place list.
     ui.set_game(GameDetailData {
         universe_id: "245662005".into(),
         root_place_id: "606849621".into(),
@@ -135,7 +134,6 @@ pub fn seed(ui: &MainWindow) {
 
     seed_friends(ui);
 
-    // Lets the screenshot harness open any screen directly.
     if let Some(n) = env_int("ROJOIN_SECTION") {
         ui.set_section(n);
     }
@@ -150,7 +148,6 @@ fn env_int(key: &str) -> Option<i32> {
 }
 
 fn seed_friends(ui: &MainWindow) {
-    // (id, display, username, presence, location, pinned, notify)
     let people: &[(i64, &str, &str, i32, &str, bool, bool)] = &[
         (1, "UsedHenry06", "usedhenry06", 2, "Jailbreak", true, true),
         (2, "felix", "felixsson", 2, "Tower Defense Simulator", true, false),
@@ -193,7 +190,6 @@ fn seed_friends(ui: &MainWindow) {
     ui.set_friends_in_game(view.in_game);
     ui.set_friends_online(view.online);
 
-    // Give each non-header row a placeholder avatar.
     let rows: Vec<crate::FriendRow> = view
         .rows
         .into_iter()

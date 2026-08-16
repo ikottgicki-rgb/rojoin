@@ -78,7 +78,6 @@ export component ProfileScreen inherits Rectangle {
             alignment: start;
             spacing: 0;
 
-            // --- identity ---------------------------------------------------
             Rectangle {
                 background: Theme.bg_1;
                 VerticalLayout {
@@ -169,7 +168,6 @@ export component ProfileScreen inherits Rectangle {
                         }
                     }
 
-                    // --- actions --------------------------------------------
                     if !root.profile.is_self: HorizontalLayout {
                         spacing: Space.sm;
                         alignment: start;
@@ -212,7 +210,6 @@ export component ProfileScreen inherits Rectangle {
             }
             Rectangle { height: Theme.hairline; background: Theme.line; }
 
-            // --- tabs ---------------------------------------------------------
             VerticalLayout {
                 padding: Space.xl;
                 spacing: Space.lg;

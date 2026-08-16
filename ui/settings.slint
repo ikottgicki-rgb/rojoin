@@ -107,14 +107,12 @@ export component SettingsScreen inherits Rectangle {
     in property <string> update_status;
     in property <bool> checking_update: false;
 
-    // --- macros ---
     in property <bool> macros_enabled: true;
     in property <bool> only_when_focused: true;
     in property <bool> focus_detectable: true;
     in property <string> panic_key;
     in property <bool> binding_panic: false;
     in property <string> macro_backend;
-    // --- interface ---
     in property <float> ui_scale: 1.0;
     in property <[string]> sections;
     in property <int> startup_section: 0;
@@ -171,7 +169,6 @@ export component SettingsScreen inherits Rectangle {
                 spacing: Space.lg;
                 alignment: start;
 
-                // --- accounts ------------------------------------------
                 Card {
                     title: "ACCOUNTS";
                     for a in root.accounts: Rectangle {
@@ -241,7 +238,6 @@ export component SettingsScreen inherits Rectangle {
                     }
                 }
 
-                // --- appearance -----------------------------------------
                 Card {
                     title: "APPEARANCE";
                     Row {
@@ -253,7 +249,6 @@ export component SettingsScreen inherits Rectangle {
                     }
                 }
 
-                // --- notifications ---------------------------------------
                 Card {
                     title: "NOTIFICATIONS";
                     Row {
@@ -324,7 +319,6 @@ export component SettingsScreen inherits Rectangle {
                     }
                 }
 
-                // --- system ------------------------------------------------
                 Card {
                     title: "SYSTEM";
                     Row {
@@ -346,7 +340,6 @@ export component SettingsScreen inherits Rectangle {
                     }
                 }
 
-                // --- macros ---------------------------------------------
                 Card {
                     title: "MACROS";
                     Row {
@@ -402,7 +395,6 @@ export component SettingsScreen inherits Rectangle {
                     }
                 }
 
-                // --- interface -------------------------------------------
                 Card {
                     title: "INTERFACE";
                     Row {
@@ -418,8 +410,6 @@ export component SettingsScreen inherits Rectangle {
                                     { label: "Larger", value: 1.3 },
                                 ]: Chip {
                                     label: opt.label;
-                                    // Float comparison with a tolerance; exact
-                                    // equality on a persisted float is fragile.
                                     selected: Math.abs(root.ui_scale - opt.value) < 0.02;
                                     clicked => { root.set_ui_scale(opt.value); }
                                 }
@@ -449,7 +439,6 @@ export component SettingsScreen inherits Rectangle {
                     }
                 }
 
-                // --- network ---------------------------------------------
                 Card {
                     title: "NETWORK";
                     Row {
@@ -480,7 +469,6 @@ export component SettingsScreen inherits Rectangle {
                     }
                 }
 
-                // --- about --------------------------------------------------
                 Card {
                     title: "ABOUT";
                     Row {
@@ -488,8 +476,6 @@ export component SettingsScreen inherits Rectangle {
                         hint: root.update_status;
                         VerticalLayout {
                             alignment: center;
-                            // Fixed width, or the row jumps when the button is
-                            // replaced by a much narrower spinner.
                             Rectangle {
                                 width: 148px;
                                 height: 32px;

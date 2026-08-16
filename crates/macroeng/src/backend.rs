@@ -82,15 +82,9 @@ pub fn permission_hint() -> Option<String> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Linux
-// ---------------------------------------------------------------------------
-
 #[cfg(unix)]
 mod linux {
     use super::*;
-    // evdev 0.13 names these KeyCode / RelativeAxisCode, and InputEvent::new
-    // takes raw u16s rather than the typed enums.
     use evdev::uinput::VirtualDevice;
     use evdev::{AttributeSet, EventType, InputEvent, KeyCode, RelativeAxisCode};
 
@@ -104,7 +98,6 @@ mod linux {
             for k in Key::ALL {
                 keys.insert(KeyCode::new(k.evdev_code()));
             }
-            // Mouse buttons live in the same key space on Linux.
             keys.insert(KeyCode::BTN_LEFT);
             keys.insert(KeyCode::BTN_RIGHT);
             keys.insert(KeyCode::BTN_MIDDLE);
@@ -180,10 +173,6 @@ mod linux {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Windows
-// ---------------------------------------------------------------------------
 
 #[cfg(windows)]
 mod windows_backend {
@@ -264,8 +253,6 @@ mod tests {
 
     #[test]
     fn permission_hint_matches_availability() {
-        // Either we can synthesise input, or we can tell the user exactly how
-        // to fix it. Never neither.
         assert_eq!(available(), permission_hint().is_none());
     }
 

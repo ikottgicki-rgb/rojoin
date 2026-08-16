@@ -60,9 +60,6 @@ pub fn open_uri(uri: &str) -> Result<()> {
 
     tracing::info!("launching via Roblox client");
 
-    // `cmd /c start` is the reliable way to hand a custom protocol to the
-    // shell. The empty "" is the window title argument — without it, a quoted
-    // URI is swallowed as the title and nothing launches.
     Command::new("cmd")
         .args(["/C", "start", "", uri])
         .stdin(Stdio::null())
@@ -112,8 +109,6 @@ mod tests {
         let inner = place_launcher_url(606849621, None, None);
         let uri = launch_uri("TICKET", &inner, 1234, 99);
 
-        // The inner URL's separators must not survive as literals, or the
-        // client mis-parses the +-delimited arguments.
         assert!(!uri.contains("?request="), "inner ? leaked into the launch uri");
         assert!(uri.contains("%3Frequest%3D"));
         assert!(uri.contains("gameinfo:TICKET"));

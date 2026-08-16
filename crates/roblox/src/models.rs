@@ -76,10 +76,6 @@ impl<T> Default for Page<T> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Games
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct GameDetail {
@@ -176,10 +172,6 @@ pub struct Badge {
     pub enabled: bool,
 }
 
-// ---------------------------------------------------------------------------
-// Search
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct GameSearchResult {
@@ -209,10 +201,6 @@ pub struct GroupSearchResult {
     pub member_count: i64,
     pub has_verified_badge: bool,
 }
-
-// ---------------------------------------------------------------------------
-// Users
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -264,7 +252,6 @@ mod tests {
 
     #[test]
     fn null_collections_deserialize_as_empty_not_error() {
-        // The exact shape that crashed v1's Home and Library screens.
         let json = r#"{"data":null}"#;
         let parsed: DataList<Votes> = serde_json::from_str(json).unwrap_or_default();
         assert!(parsed.data.is_empty());

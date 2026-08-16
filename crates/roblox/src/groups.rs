@@ -73,7 +73,6 @@ pub async fn join(client: &Client, group_id: i64) -> Result<()> {
 }
 
 pub async fn leave(client: &Client, group_id: i64, user_id: i64) -> Result<()> {
-    // Roblox models leaving as removing yourself from the member list.
     client
         .post_action(&format!("{GROUPS}/groups/{group_id}/users/{user_id}/leave"))
         .await
@@ -110,7 +109,6 @@ mod tests {
 
     #[test]
     fn missing_owner_is_tolerated() {
-        // Groups with no owner exist, and used to crash screens that assumed one.
         let g: Group = serde_json::from_str(r#"{"id":1,"name":"Ownerless"}"#).unwrap();
         assert!(g.owner.is_none());
     }

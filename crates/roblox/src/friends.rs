@@ -52,16 +52,11 @@ pub async fn friend_ids(client: &Client, user_id: i64) -> Result<FriendList> {
     let mut page = 0usize;
 
     loop {
-        // Pace the pagination. A 260-friend roster is six pages, and firing
-        // them back to back is enough on its own to trip Roblox's limiter —
-        // which then poisons every request that follows in this load.
         if page > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(350)).await;
         }
         page += 1;
 
-        // 50 is the maximum this endpoint accepts; 100 returns
-        // 400 "Invalid parameters" and silently truncates the roster.
         let mut url = format!("{FRIENDS}/users/{user_id}/friends/find?limit=50");
         if let Some(c) = &cursor {
             url.push_str(&format!("&cursor={c}"));
@@ -76,7 +71,6 @@ pub async fn friend_ids(client: &Client, user_id: i64) -> Result<FriendList> {
                 }
             }
             Err(e) => {
-                // Partial, and flagged as such.
                 tracing::warn!(error = %e, "friends pagination interrupted");
                 complete = false;
                 break;
@@ -89,8 +83,6 @@ pub async fn friend_ids(client: &Client, user_id: i64) -> Result<FriendList> {
         }
     }
 
-    // Union the flat list. It caps around 200 but costs one request and heals
-    // the common case where the first paginated page was the one that failed.
     if let Ok(flat) = client
         .get_json::<DataList<User>>(&format!("{FRIENDS}/users/{user_id}/friends"))
         .await
@@ -104,8 +96,6 @@ pub async fn friend_ids(client: &Client, user_id: i64) -> Result<FriendList> {
 
     Ok(FriendList { ids, complete })
 }
-
-// --- presence ---------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresenceKind {
@@ -208,8 +198,6 @@ pub async fn presence(client: &Client, user_ids: &[i64]) -> Result<Vec<Presence>
         {
             Ok(r) => r,
             Err(e) => {
-                // Partial presence beats none: the roster still renders, just
-                // with some friends shown as offline until the next refresh.
                 tracing::warn!(error = %e, resolved = out.len(), "presence batch interrupted");
                 break;
             }
@@ -229,8 +217,6 @@ pub async fn presence(client: &Client, user_ids: &[i64]) -> Result<Vec<Presence>
 
     Ok(out)
 }
-
-// --- requests ---------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SocialCounts {
@@ -272,8 +258,6 @@ pub async fn requests(client: &Client, limit: u32) -> Result<Vec<User>> {
     Ok(page.data)
 }
 
-// --- writes -----------------------------------------------------------------
-
 pub async fn send_request(client: &Client, user_id: i64) -> Result<()> {
     client.post_action(&format!("{FRIENDS}/users/{user_id}/request-friendship")).await
 }
@@ -304,7 +288,6 @@ mod tests {
 
     #[test]
     fn find_page_parses_pascal_case() {
-        // The one endpoint that breaks the API's camelCase convention.
         let json = r#"{"PreviousCursor":null,"PageItems":[{"id":1},{"id":2}],"NextCursor":"abc","HasMore":null}"#;
         let page: FindPage = serde_json::from_str(json).unwrap();
         assert_eq!(page.page_items.len(), 2);
@@ -326,7 +309,6 @@ mod tests {
         assert_eq!(PresenceKind::from_code(2), PresenceKind::InGame);
         assert_eq!(PresenceKind::from_code(3), PresenceKind::InStudio);
         assert_eq!(PresenceKind::from_code(4), PresenceKind::Invisible);
-        // An unknown future code must degrade to Offline, not panic.
         assert_eq!(PresenceKind::from_code(99), PresenceKind::Offline);
     }
 
@@ -358,7 +340,6 @@ mod tests {
 
     #[test]
     fn presence_response_tolerates_nulls() {
-        // Every optional field null is the normal offline-user response.
         let json = r#"{"userPresences":[{"userPresenceType":0,"lastLocation":null,
             "placeId":null,"rootPlaceId":null,"gameId":null,"universeId":null,"userId":156}]}"#;
         let resp: PresenceResponse = serde_json::from_str(json).unwrap();

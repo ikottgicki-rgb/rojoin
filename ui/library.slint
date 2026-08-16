@@ -4,10 +4,6 @@ import { GameGrid, GameListRow } from "cards.slint";
 import { GameTile, DetailItem } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
 
-// Library: what you have actually played, and for how long.
-//
-// Everything here comes from local history — no algorithmic shelves.
-
 export struct PlayStat {
     id: string,
     name: string,
@@ -114,7 +110,6 @@ export component LibraryScreen inherits Rectangle {
                 padding: Space.xl;
                 spacing: Space.lg;
 
-                // --- recent ---------------------------------------------
                 if root.tab == 0 && root.recent.length == 0: EmptyState {
                     height: 220px;
                     title: "Nothing played yet";
@@ -127,7 +122,6 @@ export component LibraryScreen inherits Rectangle {
                     favorite(id) => { root.favorite(id); }
                 }
 
-                // --- favourites -------------------------------------------
                 if root.tab == 1 && root.favorites.length == 0: EmptyState {
                     height: 220px;
                     title: "No favourites";
@@ -140,7 +134,6 @@ export component LibraryScreen inherits Rectangle {
                     favorite(id) => { root.favorite(id); }
                 }
 
-                // --- stats --------------------------------------------------
                 if root.tab == 2: VerticalLayout {
                     spacing: Space.xl;
                     alignment: start;

@@ -33,8 +33,6 @@ pub async fn batch(client: &Client, user_ids: &[i64]) -> Result<Vec<User>> {
     let mut out = Vec::with_capacity(user_ids.len());
 
     for (i, chunk) in user_ids.chunks(BATCH).enumerate() {
-        // Breathe between chunks. Back-to-back batches are what trips the
-        // limiter in the first place.
         if i > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(600)).await;
         }
@@ -92,7 +90,6 @@ mod tests {
 
     #[test]
     fn account_age_parses_roblox_timestamps() {
-        // Roblox hands back RFC3339 with fractional seconds.
         let age = account_age_years("2006-02-27T21:06:40.3Z");
         assert!(age.is_some());
         assert!(age.unwrap() >= 19, "Roblox launched in 2006; got {age:?}");

@@ -70,15 +70,12 @@ impl Client {
 
     pub async fn set_cookie(&self, cookie: Option<String>) {
         *self.inner.cookie.write().await = cookie;
-        // The CSRF token is bound to the session; a new cookie invalidates it.
         *self.inner.csrf.write().await = None;
     }
 
     pub async fn has_cookie(&self) -> bool {
         self.inner.cookie.read().await.is_some()
     }
-
-    // --- verbs -------------------------------------------------------------
 
     pub async fn get_json<T: DeserializeOwned>(&self, url: &str) -> Result<T> {
         let bytes = self.send(Method::Get, url, None).await?;
@@ -91,7 +88,6 @@ impl Client {
         body: &serde_json::Value,
     ) -> Result<T> {
         let bytes = self.send(Method::Post, url, Some(body.clone())).await?;
-        // Some Roblox write endpoints answer 200 with an empty body.
         if bytes.is_empty() {
             return Ok(serde_json::from_str("null")?);
         }
@@ -169,8 +165,6 @@ impl Client {
         Ok(resp.bytes().await?.to_vec())
     }
 
-    // --- the actual request loop -------------------------------------------
-
     async fn send(
         &self,
         method: Method,
@@ -183,7 +177,6 @@ impl Client {
             let resp = self.build(method, url, body.as_ref()).await?.send().await?;
             let status = resp.status();
 
-            // CSRF: Roblox rejects the first write and hands back the token.
             if status == reqwest::StatusCode::FORBIDDEN {
                 let fresh = resp
                     .headers()
@@ -194,8 +187,6 @@ impl Client {
                 if let Some(token) = fresh {
                     let had_one = self.inner.csrf.read().await.is_some();
                     *self.inner.csrf.write().await = Some(token);
-                    // Retry once with the new token. If we already had a token
-                    // and still got 403, retrying again would loop forever.
                     if !had_one || attempt == 0 {
                         attempt += 1;
                         continue;

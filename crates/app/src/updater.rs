@@ -97,8 +97,6 @@ pub async fn check() -> Status {
             version: latest,
             url: asset.browser_download_url.clone(),
         },
-        // A release with no asset for this platform is not an update we can
-        // apply, so it is not offered.
         None => Status::UpToDate,
     }
 }
@@ -180,7 +178,6 @@ mod tests {
 
     #[test]
     fn an_unconfigured_build_says_so_instead_of_failing() {
-        // "failed" reads as a broken feature; this is just not set up yet.
         let s = Status::NotConfigured;
         assert!(s.message().contains("not set up"));
         assert!(!s.can_install());

@@ -68,7 +68,6 @@ impl Key {
     /// Linux evdev key code.
     #[cfg(unix)]
     pub fn evdev_code(self) -> u16 {
-        // Values from linux/input-event-codes.h.
         match self {
             Key::A => 30, Key::B => 48, Key::C => 46, Key::D => 32,
             Key::E => 18, Key::F => 33, Key::G => 34, Key::H => 35,
@@ -149,7 +148,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn evdev_codes_are_unique_and_nonzero_where_expected() {
-        // A duplicate code would silently make two keys the same key.
         let mut seen = HashSet::new();
         for k in Key::ALL {
             let code = k.evdev_code();
@@ -161,7 +159,6 @@ mod tests {
 
     #[test]
     fn keys_serialise_as_stable_snake_case() {
-        // Config files hold these; the spelling must not drift.
         assert_eq!(serde_json::to_string(&Key::Space).unwrap(), "\"space\"");
         assert_eq!(serde_json::to_string(&Key::F1).unwrap(), "\"f1\"");
         let k: Key = serde_json::from_str("\"w\"").unwrap();

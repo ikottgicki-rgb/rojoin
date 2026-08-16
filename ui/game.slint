@@ -4,13 +4,6 @@ import { GameGrid, ItemGrid } from "cards.slint";
 import { GameTile, GameDetailData, SubPlace, ServerRow, DetailItem } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
 
-// Game detail.
-//
-// The sub-place section is deliberately placed directly under the action bar
-// rather than buried in a tab. It is the reason this app exists for a lot of
-// games: launching the root place drops you in a lobby, and the thing you
-// actually wanted is a place down the list.
-
 component MetaCell inherits VerticalLayout {
     in property <string> label;
     in property <string> value;
@@ -118,7 +111,6 @@ component ServerCard inherits Rectangle {
         HorizontalLayout {
             spacing: Space.sm;
 
-            // Overlapping head shots of who is already in there.
             Rectangle {
                 width: 4 * 18px;
                 height: 24px;
@@ -174,8 +166,6 @@ component ServerCard inherits Rectangle {
             }
         }
 
-        // Capacity bar. Monochrome until nearly full, then accent — a signal,
-        // not decoration.
         Rectangle {
             height: 3px;
             background: Theme.bg_4;
@@ -237,7 +227,6 @@ export component GameScreen inherits Rectangle {
             alignment: start;
             spacing: 0;
 
-            // --- hero -------------------------------------------------------
             Rectangle {
                 height: 300px;
                 clip: true;
@@ -249,7 +238,6 @@ export component GameScreen inherits Rectangle {
                 }
             }
 
-            // --- identity + actions ------------------------------------------
             Rectangle {
                 background: Theme.bg_1;
                 VerticalLayout {
@@ -319,9 +307,6 @@ export component GameScreen inherits Rectangle {
                         Rectangle { horizontal-stretch: 1; }
                     }
 
-                    // --- action bar ---------------------------------------
-                    // Every control on this row is 36px tall. They were 38 /
-                    // 32 / 30 before, which read as three different sizes.
                     HorizontalLayout {
                         spacing: Space.sm;
                         alignment: start;
@@ -365,8 +350,6 @@ export component GameScreen inherits Rectangle {
                         IconBtn { glyph: "↗"; size_px: 36px; clicked => { root.open_browser(); } }
                     }
 
-                    // Launch failures used to be log-only, so a refused
-                    // account switch looked like nothing happened.
                     if root.launch_error != "": Rectangle {
                         background: Theme.bg_2;
                         border-radius: Theme.radius;
@@ -387,14 +370,11 @@ export component GameScreen inherits Rectangle {
             }
             Rectangle { height: Theme.hairline; background: Theme.line; }
 
-            // --- sub-places (the headline feature) ---------------------------
             if root.sub_places.length > 0: VerticalLayout {
                 padding: Space.xl;
                 padding-bottom: 0;
                 spacing: Space.md;
 
-                // Collapsed by default — most games have one place, and an
-                // always-open list pushed the real content down the page.
                 Rectangle {
                     height: 34px;
                     HorizontalLayout {
@@ -443,7 +423,6 @@ export component GameScreen inherits Rectangle {
                 }
             }
 
-            // --- tabs --------------------------------------------------------
             VerticalLayout {
                 padding: Space.xl;
                 spacing: Space.lg;
@@ -457,7 +436,6 @@ export component GameScreen inherits Rectangle {
                     }
                 }
 
-                // --- About ---------------------------------------------------
                 if root.tab == 0: VerticalLayout {
                     spacing: Space.lg;
                     alignment: start;
@@ -536,7 +514,6 @@ export component GameScreen inherits Rectangle {
                     }
                 }
 
-                // --- Servers -------------------------------------------------
                 if root.tab == 1: VerticalLayout {
                     spacing: Space.lg;
                     alignment: start;

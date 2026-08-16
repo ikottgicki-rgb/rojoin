@@ -55,26 +55,21 @@ fn run(cmd: &str, args: &[&str]) -> Option<String> {
 
 #[cfg(unix)]
 pub fn current() -> Focus {
-    // Hyprland
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
         if let Some(json) = run("hyprctl", &["activewindow", "-j"]) {
-            // Matching on the raw JSON avoids a parser for two string fields.
             return if looks_like_game(&json) { Focus::Game } else { Focus::Other };
         }
     }
 
-    // Sway
     if std::env::var_os("SWAYSOCK").is_some() {
         if let Some(json) = run("swaymsg", &["-t", "get_tree"]) {
             if let Some(idx) = json.find("\"focused\":true") {
-                // The focused node's app_id/class sits just before the flag.
                 let window = &json[idx.saturating_sub(400)..idx];
                 return if looks_like_game(window) { Focus::Game } else { Focus::Other };
             }
         }
     }
 
-    // X11
     if std::env::var_os("DISPLAY").is_some() {
         if let Some(root) = run("xprop", &["-root", "_NET_ACTIVE_WINDOW"]) {
             if let Some(id) = root.split_whitespace().last() {
@@ -160,8 +155,6 @@ mod tests {
 
     #[test]
     fn unknown_focus_allows_macros_rather_than_blocking_everything() {
-        // A gate that blocks on every unsupported compositor reads as "the
-        // whole feature is broken", which is worse than the odd stray press.
         assert!(Focus::Unknown.allows_macros());
         assert!(Focus::Game.allows_macros());
         assert!(!Focus::Other.allows_macros());

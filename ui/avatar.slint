@@ -3,14 +3,6 @@ import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, Spinner, BusySlot, EmptyS
 import { WearItem, DetailItem } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
 
-// Avatar editor.
-//
-// Scope, set deliberately: this edits items the user **already owns**. There is
-// no catalog, no prices, and nothing to buy.
-//
-// Wearing works by sending the complete worn list to Roblox, so the toggle is
-// optimistic locally and reconciled against whatever comes back.
-
 component ItemTile inherits Rectangle {
     in property <WearItem> item;
     callback clicked();
@@ -92,7 +84,6 @@ export component AvatarScreen inherits Rectangle {
     HorizontalLayout {
         spacing: 0;
 
-        // --- preview pane -------------------------------------------------
         Rectangle {
             width: 300px;
             background: Theme.bg_1;
@@ -165,7 +156,6 @@ export component AvatarScreen inherits Rectangle {
                     clicked => { root.save_outfit(); }
                 }
 
-                // --- currently worn ------------------------------------
                 if root.worn.length > 0: VerticalLayout {
                     spacing: Space.sm;
                     Text {
@@ -220,7 +210,6 @@ export component AvatarScreen inherits Rectangle {
         }
         Rectangle { width: Theme.hairline; background: Theme.line; }
 
-        // --- browse pane ----------------------------------------------------
         VerticalLayout {
             spacing: 0;
             horizontal-stretch: 1;
@@ -244,7 +233,6 @@ export component AvatarScreen inherits Rectangle {
             }
             Rectangle { height: Theme.hairline; background: Theme.line; }
 
-            // --- items -------------------------------------------------------
             if root.tab == 0: Rectangle {
                 vertical-stretch: 1;
                 VerticalLayout {
@@ -311,7 +299,6 @@ export component AvatarScreen inherits Rectangle {
                 }
             }
 
-            // --- outfits ------------------------------------------------------
             if root.tab == 1: Rectangle {
                 vertical-stretch: 1;
 

@@ -3,12 +3,6 @@ import { Btn, IconBtn, Chip, Segmented, Spinner, EmptyState, Badge } from "compo
 import { MacroRow, MacroStepRow } from "types.slint";
 import { ScrollView, ComboBox } from "std-widgets.slint";
 
-// Macro utilities.
-//
-// Every macro is a list of timed input steps, and every step is editable. The
-// bundled presets are starting points, not verified timings — the screen says
-// so rather than implying otherwise.
-
 component MacroCard inherits Rectangle {
     in property <MacroRow> entry;
     callback toggle_run();
@@ -68,7 +62,6 @@ component MacroCard inherits Rectangle {
             HorizontalLayout {
                 spacing: Space.sm;
 
-                // Hotkey chip doubles as the rebind control.
                 VerticalLayout {
                     alignment: center;
                     Rectangle {
@@ -162,7 +155,6 @@ export component MacrosScreen inherits Rectangle {
     VerticalLayout {
         spacing: 0;
 
-        // --- header --------------------------------------------------------
         Rectangle {
             height: 56px;
             background: Theme.bg_1;
@@ -191,7 +183,6 @@ export component MacrosScreen inherits Rectangle {
 
                 Rectangle { horizontal-stretch: 1; }
 
-                // Share macros. Icons only, per the rest of this screen.
                 VerticalLayout {
                     alignment: center;
                     HorizontalLayout {
@@ -233,7 +224,6 @@ export component MacrosScreen inherits Rectangle {
         }
         Rectangle { height: Theme.hairline; background: Theme.line; }
 
-        // --- permission gate ------------------------------------------------
         if !root.available: Rectangle {
             vertical-stretch: 1;
             VerticalLayout {
@@ -275,7 +265,6 @@ export component MacrosScreen inherits Rectangle {
             }
         }
 
-        // --- macro list -------------------------------------------------------
         if root.available: ScrollView {
             vertical-stretch: 1;
             VerticalLayout {
@@ -316,10 +305,6 @@ export component MacrosScreen inherits Rectangle {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Step editor
-// ---------------------------------------------------------------------------
 
 component NumField inherits Rectangle {
     in property <int> value;
@@ -386,7 +371,6 @@ export component StepEditor inherits Rectangle {
     width: 100%;
     height: 100%;
 
-    // Scrim: swallows clicks so nothing behind the modal reacts.
     Rectangle {
         width: 100%;
         height: 100%;
@@ -404,13 +388,11 @@ export component StepEditor inherits Rectangle {
         border-width: Theme.hairline;
         border-color: Theme.line_strong;
 
-        // Keeps clicks inside the panel from reaching the scrim.
         TouchArea {}
 
         VerticalLayout {
             spacing: 0;
 
-            // --- header ---------------------------------------------------
             Rectangle {
                 height: 52px;
                 HorizontalLayout {
@@ -439,7 +421,6 @@ export component StepEditor inherits Rectangle {
             }
             Rectangle { height: Theme.hairline; background: Theme.line; }
 
-            // --- top settings ----------------------------------------------
             Rectangle {
                 height: 60px;
                 HorizontalLayout {
@@ -517,7 +498,6 @@ export component StepEditor inherits Rectangle {
             }
             Rectangle { height: Theme.hairline; background: Theme.line; }
 
-            // --- steps -------------------------------------------------------
             ScrollView {
                 vertical-stretch: 1;
                 VerticalLayout {
@@ -617,7 +597,6 @@ export component StepEditor inherits Rectangle {
                 }
             }
 
-            // --- add step ------------------------------------------------------
             Rectangle { height: Theme.hairline; background: Theme.line; }
             Rectangle {
                 height: 52px;

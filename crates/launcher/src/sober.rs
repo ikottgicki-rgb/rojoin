@@ -45,19 +45,16 @@ pub fn launch_uri(uri: &str) -> Result<()> {
 
     let mut cmd = Command::new("xdg-open");
     cmd.arg(uri)
-        // See the module docs: inheriting a pipe here hangs Sober at startup.
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
-    // Our own session, so quitting RoJoin never takes the game down with it.
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
 
-    // The webview-era environment variables must never reach the game engine.
     cmd.env_remove("WEBKIT_DISABLE_DMABUF_RENDERER")
         .env_remove("WEBKIT_DISABLE_COMPOSITING_MODE")
         .env_remove("GSK_RENDERER");
@@ -78,17 +75,6 @@ pub fn data_dir() -> Option<std::path::PathBuf> {
         .join("data/sober");
     path.exists().then_some(path)
 }
-
-// ---------------------------------------------------------------------------
-// Account switching
-// ---------------------------------------------------------------------------
-//
-// Sober keeps its OWN session, so launching a `roblox://` link joins as
-// whoever Sober is signed into — not whoever RoJoin is showing. To join as the
-// selected account we rewrite Sober's cookie jar first.
-//
-// The jar is one line of `name=value; name=value; ...`, so only the
-// `.ROBLOSECURITY` field is replaced and everything else is preserved.
 
 const COOKIE_NAME: &str = ".ROBLOSECURITY";
 
@@ -172,12 +158,9 @@ pub fn set_cookie(cookie: &str) -> Result<bool> {
         None => pairs.push((COOKIE_NAME.to_string(), cookie.to_string())),
     }
 
-    // Keep a copy of the previous jar. This file is the user's live session,
-    // and clobbering it badly would sign them out of Roblox entirely.
     let backup = path.with_extension("rojoin-backup");
     let _ = std::fs::copy(&path, &backup);
 
-    // Atomic: a half-written cookie jar is a broken login.
     let tmp = path.with_extension("rojoin-tmp");
     std::fs::write(&tmp, join_jar(&pairs))
         .map_err(|e| Error::Launch(format!("could not stage Sober's cookies: {e}")))?;
@@ -205,8 +188,6 @@ mod tests {
 
     #[test]
     fn replacing_the_cookie_preserves_every_other_field() {
-        // Sober stores session state in the same jar; dropping any of it
-        // would break its login in ways unrelated to the account swap.
         let mut pairs = split_jar(JAR);
         pairs.iter_mut().find(|(k, _)| k == COOKIE_NAME).unwrap().1 = "NEW".into();
         let out = join_jar(&pairs);
@@ -220,7 +201,6 @@ mod tests {
 
     #[test]
     fn values_containing_equals_survive_a_round_trip() {
-        // GuestData=UserID=-1 has two '='; a naive split would mangle it.
         let pairs = split_jar("GuestData=UserID=-634510552");
         assert_eq!(pairs[0].0, "GuestData");
         assert_eq!(pairs[0].1, "UserID=-634510552");
@@ -229,7 +209,6 @@ mod tests {
 
     #[test]
     fn an_empty_cookie_is_refused() {
-        // Writing an empty value would sign the user out of Roblox.
         assert!(set_cookie("").is_err());
     }
 }

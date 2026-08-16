@@ -1,9 +1,6 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Btn, IconBtn, Badge, Avatar, Spinner, BusySlot } from "components.slint";
 
-// The navigation shell: sidebar, top bar, and the sliding active-item pill.
-// Screens plug into the content host in app.slint.
-
 export struct NavEntry {
     id: int,
     label: string,
@@ -18,8 +15,6 @@ component NavItem inherits Rectangle {
 
     height: 36px;
 
-    // No background of its own — the sliding pill in Sidebar draws it, so the
-    // highlight animates between items instead of blinking on and off.
     Rectangle {
         width: 100%;
         height: 100%;
@@ -87,8 +82,6 @@ export component Sidebar inherits Rectangle {
         Rectangle {
             vertical-stretch: 1;
 
-            // The sliding pill. One rectangle that animates to the active row,
-            // rather than each row toggling its own background.
             if root.active >= 0: Rectangle {
                 x: Space.sm;
                 y: root.active * 36px;
@@ -98,7 +91,6 @@ export component Sidebar inherits Rectangle {
                 border-radius: Theme.radius;
                 animate y { duration: Motion.normal; easing: Motion.ease; }
 
-                // Accent edge marks the active section.
                 Rectangle {
                     x: 0;
                     width: 2px;
@@ -174,8 +166,6 @@ export component TopBar inherits Rectangle {
                 glyph: "←";
                 size_px: 30px;
                 clicked => { root.back(); }
-                // Kept mounted but inert so the search field never shifts
-                // sideways as you navigate.
                 opacity: root.can_back ? 1.0 : 0.0;
                 animate opacity { duration: Motion.fast; easing: Motion.ease; }
             }
@@ -219,9 +209,6 @@ export component TopBar inherits Rectangle {
                             accepted => { root.submit(self.text); }
                             edited => { root.live_search(self.text); }
                         }
-                        // x/width are explicit: a Text placed directly in a
-                        // Rectangle is centred by default, which makes a
-                        // placeholder sit in the middle of the field.
                         if root.query == "": Text {
                             x: 0;
                             width: 100%;

@@ -30,9 +30,6 @@ impl Watcher {
 
     /// Poll forever. Spawned on the tokio runtime; ends when the app does.
     pub async fn run(self) {
-        // What each watched friend was doing last time round. The first sweep
-        // only records — otherwise every already-in-game friend would fire a
-        // notification the moment RoJoin starts.
         let mut previous: HashMap<i64, bool> = HashMap::new();
         let mut previous_requests: Option<i64> = None;
 
@@ -69,13 +66,10 @@ impl Watcher {
             return;
         };
 
-        // Resolve names only for people who just started playing.
         let mut newly_playing = Vec::new();
 
         for p in &presences {
             let in_game = p.kind == friends::PresenceKind::InGame;
-            // Per-friend seen check, not a global "first sweep" flag: newly
-            // subscribing to someone already in a game must not fire.
             let was = previous.insert(p.user_id, in_game);
             if in_game && was == Some(false) {
                 newly_playing.push(p.clone());
@@ -111,7 +105,6 @@ impl Watcher {
         };
 
         match *previous {
-            // First reading only records; it is not news.
             None => {}
             Some(before) if count > before => {
                 let delta = count - before;
@@ -132,7 +125,6 @@ impl Watcher {
 
 #[cfg(unix)]
 fn show(summary: &str, body: &str) {
-    // The DBus call blocks, so it must not run on a tokio worker thread.
     let summary = summary.to_string();
     let body = body.to_string();
     std::thread::spawn(move || {
@@ -149,7 +141,5 @@ fn show(summary: &str, body: &str) {
 
 #[cfg(not(unix))]
 fn show(summary: &str, body: &str) {
-    // Windows toasts need a registered AppUserModelID to be reliable; until
-    // that exists, log rather than silently doing nothing.
     tracing::info!(summary, body, "notification (no Windows backend yet)");
 }

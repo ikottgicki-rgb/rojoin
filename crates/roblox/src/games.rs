@@ -98,8 +98,6 @@ pub async fn places(client: &Client, universe_id: i64) -> Result<Vec<Place>> {
             Some(c) if !c.is_empty() => cursor = Some(c),
             _ => break,
         }
-        // A universe with more than a few hundred places is a data error, not
-        // a thing to paginate forever.
         if out.len() >= 500 {
             break;
         }
@@ -172,8 +170,6 @@ pub async fn group_games(client: &Client, group_id: i64, limit: u32) -> Result<V
     Ok(page.data)
 }
 
-// --- favourites -------------------------------------------------------------
-
 pub async fn is_favorited(client: &Client, universe_id: i64) -> Result<bool> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -191,8 +187,6 @@ pub async fn set_favorited(client: &Client, universe_id: i64, favorited: bool) -
     let _: serde_json::Value = client.post_json(&url, &body).await?;
     Ok(())
 }
-
-// --- helpers ----------------------------------------------------------------
 
 fn join_ids(ids: &[i64]) -> String {
     ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
@@ -218,7 +212,6 @@ mod tests {
 
     #[test]
     fn server_limits_snap_to_allowed_values() {
-        // Roblox rejects anything outside {10,25,50,100} with a 400.
         assert_eq!(nearest_allowed_limit(1), 10);
         assert_eq!(nearest_allowed_limit(20), 25);
         assert_eq!(nearest_allowed_limit(30), 25);

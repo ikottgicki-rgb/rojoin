@@ -240,7 +240,6 @@ impl MacroBundle {
                 mac.id = format!("{base}-{n}");
                 mac.name = format!("{} ({n})", mac.name);
             }
-            // An imported hotkey must not silently steal one already in use.
             if let Some(k) = mac.hotkey {
                 if existing.iter().any(|m| m.hotkey == Some(k)) {
                     mac.hotkey = None;
@@ -303,10 +302,8 @@ impl Engine {
         std::thread::spawn(move || {
             play(&backend, &mac, &stop);
 
-            // A freeze must never outlive the macro that started it.
             process::resume_all();
 
-            // Always release whatever the macro was holding, however it ended.
             if let Ok(mut b) = backend.lock() {
                 for key in mac.held_keys() {
                     let _ = b.key_up(key);
@@ -340,8 +337,6 @@ impl Engine {
                 flag.store(true, Ordering::SeqCst);
             }
         }
-        // The panic key must un-freeze the game immediately, not on the next
-        // scheduling tick of whichever thread happened to freeze it.
         process::resume_all();
     }
 }
@@ -452,7 +447,6 @@ mod tests {
 
     #[test]
     fn held_keys_tracks_unreleased_presses() {
-        // W is pressed and never released; space is balanced.
         let m = mac_with(vec![
             Step::KeyDown { key: Key::W },
             Step::KeyDown { key: Key::Space },
@@ -499,7 +493,6 @@ mod tests {
 
     #[test]
     fn a_macro_of_only_waits_is_not_effective() {
-        // Would spin a thread forever doing nothing.
         let m = mac_with(vec![Step::Wait { ms: 100 }]);
         assert!(!m.is_effective());
 
@@ -536,7 +529,6 @@ mod tests {
 
     #[test]
     fn importing_a_colliding_id_renames_instead_of_overwriting() {
-        // Overwriting would silently destroy a macro the user had tuned.
         let mut existing = vec![Macro { id: "freeze".into(), name: "Freeze".into(), ..Default::default() }];
         let incoming = MacroBundle::new(vec![Macro {
             id: "freeze".into(),
