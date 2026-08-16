@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Avatar, Btn, IconBtn, Chip, Badge, Spinner, BusySlot, Bell, EmptyState, MetaStat } from "components.slint";
+import { Avatar, Btn, IconBtn, Chip, Badge, Spinner, BusySlot, Bell, EmptyState, MetaStat, Texture } from "components.slint";
 import { FriendRow, DetailItem } from "types.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -221,6 +221,8 @@ export component FriendsScreen inherits Rectangle {
     callback context_menu(string, length, length);
 
     background: Theme.bg_0;
+
+    Texture { width: 100%; height: 100%; }
 
     VerticalLayout {
         spacing: 0;

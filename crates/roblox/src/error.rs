@@ -18,6 +18,12 @@ pub enum Error {
     #[error("rate limited")]
     RateLimited,
 
+    /// Roblox wants a captcha (Arkose/FunCaptcha) solved before it will accept
+    /// this write. There is no headless answer to this — the action has to be
+    /// completed in a browser — so it is a distinct state, not a generic error.
+    #[error("{0}")]
+    Challenge(String),
+
     #[error("roblox: {0}")]
     Api(String),
 }

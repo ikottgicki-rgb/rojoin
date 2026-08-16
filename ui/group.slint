@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Thumb, Avatar, Btn, IconBtn, Skeleton, EmptyState, MetaStat } from "components.slint";
+import { Thumb, Avatar, Btn, IconBtn, Skeleton, EmptyState, MetaStat, Texture } from "components.slint";
 import { GameGrid } from "cards.slint";
 import { GameTile } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -35,6 +35,8 @@ export component GroupScreen inherits Rectangle {
     callback copy_id();
 
     background: Theme.bg_0;
+
+    Texture { width: 100%; height: 100%; }
 
     if root.loading: VerticalLayout {
         padding: Space.xl;

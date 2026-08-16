@@ -333,3 +333,65 @@ export component MetaStat inherits HorizontalLayout {
         vertical-alignment: center;
     }
 }
+
+/// A brief confirmation that floats over the bottom of the window.
+///
+/// Driven by a monotonically increasing `nonce` rather than a bool: copying
+/// twice in a row must replay the animation, and re-assigning the same text
+/// would not retrigger it.
+export component Toast inherits Rectangle {
+    in property <string> text;
+    in property <int> nonce: 0;
+
+    property <int> seen: 0;
+    property <bool> showing: false;
+
+    changed nonce => {
+        if (root.nonce != root.seen) {
+            root.seen = root.nonce;
+            root.showing = true;
+            hide.restart();
+        }
+    }
+
+    hide := Timer {
+        interval: 1400ms;
+        running: root.showing;
+        triggered() => {
+            root.showing = false;
+            self.running = false;
+        }
+    }
+
+    visible: root.opacity > 0.01;
+    opacity: root.showing ? 1.0 : 0.0;
+    animate opacity { duration: Motion.normal; easing: Motion.ease; }
+
+    height: 34px;
+    width: label.preferred-width + Space.xl * 2;
+    background: Theme.bg_4;
+    border-radius: Theme.radius;
+    border-width: Theme.hairline;
+    border-color: Theme.line_strong;
+
+    label := Text {
+        text: root.text;
+        color: Theme.text;
+        font-size: Type.body;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+
+/// A barely-there diagonal hatch for large empty areas.
+///
+/// Tiled from an 8x8 source whose line wraps on both axes, so it repeats
+/// seamlessly at any size. Colorised from the text token rather than baked in,
+/// which keeps it correct when the theme flips to light.
+export component Texture inherits Image {
+    source: @image-url("texture.png");
+    horizontal-tiling: repeat;
+    vertical-tiling: repeat;
+    colorize: Theme.text;
+    opacity: 0.035;
+}

@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Btn, IconBtn, Segmented, Spinner, EmptyState } from "components.slint";
+import { Btn, IconBtn, Segmented, Spinner, EmptyState, Toast } from "components.slint";
 import { GameTile, WearItem, SubPlace, ServerRow, DetailItem, GameDetailData, FriendRow, GroupRow, MacroRow, MacroStepRow } from "types.slint";
 import { Sidebar, TopBar, NavEntry, ExpiredBanner, AccountMismatchBanner } from "shell.slint";
 import { SignInScreen, SignInPhase } from "signin.slint";
@@ -132,6 +132,8 @@ export component MainWindow inherits Window {
     callback copy_link();
     callback copy_id();
     callback copy_code();
+    in property <string> toast_text;
+    in property <int> toast_nonce: 0;
     in property <bool> code_copied: false;
     callback inspect_badge(string);
     callback make_shortcut();
@@ -638,4 +640,13 @@ export component MainWindow inherits Window {
             reset => { root.editor_reset(); }
         }
     }
+
+    // Last child so it paints over every screen, and centred near the bottom.
+    Toast {
+        x: (parent.width - self.width) / 2;
+        y: parent.height - self.height - Space.xxl;
+        text: root.toast_text;
+        nonce: root.toast_nonce;
+    }
+
 }

@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, Spinner, EmptyState, MetaStat, Skeleton } from "components.slint";
+import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, Spinner, EmptyState, MetaStat, Skeleton, Texture } from "components.slint";
 import { GameGrid, ItemGrid } from "cards.slint";
 import { GameTile, DetailItem, GroupRow } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -66,6 +66,8 @@ export component ProfileScreen inherits Rectangle {
     callback open_game(string);
 
     background: Theme.bg_0;
+
+    Texture { width: 100%; height: 100%; }
 
     if root.loading: VerticalLayout {
         padding: Space.xl;

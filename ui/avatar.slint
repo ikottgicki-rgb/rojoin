@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, Spinner, BusySlot, EmptyState, Skeleton } from "components.slint";
+import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, Spinner, BusySlot, EmptyState, Skeleton, Texture } from "components.slint";
 import { WearItem, DetailItem } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
 
@@ -80,6 +80,8 @@ export component AvatarScreen inherits Rectangle {
     callback refresh();
 
     background: Theme.bg_0;
+
+    Texture { width: 100%; height: 100%; }
 
     HorizontalLayout {
         spacing: 0;

@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Avatar, Btn, IconBtn, Chip, Segmented, Badge, EmptyState, Spinner, BusySlot } from "components.slint";
+import { Avatar, Btn, IconBtn, Chip, Segmented, Badge, EmptyState, Spinner, BusySlot, Texture } from "components.slint";
 import { DetailItem } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
 
@@ -185,6 +185,8 @@ export component SettingsScreen inherits Rectangle {
     callback toggle_home_section(int);
 
     background: Theme.bg_0;
+
+    Texture { width: 100%; height: 100%; }
 
     VerticalLayout {
         spacing: 0;

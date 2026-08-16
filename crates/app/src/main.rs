@@ -1139,7 +1139,7 @@ fn wire_nav(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
             if code.is_empty() {
                 return;
             }
-            copy_to_clipboard(&code);
+            copy_with_toast(&ui, &code, "code");
             ui.set_code_copied(true);
         });
     }
@@ -1149,7 +1149,7 @@ fn wire_nav(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
             let ui = weak.unwrap();
             let url = current_url(&ui);
             if !url.is_empty() {
-                copy_to_clipboard(&url);
+                copy_with_toast(&ui, &url, "link");
             }
         });
     }
@@ -1227,7 +1227,7 @@ fn wire_nav(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
                 _ => String::new(),
             };
             if !id.is_empty() {
-                copy_to_clipboard(&id);
+                copy_with_toast(&ui, &id, "ID");
             }
         });
     }
@@ -1266,6 +1266,18 @@ fn current_url(ui: &MainWindow) -> String {
         }
         _ => String::new(),
     }
+}
+
+/// Copy, and say so. Every call site wants the confirmation, so it lives here
+/// rather than being repeated (and eventually forgotten) at each one.
+fn copy_with_toast(ui: &MainWindow, text: &str, what: &str) {
+    copy_to_clipboard(text);
+    toast(ui, &format!("Copied {what}"));
+}
+
+fn toast(ui: &MainWindow, message: &str) {
+    ui.set_toast_text(message.into());
+    ui.set_toast_nonce(ui.get_toast_nonce().wrapping_add(1));
 }
 
 fn copy_to_clipboard(text: &str) {

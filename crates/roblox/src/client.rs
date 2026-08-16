@@ -192,7 +192,40 @@ impl Client {
                         continue;
                     }
                 }
-                return Err(Error::Api("forbidden".into()));
+
+                // A 403 that is not a CSRF problem is usually a captcha
+                // challenge. Reporting a bare "forbidden" here hid the reason
+                // group joins were failing, so keep what Roblox actually said.
+                let challenged = resp.headers().contains_key("rblx-challenge-id")
+                    || resp.headers().contains_key("rblx-challenge-type");
+                let challenge_type = resp
+                    .headers()
+                    .get("rblx-challenge-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("none")
+                    .to_owned();
+                let text = resp.text().await.unwrap_or_default();
+
+                // Writes that Roblox gates (join group, add friend, follow) all
+                // land here. Log the whole picture once, so diagnosing the next
+                // one does not need another round of guessing.
+                tracing::warn!(
+                    url,
+                    challenged,
+                    challenge_type,
+                    body = %text.chars().take(300).collect::<String>(),
+                    "403 that was not a CSRF retry"
+                );
+
+                return Err(if challenged {
+                    Error::Challenge(
+                        "Roblox wants a captcha for this. Do it on the website once, \
+                         then it will work here."
+                            .into(),
+                    )
+                } else {
+                    Error::Api(first_message(&text))
+                });
             }
 
             if status == reqwest::StatusCode::UNAUTHORIZED {

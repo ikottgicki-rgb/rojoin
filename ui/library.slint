@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Btn, IconBtn, Segmented, EmptyState, MetaStat } from "components.slint";
+import { Btn, IconBtn, Segmented, EmptyState, MetaStat, Texture } from "components.slint";
 import { GameGrid, GameListRow } from "cards.slint";
 import { GameTile, DetailItem } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -71,6 +71,8 @@ export component LibraryScreen inherits Rectangle {
     callback favorite(string);
 
     background: Theme.bg_0;
+
+    Texture { width: 100%; height: 100%; }
 
     VerticalLayout {
         spacing: 0;

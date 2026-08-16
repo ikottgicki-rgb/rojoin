@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Btn, IconBtn, Chip, Segmented, Spinner, EmptyState, Badge } from "components.slint";
+import { Btn, IconBtn, Chip, Segmented, Spinner, EmptyState, Badge, Texture } from "components.slint";
 import { MacroRow, MacroStepRow } from "types.slint";
 import { ScrollView, ComboBox } from "std-widgets.slint";
 
@@ -151,6 +151,8 @@ export component MacrosScreen inherits Rectangle {
     callback export_macros();
 
     background: Theme.bg_0;
+
+    Texture { width: 100%; height: 100%; }
 
     VerticalLayout {
         spacing: 0;
