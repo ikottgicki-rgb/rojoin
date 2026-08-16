@@ -32,6 +32,7 @@ export component GroupScreen inherits Rectangle {
     callback open_game(string);
     callback open_browser();
     callback copy_link();
+    callback copy_id();
 
     background: Theme.bg_0;
 
@@ -153,6 +154,7 @@ export component GroupScreen inherits Rectangle {
                         }
 
                         IconBtn { glyph: "⧉"; clicked => { root.copy_link(); } }
+                        IconBtn { glyph: "#"; clicked => { root.copy_id(); } }
                         IconBtn { glyph: "↗"; clicked => { root.open_browser(); } }
                     }
                 }

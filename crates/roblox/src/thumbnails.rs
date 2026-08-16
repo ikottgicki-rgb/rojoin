@@ -99,6 +99,22 @@ pub async fn outfits(client: &Client, outfit_ids: &[i64]) -> Result<HashMap<i64,
     .await
 }
 
+/// Badge icons, keyed by badge id.
+pub async fn badges(client: &Client, badge_ids: &[i64]) -> Result<HashMap<i64, String>> {
+    batch(client, badge_ids, |ids| {
+        format!("{THUMBS}/badges/icons?badgeIds={ids}&size=150x150&format=Png&isCircular=false")
+    })
+    .await
+}
+
+/// Game-pass icons, keyed by pass id.
+pub async fn game_passes(client: &Client, pass_ids: &[i64]) -> Result<HashMap<i64, String>> {
+    batch(client, pass_ids, |ids| {
+        format!("{THUMBS}/game-passes?gamePassIds={ids}&size=150x150&format=Png&isCircular=false")
+    })
+    .await
+}
+
 pub async fn assets(client: &Client, asset_ids: &[i64]) -> Result<HashMap<i64, String>> {
     batch(client, asset_ids, |ids| {
         format!("{THUMBS}/assets?assetIds={ids}&size=420x420&format=Png&isCircular=false")

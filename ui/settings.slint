@@ -107,6 +107,21 @@ export component SettingsScreen inherits Rectangle {
     in property <string> update_status;
     in property <bool> checking_update: false;
 
+    // --- macros ---
+    in property <bool> macros_enabled: true;
+    in property <bool> only_when_focused: true;
+    in property <bool> focus_detectable: true;
+    in property <string> panic_key;
+    in property <bool> binding_panic: false;
+    in property <string> macro_backend;
+    // --- interface ---
+    in property <float> ui_scale: 1.0;
+    in property <[string]> sections;
+    in property <int> startup_section: 0;
+    in property <int> presence_secs: 60;
+    in property <bool> confirm_destructive: true;
+    in property <string> cache_summary;
+
     callback switch_account(string);
     callback remove_account(string);
     callback add_account();
@@ -117,8 +132,14 @@ export component SettingsScreen inherits Rectangle {
     callback unsub_game(string);
     callback open_data_dir();
     callback check_update();
-    callback open_credit();
-    callback open_source();
+    callback set_macros_enabled(bool);
+    callback set_only_when_focused(bool);
+    callback bind_panic_key();
+    callback set_ui_scale(float);
+    callback set_startup_section(int);
+    callback set_presence_secs(int);
+    callback set_confirm_destructive(bool);
+    callback clear_caches();
 
     background: Theme.bg_0;
 
@@ -213,7 +234,6 @@ export component SettingsScreen inherits Rectangle {
 
                     Row {
                         title: "Add another account";
-                        hint: "Signs in through your browser, same as the first time.";
                         VerticalLayout {
                             alignment: center;
                             Btn { label: "Add"; primary: true; clicked => { root.add_account(); } }
@@ -238,7 +258,6 @@ export component SettingsScreen inherits Rectangle {
                     title: "NOTIFICATIONS";
                     Row {
                         title: "Friend requests";
-                        hint: "Notify when someone sends you a request.";
                         VerticalLayout {
                             alignment: center;
                             Toggle {
@@ -310,7 +329,6 @@ export component SettingsScreen inherits Rectangle {
                     title: "SYSTEM";
                     Row {
                         title: "Open roblox:// links with RoJoin";
-                        hint: "Roblox links from your browser launch through RoJoin.";
                         VerticalLayout {
                             alignment: center;
                             Toggle {
@@ -321,10 +339,143 @@ export component SettingsScreen inherits Rectangle {
                     }
                     Row {
                         title: "Data folder";
-                        hint: root.data_dir;
                         VerticalLayout {
                             alignment: center;
                             Btn { label: "Open"; clicked => { root.open_data_dir(); } }
+                        }
+                    }
+                }
+
+                // --- macros ---------------------------------------------
+                Card {
+                    title: "MACROS";
+                    Row {
+                        title: "Macros enabled";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.macros_enabled;
+                                toggled => { root.set_macros_enabled(!root.macros_enabled); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Only while Roblox is focused";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.only_when_focused && root.focus_detectable;
+                                enabled: root.focus_detectable;
+                                toggled => { root.set_only_when_focused(!root.only_when_focused); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Panic key";
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 110px;
+                                height: 28px;
+                                background: root.binding_panic ? Theme.accent_soft : Theme.bg_2;
+                                border-radius: Theme.radius;
+                                border-width: Theme.hairline;
+                                border-color: root.binding_panic ? Theme.accent : Theme.line;
+                                animate background, border-color { duration: Motion.fast; easing: Motion.ease; }
+                                Text {
+                                    text: root.binding_panic ? "Press a key…" : root.panic_key;
+                                    color: root.binding_panic ? Theme.accent : Theme.text;
+                                    font-size: Type.caption;
+                                    font-weight: Type.w_medium;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: center;
+                                }
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.bind_panic_key(); }
+                                }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Input backend";
+                    }
+                }
+
+                // --- interface -------------------------------------------
+                Card {
+                    title: "INTERFACE";
+                    Row {
+                        title: "Interface size";
+                        VerticalLayout {
+                            alignment: center;
+                            HorizontalLayout {
+                                spacing: Space.xs;
+                                for opt[i] in [
+                                    { label: "Small", value: 0.9 },
+                                    { label: "Normal", value: 1.0 },
+                                    { label: "Large", value: 1.15 },
+                                    { label: "Larger", value: 1.3 },
+                                ]: Chip {
+                                    label: opt.label;
+                                    // Float comparison with a tolerance; exact
+                                    // equality on a persisted float is fragile.
+                                    selected: Math.abs(root.ui_scale - opt.value) < 0.02;
+                                    clicked => { root.set_ui_scale(opt.value); }
+                                }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Open on launch";
+                        VerticalLayout {
+                            alignment: center;
+                            Segmented {
+                                options: root.sections;
+                                current: root.startup_section;
+                                changed(i) => { root.set_startup_section(i); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Confirm before destructive actions";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.confirm_destructive;
+                                toggled => { root.set_confirm_destructive(!root.confirm_destructive); }
+                            }
+                        }
+                    }
+                }
+
+                // --- network ---------------------------------------------
+                Card {
+                    title: "NETWORK";
+                    Row {
+                        title: "Friend refresh";
+                        VerticalLayout {
+                            alignment: center;
+                            HorizontalLayout {
+                                spacing: Space.xs;
+                                for opt[i] in [
+                                    { label: "30s", value: 30 },
+                                    { label: "1m", value: 60 },
+                                    { label: "2m", value: 120 },
+                                    { label: "5m", value: 300 },
+                                ]: Chip {
+                                    label: opt.label;
+                                    selected: root.presence_secs == opt.value;
+                                    clicked => { root.set_presence_secs(opt.value); }
+                                }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Cached data";
+                        VerticalLayout {
+                            alignment: center;
+                            Btn { label: "Clear"; clicked => { root.clear_caches(); } }
                         }
                     }
                 }
@@ -352,14 +503,6 @@ export component SettingsScreen inherits Rectangle {
                                     clicked => { root.check_update(); }
                                 }
                             }
-                        }
-                    }
-                    Row {
-                        title: "Macro utilities";
-                        hint: "An independent implementation, inspired by Spencer Macro Utilities. No shared code.";
-                        VerticalLayout {
-                            alignment: center;
-                            Btn { label: "Credit"; clicked => { root.open_credit(); } }
                         }
                     }
                 }

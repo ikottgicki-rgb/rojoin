@@ -76,6 +76,9 @@ pub(crate) struct App {
     bridge: Mutex<Option<Arc<Bridge>>>,
     /// Guards against spawning a second presence watcher on account switch.
     watching: std::sync::atomic::AtomicBool,
+    /// True while a friend-request accept/decline is in flight. Roblox
+    /// rate-limits these hard, so they are serialised.
+    request_busy: std::sync::atomic::AtomicBool,
     /// Held so the listener threads live as long as the app does.
     hotkeys: Mutex<Option<rojoin_macro::hotkeys::Listener>>,
     /// Usernames and head-shot URLs resolved once and kept forever.
@@ -92,6 +95,8 @@ pub(crate) struct App {
     /// True while the editor is waiting for a key to bind. The hotkey listener
     /// consumes the next press instead of firing macros.
     capturing: std::sync::atomic::AtomicBool,
+    /// Same, for the panic key in Settings.
+    binding_panic: std::sync::atomic::AtomicBool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -123,11 +128,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         macros: Mutex::new(Vec::new()),
         bridge: Mutex::new(None),
         watching: std::sync::atomic::AtomicBool::new(false),
+        request_busy: std::sync::atomic::AtomicBool::new(false),
         hotkeys: Mutex::new(None),
         names: Mutex::new(rojoin_store::NameCache::load()),
-        handled_requests: Mutex::new(Default::default()),
+        handled_requests: Mutex::new(
+            Config::load().settings.handled_requests.iter().cloned().collect(),
+        ),
         editing: Mutex::new(None),
         capturing: std::sync::atomic::AtomicBool::new(false),
+        binding_panic: std::sync::atomic::AtomicBool::new(false),
     });
     *app.bridge.lock().unwrap() = Some(bridge.clone());
 
@@ -156,6 +165,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wire_avatar(&ui, &app, &bridge, &imgs);
     wire_macros(&ui, &app);
     wire_settings(&ui, &app, &bridge, &imgs);
+    wire_more_settings(&ui, &app, &imgs);
+    wire_home(&ui, &app, &bridge, &imgs);
 
     #[cfg(debug_assertions)]
     let demo_mode = demo::enabled();
@@ -254,7 +265,20 @@ fn enter_app(
     // Home is what you are looking at, so it loads immediately. The rest are
     // staggered: firing four multi-request loads at once is what earned a
     // string of 429s from users.roblox.com on the very first run.
+    ui.set_section(
+        app.config
+            .lock()
+            .unwrap()
+            .settings
+            .startup_section
+            .clamp(0, NAV.len() as i32 - 1),
+    );
+
+    check_client_account(ui, app, bridge);
+
+    apply_home_sections(ui, app);
     load_home(ui, app, bridge, imgs);
+    load_pinned(ui, app, bridge, imgs);
     render_library(ui, app);
     render_settings(ui, app);
 
@@ -304,6 +328,48 @@ fn stagger(
 thread_local! {
     static STAGGER_TIMERS: std::cell::RefCell<Vec<slint::Timer>> =
         const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Warn when the Roblox client is signed into a different account.
+///
+/// Launching rewrites the client's session, so silently swapping it out from
+/// under someone is the kind of surprise worth pre-empting.
+fn check_client_account(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
+    ui.set_account_mismatch(false);
+
+    let Some(mine) = app
+        .config
+        .lock()
+        .unwrap()
+        .active_account
+        .clone()
+        .and_then(|id| secrets::load(&id))
+    else {
+        return;
+    };
+
+    let Some(theirs) = rojoin_launcher::sober::read_cookie() else { return };
+    if theirs == mine {
+        return;
+    }
+
+    // Different session — resolve whose it is so the notice can name them
+    // rather than saying "a different account".
+    bridge.call_res(
+        move || async move {
+            let probe = Client::new()?;
+            probe.set_cookie(Some(theirs)).await;
+            users::authenticated(&probe).await
+        },
+        move |ui, result| match result {
+            Ok(who) => {
+                ui.set_client_account(who.display_name.into());
+                ui.set_account_mismatch(true);
+            }
+            // An unreadable client session is not worth nagging about.
+            Err(e) => tracing::debug!(error = %e, "could not identify the client's account"),
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -565,28 +631,17 @@ fn respond_to_request(
         tracing::error!(%id, "friend request has an unparseable user id");
         return;
     };
-    tracing::info!(user_id, accept, "responding to friend request");
 
-    // Drop the row immediately. Roblox keeps returning a handled request for
-    // a while, so waiting for the refetch left it sitting there looking as if
-    // the click had done nothing.
-    {
-        use slint::Model;
-        let model = ui.get_requests_list();
-        if let Some(idx) = (0..model.row_count()).find(|i| {
-            model.row_data(*i).map(|r| r.id == id).unwrap_or(false)
-        }) {
-            let kept: Vec<DetailItem> = model
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| *i != idx)
-                .map(|(_, r)| r)
-                .collect();
-            let remaining = kept.len() as i32;
-            ui.set_requests_list(ad::model(kept));
-            ui.set_friend_requests(remaining);
-        }
+    // One at a time. Roblox rate-limits these hard, and firing several at once
+    // got every one of them 429'd — which looked exactly like the buttons
+    // doing nothing.
+    if app.request_busy.swap(true, Ordering::SeqCst) {
+        ui.set_request_status("One at a time — still working on the last one.".into());
+        return;
     }
+
+    tracing::info!(user_id, accept, "responding to friend request");
+    ui.set_request_status(if accept { "Accepting…".into() } else { "Declining…".into() });
 
     let client = app.client.clone();
     let app2 = app.clone();
@@ -595,26 +650,72 @@ fn respond_to_request(
 
     bridge.call_res(
         move || async move {
-            if accept {
+            let r = if accept {
                 friends::accept(&client, user_id).await
             } else {
                 friends::decline(&client, user_id).await
-            }
+            };
+            // Roblox counts these against a tight window; a pause here is the
+            // difference between the next click working and being throttled.
+            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            r
         },
         move |ui, result| {
+            app2.request_busy.store(false, Ordering::SeqCst);
+
             match result {
-                // Re-fetch rather than mutating locally: accepting changes both
-                // the request list and the roster, and the server is the truth.
                 Ok(()) => {
                     tracing::info!(user_id, "friend request handled");
-                    app2.handled_requests.lock().unwrap().insert(user_id.to_string());
+                    ui.set_request_status("".into());
+
+                    // Only hide it now: the request is genuinely gone
+                    // server-side. Roblox keeps listing it for a while, so
+                    // remember it and filter it out of every refetch.
+                    {
+                        let key = user_id.to_string();
+                        app2.handled_requests.lock().unwrap().insert(key.clone());
+                        let mut cfg = app2.config.lock().unwrap();
+                        if !cfg.settings.handled_requests.contains(&key) {
+                            cfg.settings.handled_requests.push(key);
+                            let len = cfg.settings.handled_requests.len();
+                            if len > 200 {
+                                cfg.settings.handled_requests.drain(0..len - 200);
+                            }
+                            let _ = cfg.save();
+                        }
+                    }
+
+                    drop_request_row(&ui, user_id);
                     load_friends(&ui, &app2, &bridge2, &imgs2);
                 }
-                Err(e) => bridge::report(&ui, e),
+                Err(rojoin_roblox::Error::RateLimited) => {
+                    // Say so, rather than hiding the row and letting the
+                    // refetch put it back — that read as "the button is broken".
+                    ui.set_request_status(
+                        "Roblox is rate-limiting friend requests. Wait a moment and try again."
+                            .into(),
+                    );
+                }
+                Err(e) => {
+                    ui.set_request_status(format!("Could not do that: {e}").into());
+                    bridge::report(&ui, e);
+                }
             }
         },
     );
 }
+
+/// Remove a handled request from the visible list.
+fn drop_request_row(ui: &MainWindow, user_id: i64) {
+    use slint::Model;
+    let model = ui.get_requests_list();
+    let key = user_id.to_string();
+    let kept: Vec<DetailItem> = model.iter().filter(|r| r.id != key).collect();
+    let remaining = kept.len() as i32;
+    ui.set_requests_list(ad::model(kept));
+    ui.set_friend_requests(remaining);
+}
+
 
 struct FriendsLoad {
     friends: Vec<ad::FriendInput>,
@@ -846,6 +947,10 @@ fn wire_signin(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
         let weak = ui.as_weak();
         ui.on_dismiss_expired(move || weak.unwrap().set_session_expired(false));
     }
+    {
+        let weak = ui.as_weak();
+        ui.on_dismiss_mismatch(move || weak.unwrap().set_account_mismatch(false));
+    }
 }
 
 /// Poll Roblox until the user approves in their browser, then redeem the code
@@ -1032,6 +1137,22 @@ fn wire_nav(ui: &MainWindow, app: &Arc<App>) {
     }
     {
         let weak = ui.as_weak();
+        ui.on_copy_id(move || {
+            let ui = weak.unwrap();
+            // Just the digits — the id is what people paste into other tools.
+            let id = match ui.get_view_kind() {
+                1 => ui.get_game().root_place_id.to_string(),
+                2 => ui.get_profile().id.to_string(),
+                3 => ui.get_group().id.to_string(),
+                _ => String::new(),
+            };
+            if !id.is_empty() {
+                copy_to_clipboard(&id);
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
         ui.on_open_browser(move || {
             let ui = weak.unwrap();
             let url = current_url(&ui);
@@ -1130,12 +1251,17 @@ fn wire_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
         let weak = ui.as_weak();
         ui.on_open_creator(move || {
             let ui = weak.unwrap();
-            // The creator can be a user or a group; the detail screen knows
-            // which because a group creator has no user profile to open.
-            let id = ui.get_game().universe_id.to_string();
-            tracing::debug!(%id, "open creator");
-            if let Ok(uid) = ui.get_game().creator.parse::<i64>() {
-                open_profile(&ui, &app, &bridge2, &imgs2, uid);
+            let game = ui.get_game();
+            // The creator's NAME was being parsed as an id here, so this
+            // silently did nothing for every game.
+            let Ok(id) = game.creator_id.parse::<i64>() else { return };
+            if id == 0 {
+                return;
+            }
+            if game.creator_is_group {
+                open_group(&ui, &app, &bridge2, &imgs2, id);
+            } else {
+                open_profile(&ui, &app, &bridge2, &imgs2, id);
             }
         });
     }
@@ -1798,7 +1924,74 @@ fn wire_macros(ui: &MainWindow, app: &Arc<App>) {
     {
         let app = app.clone();
         let weak = ui.as_weak();
-        ui.on_macro_edit(move |id| {
+        ui.on_macro_open_credit(|| {});
+
+    // --- share macros -----------------------------------------------------
+    //
+    // A plain file in the data folder rather than a file picker: Slint has no
+    // native dialog, and shelling out to one is a dependency per desktop.
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_macro_export(move || {
+            let ui = weak.unwrap();
+            let macros = app.macros.lock().unwrap().clone();
+            let bundle = rojoin_macro::MacroBundle::new(macros);
+            let path = rojoin_store::config_dir().join("macros-export.json");
+
+            let status = match bundle.to_json().and_then(|json| {
+                std::fs::create_dir_all(path.parent().unwrap_or(&path))
+                    .and_then(|_| std::fs::write(&path, json))
+                    .map_err(|e| rojoin_macro::Error::Input(e.to_string()))
+            }) {
+                Ok(()) => format!("Exported to {}", path.display()),
+                Err(e) => format!("Export failed: {e}"),
+            };
+            tracing::info!(%status);
+            ui.set_macro_io_status(status.into());
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_macro_import(move || {
+            let ui = weak.unwrap();
+            // Accept either the file we export or one dropped in beside it.
+            let dir = rojoin_store::config_dir();
+            let candidates = [dir.join("macros-import.json"), dir.join("macros-export.json")];
+
+            let Some(path) = candidates.iter().find(|p| p.exists()) else {
+                ui.set_macro_io_status(
+                    format!("Put a macros-import.json in {}", dir.display()).into(),
+                );
+                return;
+            };
+
+            let status = match std::fs::read_to_string(path)
+                .map_err(|e| e.to_string())
+                .and_then(|text| {
+                    rojoin_macro::MacroBundle::from_json(&text).map_err(|e| e.to_string())
+                }) {
+                Ok(bundle) => {
+                    let added = {
+                        let mut macros = app.macros.lock().unwrap();
+                        bundle.merge_into(&mut macros)
+                    };
+                    persist_macros(&app);
+                    render_macros(&ui, &app);
+                    if added == 1 {
+                        "Imported 1 macro".to_string()
+                    } else {
+                        format!("Imported {added} macros")
+                    }
+                }
+                Err(e) => format!("Import failed: {e}"),
+            };
+            tracing::info!(%status);
+            ui.set_macro_io_status(status.into());
+        });
+    }
+    ui.on_macro_edit(move |id| {
             let ui = weak.unwrap();
             *app.editing.lock().unwrap() = Some(id.to_string());
             ui.set_editor_capturing(false);
@@ -1806,9 +1999,6 @@ fn wire_macros(ui: &MainWindow, app: &Arc<App>) {
             ui.set_editor_open(true);
         });
     }
-    ui.on_macro_open_credit(|| {
-        let _ = webbrowser::open("https://github.com/Spencer0187/Spencer-Macro-Utilities");
-    });
 
     if available {
         match rojoin_macro::Engine::new() {
@@ -1825,8 +2015,8 @@ fn wire_macros(ui: &MainWindow, app: &Arc<App>) {
     }
 }
 
-/// The key that stops everything, no matter what is bound where.
-const PANIC_KEY: rojoin_macro::Key = rojoin_macro::Key::F8;
+/// Fallback panic key when the configured one cannot be parsed.
+const DEFAULT_PANIC_KEY: rojoin_macro::Key = rojoin_macro::Key::F8;
 
 /// Watch for hotkeys system-wide and drive the engine from them.
 ///
@@ -1857,6 +2047,24 @@ fn spawn_hotkey_listener(ui: &MainWindow, app: &Arc<App>) {
 
         while let Ok(event) = rx.recv() {
             let Some(engine) = app.engine.lock().unwrap().clone() else { continue };
+
+            // Settings is waiting for a panic key.
+            if app.binding_panic.load(Ordering::SeqCst) {
+                if let HotkeyEvent::Pressed(key) = event {
+                    app.binding_panic.store(false, Ordering::SeqCst);
+                    if key != rojoin_macro::Key::Escape {
+                        let mut cfg = app.config.lock().unwrap();
+                        cfg.settings.panic_key = key.label().to_string();
+                        let _ = cfg.save();
+                    }
+                    let app2 = app.clone();
+                    let _ = weak.upgrade_in_event_loop(move |ui| {
+                        ui.set_binding_panic(false);
+                        render_settings(&ui, &app2);
+                    });
+                }
+                continue;
+            }
 
             // While the editor is waiting for a key, the next press binds it
             // rather than firing anything.
@@ -1892,13 +2100,47 @@ fn spawn_hotkey_listener(ui: &MainWindow, app: &Arc<App>) {
                 continue;
             }
 
-            match event {
-                HotkeyEvent::Pressed(PANIC_KEY) => {
-                    engine.stop_all();
-                    held.clear();
-                    tracing::info!("panic key: stopped all macros");
-                }
+            let (enabled, gate_on_focus, panic_key) = {
+                let cfg = app.config.lock().unwrap();
+                (
+                    cfg.settings.macros_enabled,
+                    cfg.settings.macros_only_when_focused,
+                    rojoin_macro::Key::from_label(&cfg.settings.panic_key)
+                        .unwrap_or(DEFAULT_PANIC_KEY),
+                )
+            };
 
+            // The panic key works even with macros switched off and even when
+            // the game is not focused — it is the way out of a stuck state.
+            if event == HotkeyEvent::Pressed(panic_key) {
+                engine.stop_all();
+                held.clear();
+                tracing::info!("panic key: stopped all macros");
+                let app2 = app.clone();
+                let _ = weak.upgrade_in_event_loop(move |ui| render_macros(&ui, &app2));
+                continue;
+            }
+
+            if !enabled {
+                continue;
+            }
+
+            // Without this gate a hotkey fires wherever you are — F3 would
+            // freeze the game while you are typing in a browser.
+            if gate_on_focus && !rojoin_macro::focus::current().allows_macros() {
+                // A release still has to stop whatever a press started, or
+                // tabbing away mid-hold leaves a key down forever.
+                if let HotkeyEvent::Released(key) = event {
+                    if let Some(ids) = held.remove(&key) {
+                        for id in ids {
+                            engine.stop(&id);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            match event {
                 HotkeyEvent::Pressed(key) => {
                     let macros = app.macros.lock().unwrap().clone();
                     for mac in macros.iter().filter(|m| m.enabled && m.hotkey == Some(key)) {
@@ -2327,19 +2569,14 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
             ui.set_checking_update(true);
             ui.set_update_status("Checking…".into());
 
-            bridge2.call_res(
-                move || async move { updater::latest_version().await },
-                move |ui, result| {
+            let weak2 = weak.clone();
+            bridge2.spawn(async move {
+                let status = updater::check().await;
+                let _ = weak2.upgrade_in_event_loop(move |ui| {
                     ui.set_checking_update(false);
-                    match result {
-                        Ok(Some(v)) => ui.set_update_status(
-                            format!("Version {v} is available.").into(),
-                        ),
-                        Ok(None) => ui.set_update_status("You are up to date.".into()),
-                        Err(e) => ui.set_update_status(format!("Check failed: {e}").into()),
-                    }
-                },
-            );
+                    ui.set_update_status(status.message().into());
+                });
+            });
         });
     }
 
@@ -2426,6 +2663,89 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
     render_settings(ui, app);
 }
 
+/// Everything on the Settings screen that is a simple persisted toggle.
+fn wire_more_settings(ui: &MainWindow, app: &Arc<App>, imgs: &Images) {
+    ui.set_focus_detectable(rojoin_macro::focus::is_detectable());
+    ui.set_sections(ad::strings(
+        NAV.iter().map(|(label, _)| (*label).to_string()).collect(),
+    ));
+
+    macro_rules! setting {
+        ($hook:ident, $arg:ty, |$cfg:ident, $v:ident| $body:block) => {{
+            let app = app.clone();
+            let weak = ui.as_weak();
+            ui.$hook(move |$v: $arg| {
+                let ui = weak.unwrap();
+                {
+                    let mut $cfg = app.config.lock().unwrap();
+                    $body
+                    let _ = $cfg.save();
+                }
+                render_settings(&ui, &app);
+            });
+        }};
+    }
+
+    setting!(on_set_macros_enabled, bool, |cfg, v| { cfg.settings.macros_enabled = v; });
+    setting!(on_set_only_when_focused, bool, |cfg, v| {
+        cfg.settings.macros_only_when_focused = v;
+    });
+    setting!(on_set_startup_section, i32, |cfg, v| { cfg.settings.startup_section = v; });
+    setting!(on_set_presence_secs, i32, |cfg, v| {
+        cfg.settings.presence_refresh_secs = v.max(0) as u32;
+    });
+    setting!(on_set_confirm_destructive, bool, |cfg, v| {
+        cfg.settings.confirm_destructive = v;
+    });
+
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_set_ui_scale(move |v| {
+            let ui = weak.unwrap();
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.settings.ui_scale = v;
+                let _ = cfg.save();
+            }
+            // Applied immediately rather than on next launch.
+            let scale = app.config.lock().unwrap().ui_scale();
+            ui.window().dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+            render_settings(&ui, &app);
+        });
+    }
+
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_bind_panic_key(move || {
+            let ui = weak.unwrap();
+            let on = !ui.get_binding_panic();
+            ui.set_binding_panic(on);
+            app.binding_panic.store(on, Ordering::SeqCst);
+        });
+    }
+
+    {
+        let app = app.clone();
+        let imgs = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_clear_caches(move || {
+            let ui = weak.unwrap();
+            {
+                let mut names = app.names.lock().unwrap();
+                names.users.clear();
+                let _ = names.save();
+            }
+            imgs.clear();
+            tracing::info!("caches cleared");
+            render_settings(&ui, &app);
+        });
+    }
+}
+
 fn render_settings(ui: &MainWindow, app: &Arc<App>) {
     let cfg = app.config.lock().unwrap();
 
@@ -2442,6 +2762,18 @@ fn render_settings(ui: &MainWindow, app: &Arc<App>) {
         .collect();
     ui.set_accounts(ad::model(rows));
     ui.set_notify_requests(cfg.settings.notify_friend_requests);
+    ui.set_macros_enabled(cfg.settings.macros_enabled);
+    ui.set_only_when_focused(cfg.settings.macros_only_when_focused);
+    ui.set_panic_key(cfg.settings.panic_key.clone().into());
+    ui.set_ui_scale(cfg.ui_scale());
+    ui.set_startup_section(cfg.settings.startup_section);
+    ui.set_presence_secs(cfg.presence_refresh_secs() as i32);
+    ui.set_confirm_destructive(cfg.settings.confirm_destructive);
+
+    let cached = app.names.lock().unwrap().users.len();
+    ui.set_cache_summary(
+        format!("{cached} names remembered, so they never need re-fetching").into(),
+    );
 
     // Watched friends resolve to names from the roster where possible; an id
     // is still shown for anyone no longer on the list, so they can be removed.
@@ -2483,6 +2815,99 @@ fn render_settings(ui: &MainWindow, app: &Arc<App>) {
 }
 
 /// Playtime stats, computed from local history.
+/// Home layout and the pinned-games grid.
+fn wire_home(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_toggle_home_section(move |kind| {
+            let ui = weak.unwrap();
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.toggle_home_section(kind);
+                let _ = cfg.save();
+            }
+            apply_home_sections(&ui, &app);
+            load_pinned(&ui, &app, &bridge2, &imgs2);
+        });
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_unpin_game(move |id| {
+            let ui = weak.unwrap();
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.toggle_pin(id.as_str());
+                let _ = cfg.save();
+            }
+            load_pinned(&ui, &app, &bridge2, &imgs2);
+        });
+    }
+}
+
+/// Push the saved home layout into the five section flags.
+fn apply_home_sections(ui: &MainWindow, app: &Arc<App>) {
+    let on = app.config.lock().unwrap().home_sections();
+    ui.set_show_friends(on.contains(&0));
+    ui.set_show_hero(on.contains(&1));
+    ui.set_show_pinned(on.contains(&2));
+    ui.set_show_recent(on.contains(&3));
+    ui.set_show_favorites(on.contains(&4));
+}
+
+/// Games the user pinned locally, shown on Home.
+fn load_pinned(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
+    let places: Vec<i64> = {
+        let cfg = app.config.lock().unwrap();
+        cfg.data()
+            .map(|d| d.pins.iter().filter_map(|p| p.parse::<i64>().ok()).collect())
+            .unwrap_or_default()
+    };
+
+    if places.is_empty() {
+        ui.set_pinned(ad::model(Vec::new()));
+        return;
+    }
+
+    let client = app.client.clone();
+    let imgs2 = imgs.clone();
+    let gen = SESSION_GEN.load(Ordering::SeqCst);
+
+    bridge.call_res(
+        move || async move { fetch_home(&client, &places).await },
+        move |ui, result| {
+            if gen != SESSION_GEN.load(Ordering::SeqCst) {
+                return;
+            }
+            let Ok(load) = result else { return };
+
+            let tiles: Vec<GameTile> = load
+                .details
+                .iter()
+                .map(|d| {
+                    let v = load.votes.iter().find(|v| v.id == d.id);
+                    // Pinned games show a filled star, and clicking it unpins.
+                    ad::tile_from_detail(d, v, true)
+                })
+                .collect();
+            ui.set_pinned(ad::model(tiles));
+
+            for (i, d) in load.details.iter().enumerate() {
+                if let Some(url) = load.art.get(&d.id).cloned() {
+                    imgs2.load(&url, move |ui, img| {
+                        set_tile_thumb(&ui.get_pinned(), i, img)
+                    });
+                }
+            }
+        },
+    );
+}
+
 fn render_library(ui: &MainWindow, app: &Arc<App>) {
     let cfg = app.config.lock().unwrap();
     let Some(data) = cfg.data() else {
@@ -3104,6 +3529,13 @@ fn open_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
             let icons = thumbnails::game_icons(&client, &[universe_id]).await.unwrap_or_default();
             let art = thumbnails::game_art(&client, &[universe_id]).await.unwrap_or_default();
 
+            // Badge and pass artwork was never fetched, which is why those
+            // grids rendered as empty tiles.
+            let badge_ids: Vec<i64> = badges.iter().map(|b| b.id).collect();
+            let badge_icons = thumbnails::badges(&client, &badge_ids).await.unwrap_or_default();
+            let pass_ids: Vec<i64> = passes.iter().map(|p| p.id).collect();
+            let pass_icons = thumbnails::game_passes(&client, &pass_ids).await.unwrap_or_default();
+
             Ok(GameLoad {
                 universe_id,
                 detail,
@@ -3113,6 +3545,8 @@ fn open_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
                 badges,
                 icon: icons.get(&universe_id).cloned(),
                 hero: art.get(&universe_id).cloned(),
+                badge_icons,
+                pass_icons,
             })
         },
         move |ui, result| {
@@ -3128,6 +3562,21 @@ fn open_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
                     ui.set_sub_places(ad::model(ad::sub_places(&load.subs)));
                     ui.set_passes(ad::model(ad::passes(&load.passes)));
                     ui.set_badges(ad::model(ad::badges(&load.badges)));
+
+                    for (i, b) in load.badges.iter().enumerate() {
+                        if let Some(url) = load.badge_icons.get(&b.id).cloned() {
+                            imgs.load(&url, move |ui, img| {
+                                set_item_thumb(&ui.get_badges(), i, img)
+                            });
+                        }
+                    }
+                    for (i, pass) in load.passes.iter().enumerate() {
+                        if let Some(url) = load.pass_icons.get(&pass.id).cloned() {
+                            imgs.load(&url, move |ui, img| {
+                                set_item_thumb(&ui.get_passes(), i, img)
+                            });
+                        }
+                    }
 
                     if let Some(url) = load.icon {
                         imgs.load(&url, |ui, img| {
@@ -3161,6 +3610,8 @@ struct GameLoad {
     badges: Vec<rojoin_roblox::models::Badge>,
     icon: Option<String>,
     hero: Option<String>,
+    badge_icons: std::collections::HashMap<i64, String>,
+    pass_icons: std::collections::HashMap<i64, String>,
 }
 
 fn fetch_servers(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, sort: i32) {
@@ -3251,14 +3702,35 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
 
     match rojoin_launcher::detect() {
         rojoin_launcher::Backend::Sober => {
-            // Sober reads the cookie from disk, so there is nothing to await.
+            // Sober keeps its OWN session, so a roblox:// link joins as
+            // whoever Sober is signed into — not whoever RoJoin is showing.
+            // Point it at the active account first.
+            if let Some(id) = app.config.lock().unwrap().active_account.clone() {
+                match secrets::load(&id) {
+                    Some(cookie) => match rojoin_launcher::sober::set_cookie(&cookie) {
+                        Ok(true) => tracing::info!(account = %id, "switched Sober's account"),
+                        Ok(false) => tracing::debug!("Sober is already on this account"),
+                        Err(e) => {
+                            tracing::error!(error = %e, "could not switch account before launch");
+                            ui.set_launch_error(format!("{e}").into());
+                            ui.set_launching(false);
+                            return;
+                        }
+                    },
+                    None => tracing::warn!(account = %id, "no stored cookie; launching as whoever Sober has"),
+                }
+            }
+
             match rojoin_launcher::launch_sober(&req) {
                 Ok(()) => tracing::info!(
                     place = req.place_id,
                     sub_place = req.is_sub_place(),
                     "launched"
                 ),
-                Err(e) => tracing::error!(error = %e, "launch failed"),
+                Err(e) => {
+                    tracing::error!(error = %e, "launch failed");
+                    ui.set_launch_error(format!("{e}").into());
+                }
             }
             ui.set_launching(false);
         }

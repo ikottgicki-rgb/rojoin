@@ -13,7 +13,7 @@
 use crate::{Key, Macro, Mode, MouseButton, Step};
 
 pub fn all() -> Vec<Macro> {
-    vec![freeze(), auto_clicker()]
+    vec![freeze(), anti_afk(), auto_clicker()]
 }
 
 /// Briefly suspend the game process.
@@ -29,6 +29,28 @@ pub fn freeze() -> Macro {
         hotkey: Some(Key::F3),
         cycle_gap_ms: 0,
         steps: vec![Step::Freeze { ms: 250 }],
+        ..Default::default()
+    }
+}
+
+/// Nudge the camera every so often so Roblox does not idle-kick you.
+///
+/// Roblox disconnects after roughly 20 minutes without input. The movement is
+/// a single mouse count and immediately undone, so it cannot drift your aim.
+pub fn anti_afk() -> Macro {
+    Macro {
+        id: "antiafk".into(),
+        name: "Anti-AFK".into(),
+        description: String::new(),
+        mode: Mode::Toggle,
+        hotkey: Some(Key::F4),
+        // Well inside Roblox's idle window, and rare enough to be invisible.
+        cycle_gap_ms: 120_000,
+        steps: vec![
+            Step::MouseMove { dx: 1, dy: 0 },
+            Step::Wait { ms: 40 },
+            Step::MouseMove { dx: -1, dy: 0 },
+        ],
         ..Default::default()
     }
 }
@@ -75,6 +97,27 @@ mod tests {
                 assert!(keys.insert(k), "duplicate hotkey {:?} on {}", k, m.name);
             }
         }
+    }
+
+    #[test]
+    fn anti_afk_undoes_its_own_movement() {
+        // Net zero, or it would slowly drag the camera across the screen.
+        let m = anti_afk();
+        let net: i32 = m
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::MouseMove { dx, .. } => Some(*dx),
+                _ => None,
+            })
+            .sum();
+        assert_eq!(net, 0);
+    }
+
+    #[test]
+    fn anti_afk_fires_well_inside_robloxs_idle_window() {
+        // Roblox kicks at roughly 20 minutes.
+        assert!(anti_afk().cycle_ms() < 20 * 60 * 1000);
     }
 
     #[test]

@@ -16,7 +16,7 @@ component MacroCard inherits Rectangle {
     callback edit();
     callback rebind();
 
-    height: 76px;
+    height: 60px;
     background: root.entry.running ? Theme.bg_3 : Theme.bg_2;
     border-radius: Theme.radius;
     border-width: Theme.hairline;
@@ -57,28 +57,6 @@ component MacroCard inherits Rectangle {
                             horizontal-alignment: center;
                         }
                     }
-                }
-            }
-
-            HorizontalLayout {
-                spacing: Space.md;
-                alignment: start;
-                Text {
-                    text: root.entry.mode;
-                    color: Theme.text_mute;
-                    font-size: Type.micro;
-                }
-                Text {
-                    text: root.entry.cycle;
-                    color: Theme.text_mute;
-                    font-size: Type.micro;
-                }
-                Text {
-                    text: root.entry.summary;
-                    color: Theme.text_mute;
-                    font-size: Type.micro;
-                    overflow: elide;
-                    wrap: no-wrap;
                 }
             }
         }
@@ -169,13 +147,15 @@ export component MacrosScreen inherits Rectangle {
     in property <string> backend_name;
     in property <int> active_count: 0;
     in property <string> binding_id;
+    in property <string> io_status;
 
     callback toggle_run(string);
     callback toggle_enabled(string);
     callback edit(string);
     callback rebind(string);
     callback stop_all();
-    callback open_credit();
+    callback import_macros();
+    callback export_macros();
 
     background: Theme.bg_0;
 
@@ -210,6 +190,25 @@ export component MacrosScreen inherits Rectangle {
                 }
 
                 Rectangle { horizontal-stretch: 1; }
+
+                // Share macros. Icons only, per the rest of this screen.
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        spacing: Space.xxs;
+                        IconBtn { glyph: "↓"; clicked => { root.import_macros(); } }
+                        IconBtn { glyph: "↑"; clicked => { root.export_macros(); } }
+                    }
+                }
+
+                if root.io_status != "": VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.io_status;
+                        color: Theme.text_mute;
+                        font-size: Type.caption;
+                    }
+                }
 
                 if root.active_count > 0: VerticalLayout {
                     alignment: center;

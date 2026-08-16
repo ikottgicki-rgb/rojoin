@@ -19,7 +19,12 @@ use std::sync::{Arc, Mutex};
 
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 
+use slint::ComponentHandle;
+
 use crate::MainWindow;
+
+/// A callback waiting on an in-flight image.
+type Waiter = Box<dyn FnOnce(MainWindow, Image) + Send>;
 
 /// Decoded pixels, cheap to share between threads.
 pub struct Decoded {
@@ -66,9 +71,13 @@ thread_local! {
 pub struct Images {
     client: rojoin_roblox::Client,
     cache: Arc<Mutex<Cache>>,
-    /// URLs currently being fetched, so a grid that rebinds while scrolling
-    /// does not fire the same request twenty times.
-    inflight: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// URLs being fetched, each with the callbacks waiting on it.
+    ///
+    /// Waiters are QUEUED, not dropped. Dropping the second request for a URL
+    /// meant the same image used in two places only appeared in one — the
+    /// Home hero stayed blank because the Recent grid had already asked for
+    /// that exact thumbnail.
+    inflight: Arc<Mutex<HashMap<String, Vec<Waiter>>>>,
     ui: slint::Weak<MainWindow>,
     rt: Arc<tokio::runtime::Runtime>,
 }
@@ -112,15 +121,18 @@ impl Images {
             return;
         }
 
-        // Coalesce duplicate in-flight requests.
+        // Join an in-flight fetch rather than firing a second one — but keep
+        // the callback so every caller gets the image.
         {
             let mut inflight = match self.inflight.lock() {
                 Ok(g) => g,
                 Err(_) => return,
             };
-            if !inflight.insert(url.clone()) {
+            if let Some(waiters) = inflight.get_mut(&url) {
+                waiters.push(Box::new(apply));
                 return;
             }
+            inflight.insert(url.clone(), vec![Box::new(apply)]);
         }
 
         let client = self.client.clone();
@@ -140,9 +152,11 @@ impl Images {
                 }
             };
 
-            if let Ok(mut g) = inflight.lock() {
-                g.remove(&url);
-            }
+            let waiters = inflight
+                .lock()
+                .ok()
+                .and_then(|mut g| g.remove(&url))
+                .unwrap_or_default();
 
             let Some(decoded) = decoded else { return };
             let decoded = Arc::new(decoded);
@@ -152,7 +166,10 @@ impl Images {
             }
 
             let _ = ui.upgrade_in_event_loop(move |handle| {
-                apply(handle, to_image(&url, &decoded));
+                let img = to_image(&url, &decoded);
+                for waiter in waiters {
+                    waiter(handle.clone_strong(), img.clone());
+                }
             });
         });
     }
@@ -229,6 +246,16 @@ mod tests {
         }
         assert_eq!(c.order.len(), 1);
         assert_eq!(c.map.len(), 1);
+    }
+
+    #[test]
+    fn waiters_queue_rather_than_replace() {
+        // The bug this guards: the second request for a URL used to be
+        // dropped, so an image shown in two places only appeared in one.
+        let mut inflight: HashMap<String, Vec<u32>> = HashMap::new();
+        inflight.entry("u".into()).or_default().push(1);
+        inflight.entry("u".into()).or_default().push(2);
+        assert_eq!(inflight["u"], vec![1, 2]);
     }
 
     #[test]

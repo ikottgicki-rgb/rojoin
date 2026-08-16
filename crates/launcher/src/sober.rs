@@ -78,3 +78,158 @@ pub fn data_dir() -> Option<std::path::PathBuf> {
         .join("data/sober");
     path.exists().then_some(path)
 }
+
+// ---------------------------------------------------------------------------
+// Account switching
+// ---------------------------------------------------------------------------
+//
+// Sober keeps its OWN session, so launching a `roblox://` link joins as
+// whoever Sober is signed into — not whoever RoJoin is showing. To join as the
+// selected account we rewrite Sober's cookie jar first.
+//
+// The jar is one line of `name=value; name=value; ...`, so only the
+// `.ROBLOSECURITY` field is replaced and everything else is preserved.
+
+const COOKIE_NAME: &str = ".ROBLOSECURITY";
+
+pub fn cookie_path() -> Option<std::path::PathBuf> {
+    data_dir().map(|d| d.join("cookies"))
+}
+
+/// Split a cookie jar line into (name, value) pairs, preserving order.
+fn split_jar(jar: &str) -> Vec<(String, String)> {
+    jar.split(';')
+        .filter_map(|part| {
+            let part = part.trim();
+            if part.is_empty() {
+                return None;
+            }
+            match part.split_once('=') {
+                Some((k, v)) => Some((k.trim().to_string(), v.to_string())),
+                None => Some((part.to_string(), String::new())),
+            }
+        })
+        .collect()
+}
+
+fn join_jar(pairs: &[(String, String)]) -> String {
+    pairs
+        .iter()
+        .map(|(k, v)| if v.is_empty() { k.clone() } else { format!("{k}={v}") })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// The account Sober is currently signed into.
+pub fn read_cookie() -> Option<String> {
+    let path = cookie_path()?;
+    let jar = std::fs::read_to_string(path).ok()?;
+    split_jar(&jar)
+        .into_iter()
+        .find(|(k, _)| k == COOKIE_NAME)
+        .map(|(_, v)| v)
+        .filter(|v| !v.is_empty())
+}
+
+/// Point Sober at a different account.
+///
+/// Returns `Ok(false)` when it already holds this cookie, so a caller can skip
+/// the "close Roblox first" prompt when nothing needs to change.
+///
+/// Refuses while the game is running: Sober rewrites this file on exit, so a
+/// swap underneath a live session is silently undone and the user is left
+/// wondering why they joined as the wrong account anyway.
+pub fn set_cookie(cookie: &str) -> Result<bool> {
+    if cookie.is_empty() {
+        return Err(Error::Launch("refusing to write an empty cookie".into()));
+    }
+
+    let Some(path) = cookie_path() else {
+        return Err(Error::SoberMissing);
+    };
+
+    let jar = std::fs::read_to_string(&path)
+        .map_err(|e| Error::Launch(format!("could not read Sober's cookies: {e}")))?;
+
+    let mut pairs = split_jar(&jar);
+    if pairs
+        .iter()
+        .any(|(k, v)| k == COOKIE_NAME && v == cookie)
+    {
+        return Ok(false);
+    }
+
+    if is_running() {
+        return Err(Error::Launch(
+            "close Roblox first — Sober rewrites its session on exit, so switching \
+             accounts while it is running would be undone"
+                .into(),
+        ));
+    }
+
+    match pairs.iter_mut().find(|(k, _)| k == COOKIE_NAME) {
+        Some(entry) => entry.1 = cookie.to_string(),
+        None => pairs.push((COOKIE_NAME.to_string(), cookie.to_string())),
+    }
+
+    // Keep a copy of the previous jar. This file is the user's live session,
+    // and clobbering it badly would sign them out of Roblox entirely.
+    let backup = path.with_extension("rojoin-backup");
+    let _ = std::fs::copy(&path, &backup);
+
+    // Atomic: a half-written cookie jar is a broken login.
+    let tmp = path.with_extension("rojoin-tmp");
+    std::fs::write(&tmp, join_jar(&pairs))
+        .map_err(|e| Error::Launch(format!("could not stage Sober's cookies: {e}")))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| Error::Launch(format!("could not replace Sober's cookies: {e}")))?;
+
+    tracing::info!("switched Sober to the selected account");
+    Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const JAR: &str = "rbxas=abc; GuestData=UserID=-1; .ROBLOSECURITY=OLDVALUE; path=/";
+
+    #[test]
+    fn the_cookie_is_found_among_the_others() {
+        let found = split_jar(JAR)
+            .into_iter()
+            .find(|(k, _)| k == COOKIE_NAME)
+            .map(|(_, v)| v);
+        assert_eq!(found.as_deref(), Some("OLDVALUE"));
+    }
+
+    #[test]
+    fn replacing_the_cookie_preserves_every_other_field() {
+        // Sober stores session state in the same jar; dropping any of it
+        // would break its login in ways unrelated to the account swap.
+        let mut pairs = split_jar(JAR);
+        pairs.iter_mut().find(|(k, _)| k == COOKIE_NAME).unwrap().1 = "NEW".into();
+        let out = join_jar(&pairs);
+
+        assert!(out.contains("rbxas=abc"));
+        assert!(out.contains("GuestData=UserID=-1"));
+        assert!(out.contains(".ROBLOSECURITY=NEW"));
+        assert!(!out.contains("OLDVALUE"));
+        assert!(out.contains("path=/"));
+    }
+
+    #[test]
+    fn values_containing_equals_survive_a_round_trip() {
+        // GuestData=UserID=-1 has two '='; a naive split would mangle it.
+        let pairs = split_jar("GuestData=UserID=-634510552");
+        assert_eq!(pairs[0].0, "GuestData");
+        assert_eq!(pairs[0].1, "UserID=-634510552");
+        assert_eq!(join_jar(&pairs), "GuestData=UserID=-634510552");
+    }
+
+    #[test]
+    fn an_empty_cookie_is_refused() {
+        // Writing an empty value would sign the user out of Roblox.
+        assert!(set_cookie("").is_err());
+    }
+}

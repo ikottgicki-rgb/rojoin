@@ -226,6 +226,7 @@ export component FriendsScreen inherits Rectangle {
     in property <int> in_game: 0;
     in property <int> online: 0;
     in-out property <string> filter;
+    in property <string> request_status;
 
     callback refresh();
     callback filter_changed(string);
@@ -272,15 +273,6 @@ export component FriendsScreen inherits Rectangle {
 
                 VerticalLayout {
                     alignment: center;
-                    Text {
-                        text: "★ pin      bell = notify";
-                        color: Theme.text_mute;
-                        font-size: Type.micro;
-                    }
-                }
-
-                VerticalLayout {
-                    alignment: center;
                     Rectangle {
                         width: 220px;
                         height: 30px;
@@ -310,7 +302,7 @@ export component FriendsScreen inherits Rectangle {
                                     x: 0;
                                     width: 100%;
                                     height: 100%;
-                                    text: "Filter friends";
+                                    text: "Filter";
                                     color: Theme.text_mute;
                                     font-size: Type.small;
                                     vertical-alignment: center;
@@ -360,6 +352,14 @@ export component FriendsScreen inherits Rectangle {
                     VerticalLayout {
                         alignment: center;
                         Badge { count: root.requests.length; }
+                    }
+                    if root.request_status != "": VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: root.request_status;
+                            color: Theme.warn;
+                            font-size: Type.caption;
+                        }
                     }
                     Rectangle { horizontal-stretch: 1; }
                 }

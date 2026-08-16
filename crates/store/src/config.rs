@@ -88,6 +88,37 @@ pub struct Settings {
     pub game_account_bindings: HashMap<String, String>,
     /// User macros. Empty means "use the bundled presets".
     pub macros: Vec<rojoin_macro::Macro>,
+
+    // --- macro behaviour ---------------------------------------------------
+    /// Master switch. When off, no hotkey fires anything.
+    pub macros_enabled: bool,
+    /// Only run macros while Roblox is the focused window.
+    ///
+    /// On by default: without it a hotkey fires wherever you are, so F3 would
+    /// freeze your game while you are typing in a browser.
+    pub macros_only_when_focused: bool,
+    /// Key that stops every running macro and releases any freeze.
+    pub panic_key: String,
+
+    // --- interface ---------------------------------------------------------
+    /// 1.0 = normal. Clamped when applied.
+    pub ui_scale: f32,
+    /// Section index to open on launch.
+    pub startup_section: i32,
+    /// Seconds between friend-presence refreshes. Lower is more current and
+    /// more likely to get the account rate-limited.
+    pub presence_refresh_secs: u32,
+    /// Ask before leaving a group or removing an account.
+    pub confirm_destructive: bool,
+    /// Friend requests already accepted or declined. Roblox keeps returning
+    /// them for a while, so they are filtered out of every refetch — otherwise
+    /// a declined request reappears and looks like the click did nothing.
+    pub handled_requests: Vec<String>,
+
+    // --- home layout -------------------------------------------------------
+    /// Which home sections are shown, in order. Kinds:
+    /// 0 status · 1 jump back in · 2 pinned · 3 recent · 4 favourites
+    pub home_sections: Vec<i32>,
 }
 
 impl Default for Settings {
@@ -100,6 +131,15 @@ impl Default for Settings {
             close_to_tray: false,
             game_account_bindings: HashMap::new(),
             macros: Vec::new(),
+            macros_enabled: true,
+            macros_only_when_focused: true,
+            panic_key: "F8".into(),
+            ui_scale: 1.0,
+            startup_section: 0,
+            presence_refresh_secs: 60,
+            confirm_destructive: true,
+            handled_requests: Vec::new(),
+            home_sections: vec![0, 1, 2, 3, 4],
         }
     }
 }
@@ -195,6 +235,48 @@ impl Config {
         data.recent_searches.retain(|q| q != query);
         data.recent_searches.insert(0, query.to_string());
         data.recent_searches.truncate(8);
+    }
+
+    /// Clamped so a bad config cannot make the app unusable.
+    pub fn ui_scale(&self) -> f32 {
+        if self.settings.ui_scale.is_finite() {
+            self.settings.ui_scale.clamp(0.8, 1.6)
+        } else {
+            1.0
+        }
+    }
+
+    /// Clamped so nobody can set a 1-second poll and throttle their account.
+    pub fn presence_refresh_secs(&self) -> u32 {
+        self.settings.presence_refresh_secs.clamp(30, 600)
+    }
+
+    /// Home sections, falling back to the default when the list is empty or
+    /// holds only unknown kinds — an empty Home reads as a broken app.
+    pub fn home_sections(&self) -> Vec<i32> {
+        let valid: Vec<i32> = self
+            .settings
+            .home_sections
+            .iter()
+            .copied()
+            .filter(|k| (0..=4).contains(k))
+            .collect();
+        if valid.is_empty() {
+            vec![0, 1, 2, 3, 4]
+        } else {
+            valid
+        }
+    }
+
+    pub fn toggle_home_section(&mut self, kind: i32) {
+        let mut current = self.home_sections();
+        match current.iter().position(|k| *k == kind) {
+            Some(i) => {
+                current.remove(i);
+            }
+            None => current.push(kind),
+        }
+        self.settings.home_sections = current;
     }
 
     pub fn toggle_pin(&mut self, place_id: &str) -> bool {
@@ -307,6 +389,56 @@ mod tests {
         assert_eq!(r.len(), 8);
         assert_eq!(r[0], "q11", "re-searching must move it to the front");
         assert_eq!(r.iter().filter(|q| *q == "q11").count(), 1);
+    }
+
+    #[test]
+    fn home_never_ends_up_empty() {
+        let mut c = Config::default();
+        c.settings.home_sections = vec![];
+        assert_eq!(c.home_sections().len(), 5, "an empty Home reads as broken");
+
+        c.settings.home_sections = vec![99, -1];
+        assert_eq!(c.home_sections().len(), 5, "unknown kinds must not blank it");
+    }
+
+    #[test]
+    fn home_sections_toggle_off_and_back_on() {
+        let mut c = Config::default();
+        c.toggle_home_section(3);
+        assert!(!c.home_sections().contains(&3));
+        c.toggle_home_section(3);
+        assert!(c.home_sections().contains(&3));
+    }
+
+    #[test]
+    fn ui_scale_is_clamped_to_something_usable() {
+        let mut c = Config::default();
+        assert_eq!(c.ui_scale(), 1.0);
+
+        c.settings.ui_scale = 99.0;
+        assert_eq!(c.ui_scale(), 1.6);
+        c.settings.ui_scale = 0.01;
+        assert_eq!(c.ui_scale(), 0.8);
+        // A NaN in the config file must not produce a NaN-sized window.
+        c.settings.ui_scale = f32::NAN;
+        assert_eq!(c.ui_scale(), 1.0);
+    }
+
+    #[test]
+    fn presence_refresh_cannot_be_set_fast_enough_to_throttle_the_account() {
+        let mut c = Config::default();
+        c.settings.presence_refresh_secs = 1;
+        assert_eq!(c.presence_refresh_secs(), 30);
+        c.settings.presence_refresh_secs = 99_999;
+        assert_eq!(c.presence_refresh_secs(), 600);
+    }
+
+    #[test]
+    fn macro_safety_defaults_are_on() {
+        let c = Config::default();
+        assert!(c.settings.macros_only_when_focused, "focus gate must default on");
+        assert!(c.settings.confirm_destructive);
+        assert_eq!(c.settings.panic_key, "F8");
     }
 
     #[test]

@@ -24,4 +24,6 @@ windows-sys = { version = "0.59", features = [
     # Process enumeration and ntdll lookup, for the freeze macro.
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_LibraryLoader",
+    # Foreground-window detection, so macros only fire in the game.
+    "Win32_UI_WindowsAndMessaging",
 ] }

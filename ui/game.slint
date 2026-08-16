@@ -195,6 +195,7 @@ export component GameScreen inherits Rectangle {
     in property <GameDetailData> game;
     in property <bool> loading: false;
     in property <bool> launching: false;
+    in property <string> launch_error;
 
     in property <[SubPlace]> sub_places;
     in property <[ServerRow]> servers;
@@ -204,7 +205,8 @@ export component GameScreen inherits Rectangle {
     in property <[GameTile]> related;
 
     in-out property <int> tab: 0;          // 0 About · 1 Servers
-    in-out property <int> server_sort: 0;  // 0 Default · 1 Fullest · 2 Emptiest
+    in-out property <int> server_sort: 0;
+    in-out property <bool> places_open: false;  // 0 Default · 1 Fullest · 2 Emptiest
 
     callback play();
     callback play_sub_place(string);
@@ -212,6 +214,7 @@ export component GameScreen inherits Rectangle {
     callback toggle_favorite();
     callback toggle_notify();
     callback copy_link();
+    callback copy_id();
     callback open_browser();
     callback set_server_sort(int);
     callback open_related(string);
@@ -236,7 +239,7 @@ export component GameScreen inherits Rectangle {
 
             // --- hero -------------------------------------------------------
             Rectangle {
-                height: 210px;
+                height: 300px;
                 clip: true;
                 Thumb { width: 100%; height: 100%; source: root.game.hero; radius: 0px; }
                 Rectangle {
@@ -317,13 +320,15 @@ export component GameScreen inherits Rectangle {
                     }
 
                     // --- action bar ---------------------------------------
+                    // Every control on this row is 36px tall. They were 38 /
+                    // 32 / 30 before, which read as three different sizes.
                     HorizontalLayout {
                         spacing: Space.sm;
                         alignment: start;
 
                         Rectangle {
                             width: 132px;
-                            height: 38px;
+                            height: 36px;
                             background: root.launching ? Theme.bg_4
                                         : bigta.pressed ? Theme.accent_press
                                         : bigta.has-hover ? Theme.accent_hover : Theme.accent;
@@ -347,14 +352,36 @@ export component GameScreen inherits Rectangle {
 
                         Btn {
                             label: root.game.favorited ? "★ Favourited" : "☆ Favourite";
+                            height: 36px;
                             clicked => { root.toggle_favorite(); }
                         }
                         Btn {
-                            label: root.game.notify ? "◉ Notifying" : "○ Notify me";
+                            label: root.game.notify ? "◉ Notifying" : "○ Notify";
+                            height: 36px;
                             clicked => { root.toggle_notify(); }
                         }
-                        IconBtn { glyph: "⧉"; clicked => { root.copy_link(); } }
-                        IconBtn { glyph: "↗"; clicked => { root.open_browser(); } }
+                        IconBtn { glyph: "⧉"; size_px: 36px; clicked => { root.copy_link(); } }
+                        IconBtn { glyph: "#"; size_px: 36px; clicked => { root.copy_id(); } }
+                        IconBtn { glyph: "↗"; size_px: 36px; clicked => { root.open_browser(); } }
+                    }
+
+                    // Launch failures used to be log-only, so a refused
+                    // account switch looked like nothing happened.
+                    if root.launch_error != "": Rectangle {
+                        background: Theme.bg_2;
+                        border-radius: Theme.radius;
+                        border-width: Theme.hairline;
+                        border-color: Theme.danger;
+                        height: lerr.preferred-height + Space.md * 2;
+                        lerr := Text {
+                            x: Space.md;
+                            y: Space.md;
+                            width: parent.width - Space.md * 2;
+                            text: root.launch_error;
+                            color: Theme.text;
+                            font-size: Type.small;
+                            wrap: word-wrap;
+                        }
                     }
                 }
             }
@@ -366,34 +393,48 @@ export component GameScreen inherits Rectangle {
                 padding-bottom: 0;
                 spacing: Space.md;
 
-                HorizontalLayout {
-                    spacing: Space.sm;
-                    Text {
-                        text: "Places in this game";
-                        color: Theme.text;
-                        font-size: Type.title;
-                        font-weight: Type.w_bold;
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        Text {
-                            text: root.sub_places.length + "";
-                            color: Theme.text_mute;
-                            font-size: Type.small;
+                // Collapsed by default — most games have one place, and an
+                // always-open list pushed the real content down the page.
+                Rectangle {
+                    height: 34px;
+                    HorizontalLayout {
+                        spacing: Space.sm;
+                        alignment: start;
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: root.places_open ? "▾" : "▸";
+                                color: Theme.text_mute;
+                                font-size: Type.small;
+                            }
                         }
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: "Places";
+                                color: dta.has-hover ? Theme.text : Theme.text_dim;
+                                font-size: Type.lead;
+                                font-weight: Type.w_bold;
+                                animate color { duration: Motion.fast; easing: Motion.ease; }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: root.sub_places.length + "";
+                                color: Theme.text_mute;
+                                font-size: Type.small;
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
                     }
-                    // Without a trailing spacer the layout hands its slack to
-                    // the count and it drifts to the far right of the page.
-                    Rectangle { horizontal-stretch: 1; }
-                }
-                Text {
-                    text: "Join a specific place directly instead of starting in the main one.";
-                    color: Theme.text_mute;
-                    font-size: Type.small;
-                    wrap: word-wrap;
+                    dta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.places_open = !root.places_open; }
+                    }
                 }
 
-                VerticalLayout {
+                if root.places_open: VerticalLayout {
                     spacing: Space.sm;
                     for sp in root.sub_places: SubPlaceRow {
                         place: sp;

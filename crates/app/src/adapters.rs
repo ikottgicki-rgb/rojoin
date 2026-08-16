@@ -102,6 +102,10 @@ pub fn detail_data(d: &GameDetail, votes: Option<&Votes>, notify: bool) -> GameD
         root_place_id: d.root_place_id.to_string().into(),
         name: d.name.clone().into(),
         creator: d.creator.name.clone().into(),
+        creator_id: d.creator.id.to_string().into(),
+        // Roblox reports "User" or "Group"; a group creator has no user
+        // profile, so the click has to route differently.
+        creator_is_group: d.creator.kind.eq_ignore_ascii_case("Group"),
         description: d.description.clone().unwrap_or_default().into(),
         playing: compact(d.playing).into(),
         visits: compact(d.visits).into(),

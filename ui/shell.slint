@@ -226,7 +226,7 @@ export component TopBar inherits Rectangle {
                             x: 0;
                             width: 100%;
                             height: 100%;
-                            text: "Search games, people, groups";
+                            text: "Search";
                             color: Theme.text_mute;
                             font-size: Type.body;
                             vertical-alignment: center;
@@ -323,6 +323,43 @@ export component ExpiredBanner inherits Rectangle {
                 clicked => { root.sign_in(); }
             }
         }
+        VerticalLayout {
+            alignment: center;
+            IconBtn { glyph: "×"; clicked => { root.dismiss(); } }
+        }
+    }
+}
+
+/// Shown when the Roblox client is signed into a different account than
+/// RoJoin. Launching swaps the client's session, so it is worth saying before
+/// it happens rather than after.
+export component AccountMismatchBanner inherits Rectangle {
+    in property <string> client_account;
+    in property <string> rojoin_account;
+    callback dismiss();
+
+    height: 38px;
+    background: Theme.bg_3;
+
+    Rectangle { x: 0; width: 2px; height: 100%; background: Theme.warn; }
+
+    HorizontalLayout {
+        padding-left: Space.lg;
+        padding-right: Space.sm;
+        spacing: Space.md;
+
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: "Roblox is signed in as " + root.client_account
+                      + ". Launching will switch it to " + root.rojoin_account + ".";
+                color: Theme.text_dim;
+                font-size: Type.small;
+                overflow: elide;
+                wrap: no-wrap;
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
         VerticalLayout {
             alignment: center;
             IconBtn { glyph: "×"; clicked => { root.dismiss(); } }

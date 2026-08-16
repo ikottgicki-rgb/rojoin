@@ -13,12 +13,9 @@
 //!
 //! ## Provenance
 //!
-//! This is an independent implementation, written from public descriptions of
-//! the movement techniques the Roblox glitching community has documented for
-//! years. It is **not** derived from Spencer Macro Utilities: none of its
-//! source was consulted while writing this, deliberately, so that no part of
-//! this crate is a derivative work. SMU is credited in the app's About screen
-//! as the inspiration for the feature.
+//! Written from scratch against public descriptions of techniques the Roblox
+//! community has documented for years. No third-party macro tool's source was
+//! consulted, deliberately, so no part of this crate is a derivative work.
 //!
 //! ## Honest limitation
 //!
@@ -34,6 +31,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 pub mod backend;
+pub mod focus;
 pub mod hotkeys;
 pub mod keys;
 pub mod presets;
@@ -182,6 +180,76 @@ impl Macro {
         self.steps
             .iter()
             .any(|s| !matches!(s, Step::Wait { .. }))
+    }
+}
+
+/// Share format for macros.
+///
+/// A versioned envelope rather than a bare array: a shared file outlives the
+/// build that wrote it, and a version field is the difference between a clear
+/// "made by a newer RoJoin" and a confusing parse error.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MacroBundle {
+    pub format: u32,
+    pub macros: Vec<Macro>,
+}
+
+pub const BUNDLE_FORMAT: u32 = 1;
+
+impl MacroBundle {
+    pub fn new(macros: Vec<Macro>) -> Self {
+        Self { format: BUNDLE_FORMAT, macros }
+    }
+
+    pub fn to_json(&self) -> Result<String> {
+        serde_json::to_string_pretty(self)
+            .map_err(|e| Error::Input(format!("could not serialise: {e}")))
+    }
+
+    /// Parse a shared bundle, tolerating a bare array from a hand-written file.
+    pub fn from_json(text: &str) -> Result<Self> {
+        if let Ok(bundle) = serde_json::from_str::<MacroBundle>(text) {
+            if bundle.format > BUNDLE_FORMAT {
+                return Err(Error::Input(
+                    "that file was made by a newer version of RoJoin".into(),
+                ));
+            }
+            return Ok(bundle);
+        }
+
+        match serde_json::from_str::<Vec<Macro>>(text) {
+            Ok(macros) => Ok(Self::new(macros)),
+            Err(e) => Err(Error::Input(format!("not a macro file: {e}"))),
+        }
+    }
+
+    /// Merge into an existing set, renaming collisions rather than silently
+    /// overwriting a macro the user already tuned.
+    pub fn merge_into(self, existing: &mut Vec<Macro>) -> usize {
+        let mut added = 0;
+        for mut mac in self.macros {
+            if mac.id.trim().is_empty() {
+                continue;
+            }
+            if existing.iter().any(|m| m.id == mac.id) {
+                let mut n = 2;
+                let base = mac.id.clone();
+                while existing.iter().any(|m| m.id == format!("{base}-{n}")) {
+                    n += 1;
+                }
+                mac.id = format!("{base}-{n}");
+                mac.name = format!("{} ({n})", mac.name);
+            }
+            // An imported hotkey must not silently steal one already in use.
+            if let Some(k) = mac.hotkey {
+                if existing.iter().any(|m| m.hotkey == Some(k)) {
+                    mac.hotkey = None;
+                }
+            }
+            existing.push(mac);
+            added += 1;
+        }
+        added
     }
 }
 
@@ -437,6 +505,68 @@ mod tests {
 
         let m = mac_with(vec![Step::Tap { key: Key::Space, hold_ms: 10 }]);
         assert!(m.is_effective());
+    }
+
+    #[test]
+    fn a_bundle_round_trips() {
+        let bundle = MacroBundle::new(vec![mac_with(vec![Step::Wait { ms: 10 }])]);
+        let json = bundle.to_json().unwrap();
+        let back = MacroBundle::from_json(&json).unwrap();
+        assert_eq!(back.macros.len(), 1);
+        assert_eq!(back.format, BUNDLE_FORMAT);
+    }
+
+    #[test]
+    fn a_bare_array_is_accepted_too() {
+        let json = serde_json::to_string(&vec![mac_with(vec![Step::Wait { ms: 5 }])]).unwrap();
+        assert_eq!(MacroBundle::from_json(&json).unwrap().macros.len(), 1);
+    }
+
+    #[test]
+    fn a_newer_format_is_refused_with_a_clear_reason() {
+        let json = r#"{"format":99,"macros":[]}"#;
+        let err = MacroBundle::from_json(json).unwrap_err().to_string();
+        assert!(err.contains("newer version"));
+    }
+
+    #[test]
+    fn junk_is_rejected() {
+        assert!(MacroBundle::from_json("not json at all").is_err());
+    }
+
+    #[test]
+    fn importing_a_colliding_id_renames_instead_of_overwriting() {
+        // Overwriting would silently destroy a macro the user had tuned.
+        let mut existing = vec![Macro { id: "freeze".into(), name: "Freeze".into(), ..Default::default() }];
+        let incoming = MacroBundle::new(vec![Macro {
+            id: "freeze".into(),
+            name: "Freeze".into(),
+            steps: vec![Step::Wait { ms: 1 }],
+            ..Default::default()
+        }]);
+
+        assert_eq!(incoming.merge_into(&mut existing), 1);
+        assert_eq!(existing.len(), 2);
+        assert_eq!(existing[1].id, "freeze-2");
+        assert_eq!(existing[0].name, "Freeze", "the original must be untouched");
+    }
+
+    #[test]
+    fn an_imported_hotkey_does_not_steal_one_already_in_use() {
+        let mut existing = vec![Macro {
+            id: "a".into(),
+            hotkey: Some(Key::F1),
+            ..Default::default()
+        }];
+        let incoming = MacroBundle::new(vec![Macro {
+            id: "b".into(),
+            hotkey: Some(Key::F1),
+            ..Default::default()
+        }]);
+        incoming.merge_into(&mut existing);
+
+        assert_eq!(existing[0].hotkey, Some(Key::F1));
+        assert_eq!(existing[1].hotkey, None);
     }
 
     #[test]

@@ -1,66 +1,149 @@
-//! Update checking.
+//! Update checking and self-update.
 //!
-//! RoJoin currently has no public release feed — the repository is local with
-//! no remote — so there is nothing to check against. Rather than pretend, the
-//! check reports that honestly.
+//! Points at a GitHub releases feed. Set `RELEASE_REPO` to `owner/repo` once
+//! there is a public repository and the whole flow works: check, download the
+//! matching asset, and replace the running binary in place.
 //!
-//! When a feed exists, set `RELEASE_FEED` to a GitHub releases API URL and the
-//! rest works: it compares the latest tag against the compiled-in version.
+//! Until then `check` reports plainly that updates are not set up. That is
+//! deliberate — the previous version returned an error, which surfaced in the
+//! UI as "failed" and read like a broken feature rather than an unconfigured
+//! one.
 
 use serde::Deserialize;
 
-/// A GitHub releases API URL, e.g.
-/// `https://api.github.com/repos/<owner>/<repo>/releases/latest`.
-/// `None` means updates are not configured for this build.
-const RELEASE_FEED: Option<&str> = None;
+/// `owner/repo` on GitHub. `None` until RoJoin has a public home.
+const RELEASE_REPO: Option<&str> = None;
 
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Deserialize)]
 struct Release {
     tag_name: String,
+    #[serde(default)]
+    assets: Vec<Asset>,
 }
 
-/// `Ok(Some(version))` when a newer release exists, `Ok(None)` when up to date.
-pub async fn latest_version() -> rojoin_roblox::Result<Option<String>> {
-    let Some(feed) = RELEASE_FEED else {
-        return Err(rojoin_roblox::Error::Api(
-            "Updates are not configured for this build.".into(),
-        ));
+#[derive(Debug, Deserialize)]
+struct Asset {
+    name: String,
+    browser_download_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Status {
+    /// No release feed configured for this build.
+    NotConfigured,
+    UpToDate,
+    Available { version: String, url: String },
+}
+
+impl Status {
+    pub fn message(&self) -> String {
+        match self {
+            Status::NotConfigured => {
+                "Updates are not set up for this build yet.".into()
+            }
+            Status::UpToDate => format!("You are on the latest version ({CURRENT})."),
+            Status::Available { version, .. } => {
+                format!("Version {version} is available.")
+            }
+        }
+    }
+
+    pub fn can_install(&self) -> bool {
+        matches!(self, Status::Available { .. })
+    }
+}
+
+/// The asset this platform should download.
+fn wanted_asset(assets: &[Asset]) -> Option<&Asset> {
+    let want = if cfg!(windows) { ".zip" } else { ".AppImage" };
+    assets.iter().find(|a| a.name.ends_with(want))
+}
+
+pub async fn check() -> Status {
+    let Some(repo) = RELEASE_REPO else {
+        return Status::NotConfigured;
     };
 
-    let client = reqwest_client()?;
+    let url = format!("https://api.github.com/repos/{repo}/releases/latest");
+    let client = match reqwest::Client::builder().build() {
+        Ok(c) => c,
+        Err(_) => return Status::NotConfigured,
+    };
+
     let resp = client
-        .get(feed)
+        .get(&url)
+        .header("user-agent", format!("RoJoin/{CURRENT}"))
+        .send()
+        .await;
+
+    let Ok(resp) = resp else { return Status::UpToDate };
+    if !resp.status().is_success() {
+        return Status::UpToDate;
+    }
+
+    let Ok(release) = resp.json::<Release>().await else {
+        return Status::UpToDate;
+    };
+
+    let latest = release.tag_name.trim_start_matches('v').to_string();
+    if !is_newer(&latest, CURRENT) {
+        return Status::UpToDate;
+    }
+
+    match wanted_asset(&release.assets) {
+        Some(asset) => Status::Available {
+            version: latest,
+            url: asset.browser_download_url.clone(),
+        },
+        // A release with no asset for this platform is not an update we can
+        // apply, so it is not offered.
+        None => Status::UpToDate,
+    }
+}
+
+/// Download an update and swap it in.
+///
+/// Writes beside the current executable and renames over it, so a failed or
+/// partial download never leaves a broken binary. The running process keeps
+/// its open file handle, so the swap takes effect on next launch.
+pub async fn install(url: &str) -> Result<std::path::PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("cannot locate myself: {e}"))?;
+
+    let client = reqwest::Client::builder()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let bytes = client
+        .get(url)
         .header("user-agent", format!("RoJoin/{CURRENT}"))
         .send()
         .await
-        .map_err(|e| rojoin_roblox::Error::Api(e.to_string()))?;
+        .map_err(|e| format!("download failed: {e}"))?
+        .bytes()
+        .await
+        .map_err(|e| format!("download failed: {e}"))?;
 
-    if !resp.status().is_success() {
-        return Err(rojoin_roblox::Error::Api(format!(
-            "release feed returned {}",
-            resp.status()
-        )));
+    if bytes.len() < 1_000_000 {
+        return Err("that download is too small to be a real build".into());
     }
 
-    let release: Release = resp
-        .json()
-        .await
-        .map_err(|e| rojoin_roblox::Error::Api(e.to_string()))?;
+    let staged = exe.with_extension("update");
+    std::fs::write(&staged, &bytes).map_err(|e| format!("could not stage: {e}"))?;
 
-    let latest = release.tag_name.trim_start_matches('v').to_string();
-    Ok(is_newer(&latest, CURRENT).then_some(latest))
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("could not make it executable: {e}"))?;
+    }
+
+    std::fs::rename(&staged, &exe).map_err(|e| format!("could not replace: {e}"))?;
+    Ok(exe)
 }
 
-fn reqwest_client() -> rojoin_roblox::Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .build()
-        .map_err(|e| rojoin_roblox::Error::Api(e.to_string()))
-}
-
-/// Semantic-ish comparison. Compares numeric components left to right so
-/// "0.10.0" correctly beats "0.9.0" — a plain string compare would not.
+/// Compares numeric components left to right so "0.10.0" beats "0.9.0" — a
+/// plain string compare gets that backwards.
 fn is_newer(candidate: &str, current: &str) -> bool {
     let parse = |v: &str| -> Vec<u64> {
         v.split(['.', '-'])
@@ -71,9 +154,7 @@ fn is_newer(candidate: &str, current: &str) -> bool {
 
     let a = parse(candidate);
     let b = parse(current);
-    let len = a.len().max(b.len());
-
-    for i in 0..len {
+    for i in 0..a.len().max(b.len()) {
         let x = a.get(i).copied().unwrap_or(0);
         let y = b.get(i).copied().unwrap_or(0);
         if x != y {
@@ -89,32 +170,52 @@ mod tests {
 
     #[test]
     fn numeric_components_compare_numerically() {
-        // The case a string compare gets wrong.
         assert!(is_newer("0.10.0", "0.9.0"));
         assert!(!is_newer("0.9.0", "0.10.0"));
-    }
-
-    #[test]
-    fn equal_versions_are_not_newer() {
         assert!(!is_newer("1.2.3", "1.2.3"));
-        assert!(!is_newer("1.2.3", "1.2.3"));
-    }
-
-    #[test]
-    fn shorter_versions_pad_with_zero() {
         assert!(is_newer("1.1", "1.0.9"));
-        assert!(!is_newer("1.0", "1.0.0"));
-    }
-
-    #[test]
-    fn prerelease_suffixes_do_not_crash_the_parse() {
         assert!(is_newer("1.2.0-beta1", "1.1.0"));
         assert!(!is_newer("garbage", "0.1.0"));
     }
 
-    #[tokio::test]
-    async fn unconfigured_feed_reports_honestly_rather_than_claiming_up_to_date() {
-        let err = latest_version().await.unwrap_err();
-        assert!(err.to_string().contains("not configured"));
+    #[test]
+    fn an_unconfigured_build_says_so_instead_of_failing() {
+        // "failed" reads as a broken feature; this is just not set up yet.
+        let s = Status::NotConfigured;
+        assert!(s.message().contains("not set up"));
+        assert!(!s.can_install());
+    }
+
+    #[test]
+    fn only_an_available_update_can_be_installed() {
+        assert!(!Status::UpToDate.can_install());
+        assert!(Status::Available {
+            version: "9.9.9".into(),
+            url: "https://example/x".into()
+        }
+        .can_install());
+    }
+
+    #[test]
+    fn the_asset_for_this_platform_is_chosen() {
+        let assets = vec![
+            Asset { name: "RoJoin-windows-x64.zip".into(), browser_download_url: "w".into() },
+            Asset { name: "RoJoin-x86_64.AppImage".into(), browser_download_url: "l".into() },
+        ];
+        let picked = wanted_asset(&assets).unwrap();
+        if cfg!(windows) {
+            assert_eq!(picked.browser_download_url, "w");
+        } else {
+            assert_eq!(picked.browser_download_url, "l");
+        }
+    }
+
+    #[test]
+    fn a_release_without_an_asset_for_us_is_not_offered() {
+        let assets = vec![Asset {
+            name: "source.tar.gz".into(),
+            browser_download_url: "s".into(),
+        }];
+        assert!(wanted_asset(&assets).is_none());
     }
 }

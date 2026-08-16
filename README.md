@@ -61,9 +61,3 @@ Macros tab prints the exact commands to fix it.
 The bundled presets encode plausible timings, **not values verified against a
 live game**. Roblox physics changes between updates, so expect to tune them.
 
-## Credits
-
-The macro utilities tab is an independent implementation, inspired by
-[Spencer Macro Utilities](https://github.com/Spencer0187/Spencer-Macro-Utilities).
-No code is shared between the projects: RoJoin's engine was written from public
-descriptions of community-known techniques, without consulting SMU's source.

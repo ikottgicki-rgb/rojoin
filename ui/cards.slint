@@ -47,7 +47,10 @@ export component GameCard inherits Rectangle {
                 width: 100%;
                 height: 100%;
                 background: #00000099;
-                opacity: ta.has-hover ? 1.0 : 0.0;
+                // Includes the button's own hover: hovering it steals the
+                // hover from the card, which used to make it vanish under the
+                // cursor.
+                opacity: ta.has-hover || pta.has-hover ? 1.0 : 0.0;
                 animate opacity { duration: Motion.fast; easing: Motion.ease; }
 
                 Rectangle {

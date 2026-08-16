@@ -1,7 +1,7 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Btn, IconBtn, Segmented, Spinner, EmptyState } from "components.slint";
 import { GameTile, WearItem, SubPlace, ServerRow, DetailItem, GameDetailData, FriendRow, GroupRow, MacroRow, MacroStepRow } from "types.slint";
-import { Sidebar, TopBar, NavEntry, ExpiredBanner } from "shell.slint";
+import { Sidebar, TopBar, NavEntry, ExpiredBanner, AccountMismatchBanner } from "shell.slint";
 import { SignInScreen, SignInPhase } from "signin.slint";
 import { HomeScreen, PlayScreen } from "screens.slint";
 import { GameScreen } from "game.slint";
@@ -59,6 +59,10 @@ export component MainWindow inherits Window {
     callback top_live_search(string);
     callback dismiss_expired();
 
+    in property <bool> account_mismatch: false;
+    in property <string> client_account;
+    callback dismiss_mismatch();
+
     // === home ==============================================================
     in property <string> greeting;
     in property <string> date_label;
@@ -69,6 +73,15 @@ export component MainWindow inherits Window {
     in property <[GameTile]> favorites;
     in property <int> friends_online: 0;
     in property <int> friend_requests: 0;
+    in property <[GameTile]> pinned;
+    in property <bool> show_friends: true;
+    in property <bool> show_hero: true;
+    in property <bool> show_pinned: true;
+    in property <bool> show_recent: true;
+    in property <bool> show_favorites: true;
+
+    callback toggle_home_section(int);
+    callback unpin_game(string);
 
     // === play / search =====================================================
     in-out property <string> play_query;
@@ -86,6 +99,7 @@ export component MainWindow inherits Window {
     in property <[FriendRow]> friend_rows;
     in property <[DetailItem]> requests_list;
     in property <bool> friends_loading: false;
+    in property <string> request_status;
     in property <int> friends_in_game: 0;
     in-out property <string> friend_filter;
 
@@ -103,6 +117,7 @@ export component MainWindow inherits Window {
     in property <GameDetailData> game;
     in property <bool> game_loading: false;
     in property <bool> launching: false;
+    in property <string> launch_error;
     in property <[SubPlace]> sub_places;
     in property <[ServerRow]> servers;
     in property <bool> servers_loading: false;
@@ -119,6 +134,7 @@ export component MainWindow inherits Window {
     callback toggle_favorite(string);
     callback toggle_notify();
     callback copy_link();
+    callback copy_id();
     callback open_browser();
     callback set_server_sort(int);
     callback open_player(string);
@@ -178,12 +194,15 @@ export component MainWindow inherits Window {
     in property <string> macro_backend;
     in property <int> macro_active: 0;
     in property <string> macro_binding;
+    in property <string> macro_io_status;
 
     callback macro_toggle_run(string);
     callback macro_toggle_enabled(string);
     callback macro_edit(string);
     callback macro_rebind(string);
     callback macro_stop_all();
+    callback macro_import();
+    callback macro_export();
     callback macro_open_credit();
 
     // === macro step editor =================================================
@@ -237,6 +256,27 @@ export component MainWindow inherits Window {
     callback open_data_dir();
     callback check_update();
 
+    in property <bool> macros_enabled: true;
+    in property <bool> only_when_focused: true;
+    in property <bool> focus_detectable: true;
+    in property <string> panic_key;
+    in property <bool> binding_panic: false;
+    in property <float> ui_scale: 1.0;
+    in property <[string]> sections;
+    in property <int> startup_section: 0;
+    in property <int> presence_secs: 60;
+    in property <bool> confirm_destructive: true;
+    in property <string> cache_summary;
+
+    callback set_macros_enabled(bool);
+    callback set_only_when_focused(bool);
+    callback bind_panic_key();
+    callback set_ui_scale(float);
+    callback set_startup_section(int);
+    callback set_presence_secs(int);
+    callback set_confirm_destructive(bool);
+    callback clear_caches();
+
     // --- signed out --------------------------------------------------------
     if !root.signed_in: SignInScreen {
         width: 100%;
@@ -288,6 +328,12 @@ export component MainWindow inherits Window {
                 dismiss => { root.dismiss_expired(); }
             }
 
+            if root.account_mismatch: AccountMismatchBanner {
+                client_account: root.client_account;
+                rojoin_account: root.account_name;
+                dismiss => { root.dismiss_mismatch(); }
+            }
+
             HorizontalLayout {
                 spacing: 0;
 
@@ -332,6 +378,7 @@ export component MainWindow inherits Window {
                             game: root.game;
                             loading: root.game_loading;
                             launching: root.launching;
+                            launch_error: root.launch_error;
                             sub_places: root.sub_places;
                             servers: root.servers;
                             servers_loading: root.servers_loading;
@@ -346,6 +393,7 @@ export component MainWindow inherits Window {
                             toggle_favorite => { root.toggle_favorite(root.game.universe_id); }
                             toggle_notify => { root.toggle_notify(); }
                             copy_link => { root.copy_link(); }
+                            copy_id => { root.copy_id(); }
                             open_browser => { root.open_browser(); }
                             set_server_sort(s) => { root.set_server_sort(s); }
                             open_related(id) => { root.open_game(id); }
@@ -370,6 +418,7 @@ export component MainWindow inherits Window {
                             message => { root.profile_message(); }
                             open_browser => { root.open_browser(); }
                             copy_link => { root.copy_link(); }
+                            copy_id => { root.copy_id(); }
                             open_group(id) => { root.open_group(id); }
                             open_game(id) => { root.open_game(id); }
                         }
@@ -387,6 +436,7 @@ export component MainWindow inherits Window {
                             open_game(id) => { root.open_game(id); }
                             open_browser => { root.open_browser(); }
                             copy_link => { root.copy_link(); }
+                            copy_id => { root.copy_id(); }
                         }
 
                         if root.view_kind == 0 && root.section == 0: HomeScreen {
@@ -402,6 +452,14 @@ export component MainWindow inherits Window {
                             favorites: root.favorites;
                             friends_online: root.friends_online;
                             friend_requests: root.friend_requests;
+                            pinned: root.pinned;
+                            show_friends: root.show_friends;
+                            show_hero: root.show_hero;
+                            show_pinned: root.show_pinned;
+                            show_recent: root.show_recent;
+                            show_favorites: root.show_favorites;
+                            toggle_section(k) => { root.toggle_home_section(k); }
+                            unpin(id) => { root.unpin_game(id); }
                             open(id) => { root.open_game(id); }
                             play(id) => { root.play_game(id); }
                             favorite(id) => { root.toggle_favorite(id); }
@@ -435,6 +493,7 @@ export component MainWindow inherits Window {
                             rows: root.friend_rows;
                             requests: root.requests_list;
                             loading: root.friends_loading;
+                            request_status: root.request_status;
                             in_game: root.friends_in_game;
                             online: root.friends_online;
                             filter <=> root.friend_filter;
@@ -486,7 +545,9 @@ export component MainWindow inherits Window {
                             edit(id) => { root.macro_edit(id); }
                             rebind(id) => { root.macro_rebind(id); }
                             stop_all => { root.macro_stop_all(); }
-                            open_credit => { root.macro_open_credit(); }
+                            import_macros => { root.macro_import(); }
+                            export_macros => { root.macro_export(); }
+                            io_status: root.macro_io_status;
                         }
 
                         if root.view_kind == 0 && root.section == 3: LibraryScreen {
@@ -527,8 +588,26 @@ export component MainWindow inherits Window {
                             unsub_game(id) => { root.unsub_game(id); }
                             open_data_dir => { root.open_data_dir(); }
                             check_update => { root.check_update(); }
-                            open_credit => { root.macro_open_credit(); }
-                            open_source => { root.macro_open_credit(); }
+                            macros_enabled: root.macros_enabled;
+                            only_when_focused: root.only_when_focused;
+                            focus_detectable: root.focus_detectable;
+                            panic_key: root.panic_key;
+                            binding_panic: root.binding_panic;
+                            macro_backend: root.macro_backend;
+                            ui_scale: root.ui_scale;
+                            sections: root.sections;
+                            startup_section: root.startup_section;
+                            presence_secs: root.presence_secs;
+                            confirm_destructive: root.confirm_destructive;
+                            cache_summary: root.cache_summary;
+                            set_macros_enabled(v) => { root.set_macros_enabled(v); }
+                            set_only_when_focused(v) => { root.set_only_when_focused(v); }
+                            bind_panic_key => { root.bind_panic_key(); }
+                            set_ui_scale(v) => { root.set_ui_scale(v); }
+                            set_startup_section(v) => { root.set_startup_section(v); }
+                            set_presence_secs(v) => { root.set_presence_secs(v); }
+                            set_confirm_destructive(v) => { root.set_confirm_destructive(v); }
+                            clear_caches => { root.clear_caches(); }
                         }
                     }
                 }
