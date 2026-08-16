@@ -162,7 +162,7 @@ export component GameGrid inherits Rectangle {
             height: root.cell_h;
             clicked => { root.open(g.id); }
             play => { root.play(g.id); }
-            fav_clicked => { root.favorite(g.id); }
+            fav_clicked => { root.favorite(g.universe_id); }
             context_menu(mx, my) => { root.context_menu(g.id, mx, my); }
         }
     }

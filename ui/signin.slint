@@ -12,12 +12,14 @@ export enum SignInPhase {
 export component SignInScreen inherits Rectangle {
     in property <SignInPhase> phase: SignInPhase.idle;
     in property <string> code;
+    in property <bool> copied: false;
     in property <image> qr;
     in property <string> error;
     in property <string> account_name;
     in property <int> accounts_count: 0;
 
     callback request_code();
+    callback copy_code();
     callback open_browser();
     callback cancel();
     callback back();
@@ -101,10 +103,14 @@ export component SignInScreen inherits Rectangle {
 
                         Rectangle {
                             height: 76px;
-                            background: Theme.bg_2;
+                            background: cta.has-hover ? Theme.bg_3 : Theme.bg_2;
                             border-radius: Theme.radius;
                             border-width: Theme.hairline;
-                            border-color: Theme.line;
+                            border-color: cta.has-hover ? Theme.accent : Theme.line;
+                            animate background, border-color {
+                                duration: Motion.fast;
+                                easing: Motion.ease;
+                            }
                             Text {
                                 text: root.code;
                                 color: Theme.accent;
@@ -113,6 +119,19 @@ export component SignInScreen inherits Rectangle {
                                 letter-spacing: 6px;
                                 vertical-alignment: center;
                                 horizontal-alignment: center;
+                            }
+                            Text {
+                                x: parent.width - self.width - Space.md;
+                                y: parent.height - self.height - Space.sm;
+                                text: root.copied ? "copied" : "click to copy";
+                                color: root.copied ? Theme.accent : Theme.text_mute;
+                                font-size: Type.caption;
+                                opacity: cta.has-hover || root.copied ? 1.0 : 0.0;
+                                animate opacity { duration: Motion.fast; easing: Motion.ease; }
+                            }
+                            cta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.copy_code(); }
                             }
                         }
 

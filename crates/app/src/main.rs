@@ -18,6 +18,7 @@ mod images;
 mod linkhandler;
 mod notify;
 mod secrets;
+mod shortcut;
 mod updater;
 
 use adapters as ad;
@@ -66,6 +67,10 @@ pub(crate) struct App {
     /// Asset ids currently worn. Local source of truth for the avatar editor,
     /// because Roblox only accepts the complete list on every change.
     worn: Mutex<Vec<i64>>,
+    /// Thumbnail loader. Settings renders account avatars from deep inside the
+    /// hotkey thread and the toggle macros, where threading a `&Images` through
+    /// every call site does not survive the borrow checker.
+    imgs: Mutex<Option<Images>>,
     /// The macro engine, absent when input permission is missing.
     engine: Mutex<Option<Arc<rojoin_macro::Engine>>>,
     macros: Mutex<Vec<rojoin_macro::Macro>>,
@@ -122,6 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         roster: Mutex::new(Vec::new()),
         offline_collapsed: Mutex::new(false),
         worn: Mutex::new(Vec::new()),
+        imgs: Mutex::new(None),
         engine: Mutex::new(None),
         macros: Mutex::new(Vec::new()),
         bridge: Mutex::new(None),
@@ -130,13 +136,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         hotkeys: Mutex::new(None),
         names: Mutex::new(rojoin_store::NameCache::load()),
         handled_requests: Mutex::new(
-            Config::load().settings.handled_requests.iter().cloned().collect(),
+            Config::load()
+                .data()
+                .map(|d| d.handled_requests.iter().cloned().collect())
+                .unwrap_or_default(),
         ),
         editing: Mutex::new(None),
         capturing: std::sync::atomic::AtomicBool::new(false),
         binding_panic: std::sync::atomic::AtomicBool::new(false),
     });
     *app.bridge.lock().unwrap() = Some(bridge.clone());
+    *app.imgs.lock().unwrap() = Some(imgs.clone());
 
     ui.set_app_version(env!("CARGO_PKG_VERSION").into());
     ui.set_nav(ad::model(
@@ -154,7 +164,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_greeting(ad::greeting(chrono::Local::now().format("%H").to_string().parse().unwrap_or(12)).into());
 
     wire_signin(&ui, &app, &bridge, &imgs);
-    wire_nav(&ui, &app);
+    wire_nav(&ui, &app, &bridge);
     wire_search(&ui, &app, &bridge, &imgs);
     wire_game(&ui, &app, &bridge, &imgs);
     wire_launch(&ui, &app, &bridge);
@@ -163,7 +173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wire_avatar(&ui, &app, &bridge, &imgs);
     wire_macros(&ui, &app);
     wire_settings(&ui, &app, &bridge, &imgs);
-    wire_more_settings(&ui, &app, &imgs);
+    wire_more_settings(&ui, &app);
     wire_home(&ui, &app, &bridge, &imgs);
 
     #[cfg(debug_assertions)]
@@ -227,6 +237,55 @@ fn restore_session(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: 
     });
 }
 
+/// Wipe everything that belongs to whoever was signed in a moment ago.
+///
+/// The reloads below are asynchronous, so without this the previous account's
+/// library, friends and profile stay on screen until each request lands — long
+/// enough to look like the switch did not happen.
+fn clear_account_view(ui: &MainWindow) {
+    let empty = || ad::model(Vec::<GameTile>::new());
+    ui.set_recent(empty());
+    ui.set_favorites(empty());
+    ui.set_pinned(empty());
+    ui.set_play_games(empty());
+    ui.set_related(empty());
+    ui.set_profile_favorites(empty());
+    ui.set_group_games(empty());
+
+    ui.set_friend_rows(ad::model(Vec::new()));
+    ui.set_requests_list(ad::model(Vec::new()));
+    ui.set_profile_groups(ad::model(Vec::new()));
+    ui.set_profile_badges(ad::model(Vec::new()));
+    ui.set_av_items(ad::model(Vec::new()));
+    ui.set_av_outfits(ad::model(Vec::new()));
+    ui.set_av_worn(ad::model(Vec::new()));
+    ui.set_most_played(ad::model(Vec::new()));
+    ui.set_servers(ad::model(Vec::new()));
+    ui.set_sub_places(ad::model(Vec::new()));
+    ui.set_passes(ad::model(Vec::new()));
+    ui.set_badges(ad::model(Vec::new()));
+    ui.set_play_players(ad::model(Vec::new()));
+    ui.set_play_groups(ad::model(Vec::new()));
+
+    ui.set_total_playtime("0m".into());
+    ui.set_games_played(0);
+    ui.set_total_launches(0);
+    ui.set_friends_online(0);
+    ui.set_friend_requests(0);
+    ui.set_friends_in_game(0);
+    ui.set_av_worn_count(0);
+    ui.set_request_status("".into());
+    ui.set_play_last_query("".into());
+
+    ui.set_account_avatar(slint::Image::default());
+    ui.set_launch_error("".into());
+    ui.set_account_mismatch(false);
+
+    // Any open profile or game page belonged to the old session.
+    ui.set_view_kind(0);
+    ui.set_can_back(false);
+}
+
 fn enter_app(
     ui: &MainWindow,
     app: &Arc<App>,
@@ -236,6 +295,23 @@ fn enter_app(
     user_id: i64,
 ) {
     SESSION_GEN.fetch_add(1, Ordering::SeqCst);
+    clear_account_view(ui);
+
+    // Caches that describe the *previous* account. The roster in particular
+    // would otherwise be re-rendered under the new account by any filter click
+    // that lands before the friends fetch returns.
+    app.roster.lock().unwrap().clear();
+    app.worn.lock().unwrap().clear();
+    *app.current_universe.lock().unwrap() = 0;
+    *app.current_place.lock().unwrap() = 0;
+    *app.search_session.lock().unwrap() = new_session_id();
+    *app.handled_requests.lock().unwrap() = app
+        .config
+        .lock()
+        .unwrap()
+        .data()
+        .map(|d| d.handled_requests.iter().cloned().collect())
+        .unwrap_or_default();
 
     ui.set_signed_in(true);
     ui.set_session_expired(false);
@@ -633,11 +709,12 @@ fn respond_to_request(
                         let key = user_id.to_string();
                         app2.handled_requests.lock().unwrap().insert(key.clone());
                         let mut cfg = app2.config.lock().unwrap();
-                        if !cfg.settings.handled_requests.contains(&key) {
-                            cfg.settings.handled_requests.push(key);
-                            let len = cfg.settings.handled_requests.len();
+                        let data = cfg.data_mut();
+                        if !data.handled_requests.contains(&key) {
+                            data.handled_requests.push(key);
+                            let len = data.handled_requests.len();
                             if len > 200 {
-                                cfg.settings.handled_requests.drain(0..len - 200);
+                                data.handled_requests.drain(0..len - 200);
                             }
                             let _ = cfg.save();
                         }
@@ -1001,7 +1078,7 @@ async fn finish_signin(
     });
 }
 
-fn wire_nav(ui: &MainWindow, app: &Arc<App>) {
+fn wire_nav(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
     {
         let weak = ui.as_weak();
         ui.on_navigate(move |i| {
@@ -1055,12 +1132,73 @@ fn wire_nav(ui: &MainWindow, app: &Arc<App>) {
     }
     {
         let weak = ui.as_weak();
+        ui.on_copy_code(move || {
+            let ui = weak.unwrap();
+            let code = ui.get_signin_code().to_string();
+            if code.is_empty() {
+                return;
+            }
+            copy_to_clipboard(&code);
+            ui.set_code_copied(true);
+        });
+    }
+    {
+        let weak = ui.as_weak();
         ui.on_copy_link(move || {
             let ui = weak.unwrap();
             let url = current_url(&ui);
             if !url.is_empty() {
                 copy_to_clipboard(&url);
             }
+        });
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let weak = ui.as_weak();
+        ui.on_make_shortcut(move || {
+            let ui = weak.unwrap();
+            let game = ui.get_game();
+            let Ok(place_id) = game.root_place_id.parse::<i64>() else { return };
+            let Ok(universe_id) = game.universe_id.parse::<i64>() else { return };
+            let name = game.name.to_string();
+
+            ui.set_launch_error("".into());
+            let client = app.client.clone();
+
+            bridge2.call_res(
+                move || async move {
+                    let icons = thumbnails::game_icons(&client, &[universe_id])
+                        .await
+                        .unwrap_or_default();
+
+                    let icon_bytes = match icons.get(&universe_id) {
+                        Some(url) => client.fetch_bytes(url).await.ok(),
+                        None => None,
+                    };
+                    Ok((name, icon_bytes))
+                },
+                move |ui, result: rojoin_roblox::Result<(String, Option<Vec<u8>>)>| {
+                    let Ok((name, icon_bytes)) = result else {
+                        ui.set_launch_error("Could not fetch the game icon.".into());
+                        return;
+                    };
+
+                    let icon = icon_bytes
+                        .as_deref()
+                        .and_then(|b| shortcut::save_icon(place_id, b));
+
+                    match shortcut::create(place_id, &name, icon.as_deref()) {
+                        Ok(path) => {
+                            tracing::info!(path = %path.display(), "created desktop shortcut");
+                            ui.set_launch_error(
+                                format!("Shortcut saved to {}", path.display()).into(),
+                            );
+                        }
+                        Err(e) => ui.set_launch_error(e.into()),
+                    }
+                },
+            );
         });
     }
     {
@@ -2539,7 +2677,7 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
 }
 
 /// Everything on the Settings screen that is a simple persisted toggle.
-fn wire_more_settings(ui: &MainWindow, app: &Arc<App>, imgs: &Images) {
+fn wire_more_settings(ui: &MainWindow, app: &Arc<App>) {
     ui.set_focus_detectable(rojoin_macro::focus::is_detectable());
     ui.set_sections(ad::strings(
         NAV.iter().map(|(label, _)| (*label).to_string()).collect(),
@@ -2604,7 +2742,6 @@ fn wire_more_settings(ui: &MainWindow, app: &Arc<App>, imgs: &Images) {
 
     {
         let app = app.clone();
-        let imgs = imgs.clone();
         let weak = ui.as_weak();
         ui.on_clear_caches(move || {
             let ui = weak.unwrap();
@@ -2613,7 +2750,9 @@ fn wire_more_settings(ui: &MainWindow, app: &Arc<App>, imgs: &Images) {
                 names.users.clear();
                 let _ = names.save();
             }
-            imgs.clear();
+            if let Some(loader) = app.imgs.lock().unwrap().as_ref() {
+                loader.clear();
+            }
             tracing::info!("caches cleared");
             render_settings(&ui, &app);
         });
@@ -2643,6 +2782,23 @@ fn render_settings(ui: &MainWindow, app: &Arc<App>) {
     ui.set_startup_section(cfg.settings.startup_section);
     ui.set_presence_secs(cfg.presence_refresh_secs() as i32);
     ui.set_confirm_destructive(cfg.settings.confirm_destructive);
+
+    let imgs = app.imgs.lock().unwrap().clone();
+    for (i, a) in cfg.accounts.iter().enumerate() {
+        let Some(loader) = imgs.as_ref() else { break };
+        let Some(entry) = app.names.lock().unwrap().users.get(&a.id).cloned() else { continue };
+        if entry.avatar_url.is_empty() {
+            continue;
+        }
+        loader.load(&entry.avatar_url, move |ui, img| {
+            use slint::Model;
+            let model = ui.get_accounts();
+            if let Some(mut row) = model.row_data(i) {
+                row.avatar = img;
+                model.set_row_data(i, row);
+            }
+        });
+    }
 
     let cached = app.names.lock().unwrap().users.len();
     ui.set_cache_summary(
@@ -3311,8 +3467,9 @@ fn wire_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
         let app = app.clone();
         let bridge2 = bridge.clone();
         let weak = ui.as_weak();
+        let imgs2 = imgs.clone();
         ui.on_set_server_sort(move |sort| {
-            fetch_servers(&weak.unwrap(), &app, &bridge2, sort);
+            fetch_servers(&weak.unwrap(), &app, &bridge2, &imgs2, sort);
         });
     }
     {
@@ -3323,26 +3480,78 @@ fn wire_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
             let ui = weak.unwrap();
             let Ok(uid) = universe_id.parse::<i64>() else { return };
 
-            let mut g = ui.get_game();
-            let target = !g.favorited;
-            g.favorited = target;
-            ui.set_game(g);
+            // The star appears both on the detail page and on every grid tile,
+            // so flip whichever of the two the click came from — and flip the
+            // same game everywhere else it happens to be on screen.
+            let detail_matches = ui.get_game().universe_id == universe_id;
+            let target = if detail_matches {
+                !ui.get_game().favorited
+            } else {
+                !tile_favorited(&ui, &universe_id).unwrap_or(false)
+            };
+
+            if detail_matches {
+                let mut g = ui.get_game();
+                g.favorited = target;
+                ui.set_game(g);
+            }
+            set_tile_favorited(&ui, &universe_id, target);
 
             let client = app.client.clone();
+            let uni = universe_id.clone();
             bridge2.call_res(
                 move || async move { games::set_favorited(&client, uid, target).await },
                 move |ui, result| {
-                    if result.is_err() {
-                        let mut g = ui.get_game();
-                        g.favorited = !target;
-                        ui.set_game(g);
-                        if let Err(e) = result {
-                            bridge::report(&ui, e);
+                    if let Err(e) = result {
+                        // Put the star back; the write did not land.
+                        if ui.get_game().universe_id == uni {
+                            let mut g = ui.get_game();
+                            g.favorited = !target;
+                            ui.set_game(g);
                         }
+                        set_tile_favorited(&ui, &uni, !target);
+                        bridge::report(&ui, e);
                     }
                 },
             );
         });
+    }
+}
+
+/// Every model that can be showing a game tile. The star has to stay in sync
+/// across all of them, because the same game turns up in several at once.
+fn tile_models(ui: &MainWindow) -> Vec<slint::ModelRc<GameTile>> {
+    vec![
+        ui.get_recent(),
+        ui.get_favorites(),
+        ui.get_pinned(),
+        ui.get_play_games(),
+        ui.get_related(),
+        ui.get_profile_favorites(),
+        ui.get_group_games(),
+    ]
+}
+
+fn tile_favorited(ui: &MainWindow, universe_id: &str) -> Option<bool> {
+    use slint::Model;
+    tile_models(ui)
+        .iter()
+        .flat_map(|m| m.iter())
+        .find(|t| t.universe_id == universe_id)
+        .map(|t| t.favorited)
+}
+
+fn set_tile_favorited(ui: &MainWindow, universe_id: &str, favorited: bool) {
+    use slint::Model;
+    for model in tile_models(ui) {
+        for i in 0..model.row_count() {
+            let Some(mut tile) = model.row_data(i) else { continue };
+            if tile.universe_id != universe_id {
+                continue;
+            }
+            tile.favorited = favorited;
+            model.set_row_data(i, tile);
+        }
     }
 }
 
@@ -3439,7 +3648,7 @@ fn open_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
                         });
                     }
 
-                    fetch_servers(&ui, &app2, &bridge2, ui.get_server_sort());
+                    fetch_servers(&ui, &app2, &bridge2, &imgs, ui.get_server_sort());
                 }
                 Err(e) => bridge::report(&ui, e),
             }
@@ -3460,7 +3669,14 @@ struct GameLoad {
     pass_icons: std::collections::HashMap<i64, String>,
 }
 
-fn fetch_servers(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, sort: i32) {
+fn fetch_servers(
+    ui: &MainWindow,
+    app: &Arc<App>,
+    bridge: &Arc<Bridge>,
+    imgs: &Images,
+    sort: i32,
+) {
+    let imgs2 = imgs.clone();
     let place_id = *app.current_place.lock().unwrap();
     if place_id == 0 {
         return;
@@ -3475,11 +3691,47 @@ fn fetch_servers(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, sort: i3
     };
 
     bridge.call_res(
-        move || async move { games::servers(&client, place_id, 25, sort).await },
+        move || async move {
+            let list = games::servers(&client, place_id, 25, sort).await?;
+
+            let tokens: Vec<String> = list
+                .iter()
+                .flat_map(|s| {
+                    let mut four: Vec<String> = s
+                        .player_tokens
+                        .clone()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .take(4)
+                        .collect();
+                    four.resize(4, String::new());
+                    four
+                })
+                .collect();
+
+            let urls = if tokens.iter().any(|t| !t.is_empty()) {
+                thumbnails::by_tokens(&client, &tokens).await
+            } else {
+                vec![None; tokens.len()]
+            };
+
+            Ok((list, urls))
+        },
         move |ui, result| {
             ui.set_servers_loading(false);
             match result {
-                Ok(list) => ui.set_servers(ad::model(ad::servers(&list))),
+                Ok((list, urls)) => {
+                    ui.set_servers(ad::model(ad::servers(&list)));
+
+                    for (i, _) in list.iter().enumerate() {
+                        for slot in 0..4usize {
+                            let Some(Some(url)) = urls.get(i * 4 + slot).cloned() else { continue };
+                            imgs2.load(&url, move |ui, img| {
+                                set_server_avatar(&ui.get_servers(), i, slot, img)
+                            });
+                        }
+                    }
+                }
                 Err(e) => {
                     ui.set_servers(ad::model(Vec::new()));
                     bridge::report(&ui, e);
@@ -3487,6 +3739,23 @@ fn fetch_servers(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, sort: i3
             }
         },
     );
+}
+
+fn set_server_avatar(
+    model: &slint::ModelRc<ServerRow>,
+    index: usize,
+    slot: usize,
+    img: slint::Image,
+) {
+    use slint::Model;
+    let Some(mut row) = model.row_data(index) else { return };
+    match slot {
+        0 => row.p0 = img,
+        1 => row.p1 = img,
+        2 => row.p2 = img,
+        _ => row.p3 = img,
+    }
+    model.set_row_data(index, row);
 }
 
 fn wire_launch(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
@@ -3542,8 +3811,16 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
             if let Some(id) = app.config.lock().unwrap().active_account.clone() {
                 match secrets::load(&id) {
                     Some(cookie) => match rojoin_launcher::sober::set_cookie(&cookie) {
-                        Ok(true) => tracing::info!(account = %id, "switched Sober's account"),
-                        Ok(false) => tracing::debug!("Sober is already on this account"),
+                        Ok(true) => {
+                            tracing::info!(account = %id, "switched Sober's account");
+                            // The client is now on our account, so the warning
+                            // that said otherwise is stale.
+                            ui.set_account_mismatch(false);
+                        }
+                        Ok(false) => {
+                            tracing::debug!("Sober is already on this account");
+                            ui.set_account_mismatch(false);
+                        }
                         Err(e) => {
                             tracing::error!(error = %e, "could not switch account before launch");
                             ui.set_launch_error(format!("{e}").into());

@@ -37,6 +37,7 @@ pub fn seed(ui: &MainWindow) {
         .iter()
         .enumerate()
         .map(|(i, (name, creator, playing, rating))| GameTile {
+            universe_id: Default::default(),
             id: format!("{}", 100000 + i).into(),
             name: (*name).into(),
             creator: (*creator).into(),

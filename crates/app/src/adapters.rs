@@ -71,6 +71,7 @@ pub fn today_label() -> String {
 pub fn tile_from_detail(d: &GameDetail, votes: Option<&Votes>, favorited: bool) -> GameTile {
     GameTile {
         id: d.root_place_id.to_string().into(),
+        universe_id: d.id.to_string().into(),
         name: d.name.clone().into(),
         creator: d.creator.name.clone().into(),
         playing: compact(d.playing).into(),
@@ -83,6 +84,7 @@ pub fn tile_from_detail(d: &GameDetail, votes: Option<&Votes>, favorited: bool) 
 pub fn tile_from_omni(g: &OmniGame) -> GameTile {
     GameTile {
         id: g.root_place_id.to_string().into(),
+        universe_id: g.universe_id.to_string().into(),
         name: g.name.clone().into(),
         creator: g.creator_name.clone().into(),
         playing: compact(g.player_count).into(),

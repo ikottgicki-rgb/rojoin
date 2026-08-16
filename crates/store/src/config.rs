@@ -60,6 +60,12 @@ pub struct AccountData {
     /// Friends lifted to the top of the list. Per-account on purpose: v1 kept
     /// these globally and one account's pins corrupted the other's.
     pub pinned_friends: Vec<String>,
+    /// Friend requests already accepted or declined. Roblox keeps serving a
+    /// handled request for a while, so without this the row reappears on the
+    /// next refresh. Per-account: a request handled on one account says nothing
+    /// about the same person's request to another.
+    #[serde(default)]
+    pub handled_requests: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -111,7 +117,6 @@ pub struct Settings {
     /// Friend requests already accepted or declined. Roblox keeps returning
     /// them for a while, so they are filtered out of every refetch — otherwise
     /// a declined request reappears and looks like the click did nothing.
-    pub handled_requests: Vec<String>,
 
     /// Which home sections are shown, in order. Kinds:
     /// 0 status · 1 jump back in · 2 pinned · 3 recent · 4 favourites
@@ -135,7 +140,6 @@ impl Default for Settings {
             startup_section: 0,
             presence_refresh_secs: 60,
             confirm_destructive: true,
-            handled_requests: Vec::new(),
             home_sections: vec![0, 1, 2, 3, 4],
         }
     }

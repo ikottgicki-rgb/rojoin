@@ -130,7 +130,10 @@ export component MainWindow inherits Window {
     callback toggle_notify();
     callback copy_link();
     callback copy_id();
+    callback copy_code();
+    in property <bool> code_copied: false;
     callback inspect_badge(string);
+    callback make_shortcut();
     callback open_browser();
     callback set_server_sort(int);
     callback open_player(string);
@@ -275,6 +278,8 @@ export component MainWindow inherits Window {
         error: root.signin_error;
         account_name: root.account_name;
         accounts_count: root.accounts_count;
+        copied: root.code_copied;
+        copy_code => { root.copy_code(); }
         request_code => { root.signin_start(); }
         open_browser => { root.signin_open_browser(); }
         cancel => { root.signin_cancel(); }
@@ -374,6 +379,7 @@ export component MainWindow inherits Window {
                             open_browser => { root.open_browser(); }
                             set_server_sort(s) => { root.set_server_sort(s); }
                             inspect_badge(id) => { root.inspect_badge(id); }
+                            make_shortcut => { root.make_shortcut(); }
                             open_related(id) => { root.open_game(id); }
                             favorite_related(id) => { root.toggle_favorite(id); }
                             open_creator => { root.open_creator(); }

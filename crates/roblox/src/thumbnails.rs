@@ -122,6 +122,66 @@ pub async fn assets(client: &Client, asset_ids: &[i64]) -> Result<HashMap<i64, S
     .await
 }
 
+/// Resolve head shots from server player *tokens*.
+///
+/// Servers do not expose user ids — only opaque tokens — so these cannot go
+/// through the by-id endpoints. Results come back in request order.
+pub async fn by_tokens(client: &Client, tokens: &[String]) -> Vec<Option<String>> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Item {
+        request_id: String,
+        #[serde(default)]
+        state: String,
+        #[serde(default)]
+        image_url: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Resp {
+        #[serde(default = "Vec::new")]
+        data: Vec<Item>,
+    }
+
+    let mut out = vec![None; tokens.len()];
+
+    for (chunk_i, chunk) in tokens.chunks(BATCH).enumerate() {
+        let body: Vec<serde_json::Value> = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, token)| {
+                serde_json::json!({
+                    "requestId": (chunk_i * BATCH + i).to_string(),
+                    "type": "AvatarHeadShot",
+                    "targetId": 0,
+                    "token": token,
+                    "format": "png",
+                    "size": "150x150",
+                })
+            })
+            .collect();
+
+        let Ok(resp) = client
+            .post_json::<Resp>("https://thumbnails.roblox.com/v1/batch", &serde_json::json!(body))
+            .await
+        else {
+            break;
+        };
+
+        for item in resp.data {
+            if item.state != "Completed" {
+                continue;
+            }
+            if let Ok(idx) = item.request_id.parse::<usize>() {
+                if let Some(slot) = out.get_mut(idx) {
+                    *slot = item.image_url;
+                }
+            }
+        }
+    }
+
+    out
+}
+
 async fn batch<F>(client: &Client, ids: &[i64], make_url: F) -> Result<HashMap<i64, String>>
 where
     F: Fn(String) -> String,

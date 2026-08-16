@@ -208,6 +208,7 @@ export component GameScreen inherits Rectangle {
     callback copy_link();
     callback copy_id();
     callback inspect_badge(string);
+    callback make_shortcut();
     callback open_browser();
     callback set_server_sort(int);
     callback open_related(string);
@@ -397,6 +398,7 @@ export component GameScreen inherits Rectangle {
                         }
                         IconBtn { glyph: "⧉"; size_px: 36px; clicked => { root.copy_link(); } }
                         IconBtn { glyph: "#"; size_px: 36px; clicked => { root.copy_id(); } }
+                        IconBtn { glyph: "⊞"; size_px: 36px; clicked => { root.make_shortcut(); } }
                         IconBtn { glyph: "↗"; size_px: 36px; clicked => { root.open_browser(); } }
                     }
 
