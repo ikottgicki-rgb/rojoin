@@ -121,6 +121,28 @@ pub struct Settings {
     /// Which home sections are shown, in order. Kinds:
     /// 0 status · 1 jump back in · 2 pinned · 3 recent · 4 favourites
     pub home_sections: Vec<i32>,
+
+    /// How many servers to ask for on a game's server list.
+    #[serde(default)]
+    pub server_page_size: u32,
+    /// Seconds before an API call is abandoned.
+    #[serde(default)]
+    pub request_timeout_secs: u32,
+    /// Thumbnails held in memory before the oldest are evicted.
+    #[serde(default)]
+    pub image_cache_size: u32,
+    /// Write debug-level logs, and mirror them to a file in the data folder.
+    #[serde(default)]
+    pub verbose_logging: bool,
+    /// Fetch and stage a new release on startup without being asked. Default
+    /// on; the swap still only takes effect on the next launch.
+    #[serde(default = "yes")]
+    pub auto_update: bool,
+}
+
+/// serde needs a function, not a literal, for a defaulted `true`.
+fn yes() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -141,6 +163,13 @@ impl Default for Settings {
             presence_refresh_secs: 60,
             confirm_destructive: true,
             home_sections: vec![0, 1, 2, 3, 4],
+            // Zero means "unset": the accessor picks the real default, so an
+            // older config file keeps working without a migration.
+            server_page_size: 0,
+            request_timeout_secs: 0,
+            image_cache_size: 0,
+            verbose_logging: false,
+            auto_update: true,
         }
     }
 }
@@ -228,6 +257,21 @@ impl Config {
         entry.playtime_secs += secs;
     }
 
+    /// Remember that a friend request was answered, capped so the list cannot
+    /// grow without bound over the life of an account.
+    pub fn remember_handled_request(&mut self, key: String) -> bool {
+        let data = self.data_mut();
+        if data.handled_requests.contains(&key) {
+            return false;
+        }
+        data.handled_requests.push(key);
+        let len = data.handled_requests.len();
+        if len > 200 {
+            data.handled_requests.drain(0..len - 200);
+        }
+        true
+    }
+
     pub fn push_recent_search(&mut self, query: &str) {
         if query.trim().is_empty() {
             return;
@@ -236,6 +280,31 @@ impl Config {
         data.recent_searches.retain(|q| q != query);
         data.recent_searches.insert(0, query.to_string());
         data.recent_searches.truncate(8);
+    }
+
+    /// Server page size, snapped to a value Roblox accepts. Zero means unset,
+    /// which is the common case for a config written before this existed.
+    pub fn server_page_size(&self) -> u32 {
+        match self.settings.server_page_size {
+            10 | 25 | 50 | 100 => self.settings.server_page_size,
+            _ => 25,
+        }
+    }
+
+    /// Bounded either side: a two-second timeout makes every call fail on a
+    /// slow link, and a five-minute one makes the app look frozen.
+    pub fn request_timeout_secs(&self) -> u32 {
+        match self.settings.request_timeout_secs {
+            0 => 20,
+            n => n.clamp(5, 120),
+        }
+    }
+
+    pub fn image_cache_size(&self) -> u32 {
+        match self.settings.image_cache_size {
+            0 => 400,
+            n => n.clamp(50, 2000),
+        }
     }
 
     /// Clamped so a bad config cannot make the app unusable.
@@ -447,5 +516,33 @@ mod tests {
 
         let recorded = c.data().map(|d| d.recent_searches.len()).unwrap_or(0);
         assert_eq!(recorded, 0);
+    }
+}
+
+#[cfg(test)]
+mod handled_request_tests {
+    use super::*;
+
+    #[test]
+    fn the_handled_list_stays_capped_however_long_an_account_lives() {
+        let mut cfg = Config::default();
+        cfg.active_account = Some("1".into());
+        for i in 0..500 {
+            cfg.remember_handled_request(i.to_string());
+        }
+        let data = cfg.data().unwrap();
+        assert_eq!(data.handled_requests.len(), 200);
+        // the newest survive, the oldest are dropped
+        assert!(data.handled_requests.contains(&"499".to_string()));
+        assert!(!data.handled_requests.contains(&"0".to_string()));
+    }
+
+    #[test]
+    fn answering_the_same_request_twice_is_not_recorded_twice() {
+        let mut cfg = Config::default();
+        cfg.active_account = Some("1".into());
+        assert!(cfg.remember_handled_request("7".into()));
+        assert!(!cfg.remember_handled_request("7".into()));
+        assert_eq!(cfg.data().unwrap().handled_requests.len(), 1);
     }
 }

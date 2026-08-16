@@ -123,6 +123,7 @@ pub async fn servers(
     sort: ServerSort,
 ) -> Result<Vec<Server>> {
     let limit = nearest_allowed_limit(limit);
+    let limit = crate::page_limit(limit);
     let url = format!("{GAMES}/games/{place_id}/servers/Public?limit={limit}");
     let page: Page<Server> = client.get_json(&url).await?;
 
@@ -158,6 +159,7 @@ pub async fn game_passes(client: &Client, universe_id: i64) -> Result<Vec<GamePa
 /// Games a user has favourited. Public, so it works for other people's
 /// profiles as well as your own.
 pub async fn user_favorites(client: &Client, user_id: i64, limit: u32) -> Result<Vec<GameDetail>> {
+    let limit = crate::page_limit(limit);
     let url = format!("{GAMES_V2}/users/{user_id}/favorite/games?limit={limit}&sortOrder=Asc");
     let page: Page<GameDetail> = client.get_json(&url).await?;
     Ok(page.data)
@@ -165,6 +167,7 @@ pub async fn user_favorites(client: &Client, user_id: i64, limit: u32) -> Result
 
 /// Games published by a group.
 pub async fn group_games(client: &Client, group_id: i64, limit: u32) -> Result<Vec<GameDetail>> {
+    let limit = crate::page_limit(limit);
     let url = format!("{GAMES_V2}/groups/{group_id}/games?limit={limit}&sortOrder=Asc");
     let page: Page<GameDetail> = client.get_json(&url).await?;
     Ok(page.data)

@@ -33,3 +33,18 @@ pub use error::{Error, Result};
 pub const CSRF_HEADER: &str = "x-csrf-token";
 
 pub const USER_AGENT: &str = concat!("RoJoin/", env!("CARGO_PKG_VERSION"));
+
+/// Round a page size up to one Roblox will accept.
+///
+/// The paged endpoints take *only* 10, 25, 50 or 100 — anything else is a 400
+/// (`Allowed values: 10, 25, 50, 100`), not a clamp. Asking for 12 therefore
+/// returns nothing at all, which from the caller's side is indistinguishable
+/// from "there are none". Every paged call goes through this.
+pub(crate) fn page_limit(requested: u32) -> u32 {
+    match requested {
+        0..=10 => 10,
+        11..=25 => 25,
+        26..=50 => 50,
+        _ => 100,
+    }
+}

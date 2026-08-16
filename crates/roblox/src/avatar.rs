@@ -132,6 +132,7 @@ pub async fn inventory(
     asset_type: u32,
     limit: u32,
 ) -> Result<Vec<InventoryItem>> {
+    let limit = crate::page_limit(limit);
     let url = format!(
         "{INVENTORY}/v2/users/{user_id}/inventory/{asset_type}?limit={limit}&sortOrder=Desc"
     );

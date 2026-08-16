@@ -232,6 +232,17 @@ export component MainWindow inherits Window {
 
     in property <[AccountRow]> accounts;
     in property <[DetailItem]> shortcuts;
+    in property <int> server_page;
+    in property <int> timeout_choice;
+    in property <int> cache_choice;
+    in property <bool> verbose_logging;
+    in property <bool> auto_update;
+    callback set_server_page(int);
+    callback set_timeout_choice(int);
+    callback set_cache_choice(int);
+    callback set_verbose_logging(bool);
+    callback set_auto_update(bool);
+    callback open_log();
     callback remove_shortcut(string);
     in property <[DetailItem]> notify_friends_list;
     in property <[DetailItem]> notify_games_list;
@@ -585,6 +596,17 @@ export component MainWindow inherits Window {
                             unsub_friend(id) => { root.unsub_friend(id); }
                             shortcuts: root.shortcuts;
                             remove_shortcut(id) => { root.remove_shortcut(id); }
+                            server_page: root.server_page;
+                            timeout_choice: root.timeout_choice;
+                            cache_choice: root.cache_choice;
+                            verbose_logging: root.verbose_logging;
+                            auto_update: root.auto_update;
+                            set_server_page(i) => { root.set_server_page(i); }
+                            set_timeout_choice(i) => { root.set_timeout_choice(i); }
+                            set_cache_choice(i) => { root.set_cache_choice(i); }
+                            set_verbose_logging(v) => { root.set_verbose_logging(v); }
+                            set_auto_update(v) => { root.set_auto_update(v); }
+                            open_log => { root.open_log(); }
                             unsub_game(id) => { root.unsub_game(id); }
                             open_data_dir => { root.open_data_dir(); }
                             check_update => { root.check_update(); }

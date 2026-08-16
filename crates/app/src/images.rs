@@ -35,7 +35,21 @@ pub struct Decoded {
 
 /// Roughly 400 thumbnails. At 256x144 RGBA that is about 59 MB worst case,
 /// and real thumbnails are smaller.
+/// Default thumbnails held in memory. Overridable in Settings; this is the
+/// value used until one is configured.
 const CAPACITY: usize = 400;
+
+/// Live capacity, set once at startup from the saved settings.
+static LIVE_CAPACITY: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(CAPACITY);
+
+pub fn set_capacity(n: usize) {
+    LIVE_CAPACITY.store(n.max(50), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn capacity() -> usize {
+    LIVE_CAPACITY.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 #[derive(Default)]
 struct Cache {
@@ -54,7 +68,7 @@ impl Cache {
         if self.map.insert(url.clone(), decoded).is_none() {
             self.order.push(url);
         }
-        while self.order.len() > CAPACITY {
+        while self.order.len() > capacity() {
             let oldest = self.order.remove(0);
             self.map.remove(&oldest);
         }
@@ -203,7 +217,7 @@ fn to_image(url: &str, decoded: &Decoded) -> Image {
         buf.make_mut_bytes().copy_from_slice(&decoded.rgba);
         let img = Image::from_rgba8(buf);
 
-        if memo.len() > CAPACITY {
+        if memo.len() > capacity() {
             memo.clear();
         }
         memo.insert(url.to_string(), img.clone());

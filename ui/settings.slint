@@ -135,6 +135,17 @@ component Card inherits Rectangle {
 export component SettingsScreen inherits Rectangle {
     in property <[AccountRow]> accounts;
     in property <[DetailItem]> shortcuts;
+    in property <int> server_page;      // index into 10/25/50/100
+    in property <int> timeout_choice;   // index into 10/20/45/90
+    in property <int> cache_choice;     // index into 100/400/800/2000
+    in property <bool> verbose_logging;
+    in property <bool> auto_update;
+    callback set_server_page(int);
+    callback set_timeout_choice(int);
+    callback set_cache_choice(int);
+    callback set_verbose_logging(bool);
+    callback set_auto_update(bool);
+    callback open_log();
     in property <[DetailItem]> notify_friends;
     in property <[DetailItem]> notify_games;
     in property <bool> dark: true;
@@ -601,6 +612,75 @@ export component SettingsScreen inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             Btn { label: "Clear"; clicked => { root.clear_caches(); } }
+                        }
+                    }
+                }
+
+                Card {
+                    title: "ADVANCED";
+                    Row {
+                        title: "Servers per page";
+                        help: "How many servers to request for a game's server list. Roblox only accepts these four sizes.";
+                        VerticalLayout {
+                            alignment: center;
+                            Segmented {
+                                options: ["10", "25", "50", "100"];
+                                current: root.server_page;
+                                changed(i) => { root.set_server_page(i); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Request timeout";
+                        help: "Seconds before an API call is given up on. Raise it on a slow connection; lower it if you would rather fail fast.";
+                        VerticalLayout {
+                            alignment: center;
+                            Segmented {
+                                options: ["10s", "20s", "45s", "90s"];
+                                current: root.timeout_choice;
+                                changed(i) => { root.set_timeout_choice(i); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Thumbnail cache";
+                        help: "Images kept in memory before the oldest are dropped. Higher uses more RAM and re-downloads less.";
+                        VerticalLayout {
+                            alignment: center;
+                            Segmented {
+                                options: ["100", "400", "800", "2000"];
+                                current: root.cache_choice;
+                                changed(i) => { root.set_cache_choice(i); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Update automatically";
+                        help: "Downloads a new release in the background and uses it the next time you start RoJoin.";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.auto_update;
+                                toggled => { root.set_auto_update(!root.auto_update); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Verbose logging";
+                        help: "Records debug detail and writes it to rojoin.log in the data folder. Useful when something fails silently. Applies on next start.";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.verbose_logging;
+                                toggled => { root.set_verbose_logging(!root.verbose_logging); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Log file";
+                        VerticalLayout {
+                            alignment: center;
+                            Btn { label: "Open"; clicked => { root.open_log(); } }
                         }
                     }
                 }

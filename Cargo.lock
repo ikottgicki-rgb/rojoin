@@ -4362,7 +4362,7 @@ dependencies = [
 
 [[package]]
 name = "rojoin-launcher"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rojoin-roblox",
  "thiserror 2.0.20",
@@ -4371,7 +4371,7 @@ dependencies = [
 
 [[package]]
 name = "rojoin-macro"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "evdev",
  "libc",
@@ -4384,7 +4384,7 @@ dependencies = [
 
 [[package]]
 name = "rojoin-roblox"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "reqwest",
@@ -4397,7 +4397,7 @@ dependencies = [
 
 [[package]]
 name = "rojoin-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "directories",
  "rojoin-macro",
@@ -4410,7 +4410,7 @@ dependencies = [
 
 [[package]]
 name = "rojoin-v4"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",

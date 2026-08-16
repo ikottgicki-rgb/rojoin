@@ -103,21 +103,44 @@ pub(crate) struct App {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "rojoin=info,rojoin_v4=info".into()),
-        )
-        .init();
+    // Read the config before anything else: it decides how loudly to log, how
+    // patient the HTTP client is, and how much of the thumbnail cache to keep.
+    let startup = Config::load();
+
+    let level = if startup.settings.verbose_logging {
+        "rojoin=debug,rojoin_v4=debug"
+    } else {
+        "rojoin=info,rojoin_v4=info"
+    };
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| level.into());
+
+    // Verbose mode also writes to a file, because the interesting failures
+    // (a gated write, a throttle) happen while nobody is watching a terminal.
+    if startup.settings.verbose_logging {
+        match std::fs::File::create(log_path()) {
+            Ok(file) => tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_ansi(false)
+                .with_writer(std::sync::Mutex::new(file))
+                .init(),
+            Err(_) => tracing_subscriber::fmt().with_env_filter(filter).init(),
+        }
+    } else {
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+    }
+
+    images::set_capacity(startup.image_cache_size() as usize);
+    updater::clean_previous_build();
 
     let ui = MainWindow::new()?;
     let bridge = Arc::new(Bridge::new(&ui)?);
-    let client = Client::new()?;
+    let client = Client::with_timeout(startup.request_timeout_secs())?;
     let imgs = Images::new(client.clone(), ui.as_weak(), bridge.runtime().clone());
 
     let app = Arc::new(App {
         client: client.clone(),
-        config: Mutex::new(Config::load()),
+        config: Mutex::new(startup),
         current_universe: Mutex::new(0),
         current_place: Mutex::new(0),
         signin: Mutex::new(None),
@@ -186,6 +209,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         demo::seed(&ui);
     } else {
         restore_session(&ui, &app, &bridge, &imgs);
+        maybe_auto_update(&ui, &app, &bridge);
     }
 
     if let Some((place_id, instance)) = std::env::args()
@@ -593,8 +617,9 @@ fn load_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
 
             for (i, u) in load.requests.iter().enumerate() {
                 if let Some(url) = load.avatars.get(&u.id).cloned() {
+                    let id = u.id.to_string();
                     imgs2.load(&url, move |ui, img| {
-                        set_item_thumb(&ui.get_requests_list(), i, img)
+                        set_item_thumb(&ui.get_requests_list(), i, &id, img)
                     });
                 }
             }
@@ -710,13 +735,7 @@ fn respond_to_request(
                         let key = user_id.to_string();
                         app2.handled_requests.lock().unwrap().insert(key.clone());
                         let mut cfg = app2.config.lock().unwrap();
-                        let data = cfg.data_mut();
-                        if !data.handled_requests.contains(&key) {
-                            data.handled_requests.push(key);
-                            let len = data.handled_requests.len();
-                            if len > 200 {
-                                data.handled_requests.drain(0..len - 200);
-                            }
+                        if cfg.remember_handled_request(key) {
                             let _ = cfg.save();
                         }
                     }
@@ -1102,11 +1121,6 @@ fn wire_nav(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
         });
     }
     {
-        let weak = ui.as_weak();
-        ui.on_open_settings(move || tracing::info!("settings: milestone 6"));
-    }
-    ui.on_open_account(|| tracing::info!("account switcher: milestone 6"));
-    {
         let app = app.clone();
         let weak = ui.as_weak();
         ui.on_toggle_notify(move || {
@@ -1278,6 +1292,55 @@ fn copy_with_toast(ui: &MainWindow, text: &str, what: &str) {
 fn toast(ui: &MainWindow, message: &str) {
     ui.set_toast_text(message.into());
     ui.set_toast_nonce(ui.get_toast_nonce().wrapping_add(1));
+}
+
+/// Where verbose logs are written. Beside the config, so the existing
+/// "Data folder" button in Settings already reveals it.
+/// Reveal the log file, or the folder holding it if it has not been written
+/// yet — opening a missing path just fails silently otherwise.
+fn open_log_file() {
+    let path = log_path();
+    let target = if path.is_file() { path } else { rojoin_store::config_dir() };
+    let _ = std::process::Command::new(if cfg!(windows) { "explorer" } else { "xdg-open" })
+        .arg(target)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// Fetch and stage a newer release in the background, if one exists.
+///
+/// The running binary is never swapped underneath a live process — the new
+/// build only takes over on the next launch — so this is safe to do silently.
+/// It stays quiet unless it actually did something.
+fn maybe_auto_update(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
+    if !app.config.lock().unwrap().settings.auto_update {
+        return;
+    }
+
+    let weak = ui.as_weak();
+    bridge.spawn(async move {
+        let updater::Status::Available { version, url } = updater::check().await else {
+            return;
+        };
+
+        match updater::install(&url).await {
+            Ok(_) => {
+                tracing::info!(%version, "update staged");
+                let _ = weak.upgrade_in_event_loop(move |ui| {
+                    toast(&ui, &format!("Updated to {version} — restart to apply"));
+                    ui.set_update_status(
+                        format!("Version {version} installed. Restart to use it.").into(),
+                    );
+                });
+            }
+            Err(e) => tracing::warn!(error = %e, "auto-update could not finish"),
+        }
+    });
+}
+
+fn log_path() -> std::path::PathBuf {
+    rojoin_store::config_dir().join("rojoin.log")
 }
 
 fn copy_to_clipboard(text: &str) {
@@ -1730,7 +1793,8 @@ fn load_avatar(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
 
             for (i, a) in load.av.assets.iter().enumerate() {
                 if let Some(url) = load.worn_thumbs.get(&a.id).cloned() {
-                    imgs2.load(&url, move |ui, img| set_item_thumb(&ui.get_av_worn(), i, img));
+                    let id = a.id.to_string();
+                    imgs2.load(&url, move |ui, img| set_item_thumb(&ui.get_av_worn(), i, &id, img));
                 }
             }
 
@@ -1749,7 +1813,8 @@ fn load_avatar(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
 
             for (i, o) in load.outfits.iter().enumerate() {
                 if let Some(url) = load.outfit_thumbs.get(&o.id).cloned() {
-                    imgs2.load(&url, move |ui, img| set_item_thumb(&ui.get_av_outfits(), i, img));
+                    let id = o.id.to_string();
+                    imgs2.load(&url, move |ui, img| set_item_thumb(&ui.get_av_outfits(), i, &id, img));
                 }
             }
 
@@ -1823,7 +1888,8 @@ fn load_wardrobe(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
 
             for (idx, item) in items.iter().enumerate() {
                 if let Some(url) = thumbs.get(&item.asset_id).cloned() {
-                    imgs2.load(&url, move |ui, img| set_wear_thumb(&ui.get_av_items(), idx, img));
+                    let id = item.asset_id.to_string();
+                    imgs2.load(&url, move |ui, img| set_wear_thumb(&ui.get_av_items(), idx, &id, img));
                 }
             }
         },
@@ -2674,6 +2740,19 @@ fn wire_more_settings(ui: &MainWindow, app: &Arc<App>) {
         }};
     }
 
+    setting!(on_set_server_page, i32, |cfg, v| {
+        cfg.settings.server_page_size = [10, 25, 50, 100][v.clamp(0, 3) as usize];
+    });
+    setting!(on_set_timeout_choice, i32, |cfg, v| {
+        cfg.settings.request_timeout_secs = [10, 20, 45, 90][v.clamp(0, 3) as usize];
+    });
+    setting!(on_set_cache_choice, i32, |cfg, v| {
+        cfg.settings.image_cache_size = [100, 400, 800, 2000][v.clamp(0, 3) as usize];
+        images::set_capacity(cfg.image_cache_size() as usize);
+    });
+    setting!(on_set_verbose_logging, bool, |cfg, v| { cfg.settings.verbose_logging = v; });
+    setting!(on_set_auto_update, bool, |cfg, v| { cfg.settings.auto_update = v; });
+
     setting!(on_set_macros_enabled, bool, |cfg, v| { cfg.settings.macros_enabled = v; });
     setting!(on_set_only_when_focused, bool, |cfg, v| {
         cfg.settings.macros_only_when_focused = v;
@@ -2731,6 +2810,8 @@ fn wire_more_settings(ui: &MainWindow, app: &Arc<App>) {
             render_settings(&ui, &app);
         });
     }
+    ui.on_open_log(open_log_file);
+
     {
         let app = app.clone();
         let weak = ui.as_weak();
@@ -2785,6 +2866,26 @@ fn render_settings(ui: &MainWindow, app: &Arc<App>) {
     ui.set_startup_section(cfg.settings.startup_section);
     ui.set_presence_secs(cfg.presence_refresh_secs() as i32);
     ui.set_confirm_destructive(cfg.settings.confirm_destructive);
+    ui.set_server_page(match cfg.server_page_size() {
+        10 => 0,
+        25 => 1,
+        50 => 2,
+        _ => 3,
+    });
+    ui.set_timeout_choice(match cfg.request_timeout_secs() {
+        10 => 0,
+        20 => 1,
+        45 => 2,
+        _ => 3,
+    });
+    ui.set_cache_choice(match cfg.image_cache_size() {
+        100 => 0,
+        400 => 1,
+        800 => 2,
+        _ => 3,
+    });
+    ui.set_verbose_logging(cfg.settings.verbose_logging);
+    ui.set_auto_update(cfg.settings.auto_update);
 
     // Account head shots. The stored `avatar_url` is only filled in at sign-in
     // and goes stale as soon as someone changes their avatar, so ask Roblox
@@ -2941,8 +3042,9 @@ fn load_pinned(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
 
             for (i, d) in load.details.iter().enumerate() {
                 if let Some(url) = load.art.get(&d.id).cloned() {
+                    let id = d.root_place_id.to_string();
                     imgs2.load(&url, move |ui, img| {
-                        set_tile_thumb(&ui.get_pinned(), i, img)
+                        set_tile_thumb(&ui.get_pinned(), i, &id, img)
                     });
                 }
             }
@@ -3011,10 +3113,7 @@ fn answer_request(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, accept:
     app.handled_requests.lock().unwrap().insert(uid.to_string());
     {
         let mut cfg = app.config.lock().unwrap();
-        let data = cfg.data_mut();
-        if !data.handled_requests.contains(&uid.to_string()) {
-            data.handled_requests.push(uid.to_string());
-        }
+        cfg.remember_handled_request(uid.to_string());
         let _ = cfg.save();
     }
     drop_request_row(ui, uid);
@@ -3156,8 +3255,9 @@ fn open_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
 
             for (i, d) in load.favorites.iter().enumerate() {
                 if let Some(url) = load.game_art.get(&d.id).cloned() {
+                    let id = d.root_place_id.to_string();
                     imgs2.load(&url, move |ui, img| {
-                        set_tile_thumb(&ui.get_profile_favorites(), i, img)
+                        set_tile_thumb(&ui.get_profile_favorites(), i, &id, img)
                     });
                 }
             }
@@ -3309,8 +3409,9 @@ fn open_group(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
 
             for (i, d) in load.games.iter().enumerate() {
                 if let Some(url) = load.art.get(&d.id).cloned() {
+                    let id = d.root_place_id.to_string();
                     imgs2.load(&url, move |ui, img| {
-                        set_tile_thumb(&ui.get_group_games(), i, img)
+                        set_tile_thumb(&ui.get_group_games(), i, &id, img)
                     });
                 }
             }
@@ -3378,8 +3479,9 @@ fn load_favorites(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &
 
             for (i, d) in games.iter().enumerate() {
                 let Some(url) = art.get(&d.id).cloned() else { continue };
+                let id = d.root_place_id.to_string();
                 imgs2.load(&url, move |ui, img| {
-                    set_tile_thumb(&ui.get_favorites(), i, img)
+                    set_tile_thumb(&ui.get_favorites(), i, &id, img)
                 });
             }
         },
@@ -3445,8 +3547,9 @@ fn load_home(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
 
             for (i, d) in load.details.iter().enumerate() {
                 let Some(url) = load.art.get(&d.id).cloned() else { continue };
+                let id = d.root_place_id.to_string();
                 imgs.load(&url, move |ui, img| {
-                    set_tile_thumb(&ui.get_recent(), i, img)
+                    set_tile_thumb(&ui.get_recent(), i, &id, img)
                 });
                 if i == 0 {
                     imgs.load(&url, |ui, img| {
@@ -3565,8 +3668,9 @@ fn run_search(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
 
                     for (i, g) in found.iter().enumerate() {
                         if let Some(url) = art.get(&g.universe_id).cloned() {
+                            let id = g.root_place_id.to_string();
                             imgs.load(&url, move |ui, img| {
-                                set_tile_thumb(&ui.get_play_games(), i, img)
+                                set_tile_thumb(&ui.get_play_games(), i, &id, img)
                             });
                         }
                     }
@@ -3653,14 +3757,16 @@ fn search_people(
 
             for (i, u) in users.iter().enumerate() {
                 let Some(url) = heads.get(&u.id).cloned() else { continue };
+                let id = u.id.to_string();
                 imgs.load(&url, move |ui, img| {
-                    set_item_thumb(&ui.get_play_players(), i, img)
+                    set_item_thumb(&ui.get_play_players(), i, &id, img)
                 });
             }
             for (i, g) in groups.iter().enumerate() {
                 let Some(url) = icons.get(&g.id).cloned() else { continue };
+                let id = g.id.to_string();
                 imgs.load(&url, move |ui, img| {
-                    set_item_thumb(&ui.get_play_groups(), i, img)
+                    set_item_thumb(&ui.get_play_groups(), i, &id, img)
                 });
             }
         },
@@ -3844,15 +3950,17 @@ fn open_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
 
                     for (i, b) in load.badges.iter().enumerate() {
                         if let Some(url) = load.badge_icons.get(&b.id).cloned() {
+                            let id = b.id.to_string();
                             imgs.load(&url, move |ui, img| {
-                                set_item_thumb(&ui.get_badges(), i, img)
+                                set_item_thumb(&ui.get_badges(), i, &id, img)
                             });
                         }
                     }
                     for (i, pass) in load.passes.iter().enumerate() {
                         if let Some(url) = load.pass_icons.get(&pass.id).cloned() {
+                            let id = pass.id.to_string();
                             imgs.load(&url, move |ui, img| {
-                                set_item_thumb(&ui.get_passes(), i, img)
+                                set_item_thumb(&ui.get_passes(), i, &id, img)
                             });
                         }
                     }
@@ -3901,6 +4009,7 @@ fn fetch_servers(
     sort: i32,
 ) {
     let imgs2 = imgs.clone();
+    let page = app.config.lock().unwrap().server_page_size();
     let place_id = *app.current_place.lock().unwrap();
     if place_id == 0 {
         return;
@@ -3916,7 +4025,7 @@ fn fetch_servers(
 
     bridge.call_res(
         move || async move {
-            let list = games::servers(&client, place_id, 25, sort).await?;
+            let list = games::servers(&client, place_id, page, sort).await?;
 
             let tokens: Vec<String> = list
                 .iter()
@@ -4132,28 +4241,61 @@ async fn fetch_home(client: &Client, place_ids: &[i64]) -> rojoin_roblox::Result
 /// Always called from a deferred context (see `images::Images::load`), never
 /// synchronously from a repeater delegate — that path panics with a RefCell
 /// double borrow.
-fn set_tile_thumb(model: &slint::ModelRc<GameTile>, index: usize, img: slint::Image) {
+fn set_tile_thumb(
+    model: &slint::ModelRc<GameTile>,
+    index: usize,
+    expect_id: &str,
+    img: slint::Image,
+) {
     use slint::Model;
-    if let Some(mut row) = model.row_data(index) {
-        row.thumb = img;
-        model.set_row_data(index, row);
+    let Some(mut row) = model.row_data(index) else { return };
+    // The index was captured before the download started. If the model has
+    // been replaced since — a second search, a different profile — the row now
+    // at that index belongs to something else, and writing to it would show
+    // the wrong picture rather than none.
+    if row.id != expect_id {
+        return;
     }
+    row.thumb = img;
+    model.set_row_data(index, row);
 }
 
-fn set_item_thumb(model: &slint::ModelRc<DetailItem>, index: usize, img: slint::Image) {
+fn set_item_thumb(
+    model: &slint::ModelRc<DetailItem>,
+    index: usize,
+    expect_id: &str,
+    img: slint::Image,
+) {
     use slint::Model;
-    if let Some(mut row) = model.row_data(index) {
-        row.thumb = img;
-        model.set_row_data(index, row);
+    let Some(mut row) = model.row_data(index) else { return };
+    // The index was captured before the download started. If the model has
+    // been replaced since — a second search, a different profile — the row now
+    // at that index belongs to something else, and writing to it would show
+    // the wrong picture rather than none.
+    if row.id != expect_id {
+        return;
     }
+    row.thumb = img;
+    model.set_row_data(index, row);
 }
 
-fn set_wear_thumb(model: &slint::ModelRc<WearItem>, index: usize, img: slint::Image) {
+fn set_wear_thumb(
+    model: &slint::ModelRc<WearItem>,
+    index: usize,
+    expect_id: &str,
+    img: slint::Image,
+) {
     use slint::Model;
-    if let Some(mut row) = model.row_data(index) {
-        row.thumb = img;
-        model.set_row_data(index, row);
+    let Some(mut row) = model.row_data(index) else { return };
+    // The index was captured before the download started. If the model has
+    // been replaced since — a second search, a different profile — the row now
+    // at that index belongs to something else, and writing to it would show
+    // the wrong picture rather than none.
+    if row.id != expect_id {
+        return;
     }
+    row.thumb = img;
+    model.set_row_data(index, row);
 }
 
 fn set_group_icon(model: &slint::ModelRc<GroupRow>, index: usize, img: slint::Image) {

@@ -253,6 +253,7 @@ pub async fn request_count(client: &Client) -> Result<i64> {
 }
 
 pub async fn requests(client: &Client, limit: u32) -> Result<Vec<User>> {
+    let limit = crate::page_limit(limit);
     let url = format!("{FRIENDS}/my/friends/requests?limit={limit}&sortOrder=Desc");
     let page: crate::models::Page<User> = client.get_json(&url).await?;
     Ok(page.data)

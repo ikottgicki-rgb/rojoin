@@ -135,8 +135,39 @@ pub async fn install(url: &str) -> Result<std::path::PathBuf, String> {
             .map_err(|e| format!("could not make it executable: {e}"))?;
     }
 
+    // Linux lets a running binary be replaced outright: the swap is at the
+    // inode level and the live process keeps its old file open. Windows locks
+    // the image and refuses, so the running build has to be moved aside first
+    // — which *is* permitted — before the new one can take its name.
+    #[cfg(windows)]
+    {
+        let aside = exe.with_extension("old");
+        let _ = std::fs::remove_file(&aside);
+        std::fs::rename(&exe, &aside)
+            .map_err(|e| format!("could not move the running build aside: {e}"))?;
+        if let Err(e) = std::fs::rename(&staged, &exe) {
+            // Never leave the user without a binary.
+            let _ = std::fs::rename(&aside, &exe);
+            let _ = std::fs::remove_file(&staged);
+            return Err(format!("could not replace: {e}"));
+        }
+    }
+
+    #[cfg(not(windows))]
     std::fs::rename(&staged, &exe).map_err(|e| format!("could not replace: {e}"))?;
+
     Ok(exe)
+}
+
+/// Remove the previous build left behind by a Windows update.
+///
+/// It cannot be deleted during the update — it is still the running process at
+/// that moment — so it is cleared on the next start instead.
+pub fn clean_previous_build() {
+    #[cfg(windows)]
+    if let Ok(exe) = target_path() {
+        let _ = std::fs::remove_file(exe.with_extension("old"));
+    }
 }
 
 /// The file an update should overwrite.

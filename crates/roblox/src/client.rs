@@ -48,9 +48,13 @@ struct Inner {
 
 impl Client {
     pub fn new() -> Result<Self> {
+        Self::with_timeout(20)
+    }
+
+    pub fn with_timeout(secs: u32) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
-            .timeout(Duration::from_secs(20))
+            .timeout(Duration::from_secs(secs.clamp(5, 120) as u64))
             .build()?;
 
         Ok(Self {
