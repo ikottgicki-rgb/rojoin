@@ -1,26 +1,32 @@
 # RoJoin
 
-A native Roblox client for Linux and Windows. Rust + Slint, single binary.
+A desktop app for Roblox on Linux and Windows. Browse and search games, join them
+(including sub-places), see servers, manage friends and groups, edit your avatar,
+and run input macros. One small native binary, not a browser in a box.
 
-Browse and search, join games including sub-places, server browser, friends
-with presence, profiles, groups, avatar editor, and a macro tab.
+It does not replace the game client itself, and there is nothing to buy in it.
 
-No catalog, no purchases.
+## Get it
+
+Grab the latest [release](https://github.com/ikottgicki-rgb/rojoin/releases):
+
+- **Linux** — `RoJoin-x86_64.AppImage`, mark it executable and run it
+- **Windows** — `RoJoin-windows-x64.zip`, unzip and run `RoJoin.exe`
+
+Sign in with the code it shows you, approved on roblox.com or in the Roblox
+mobile app. You never type your password into RoJoin.
+
+## Macros
+
+The Macros tab types and clicks for you on a timer. On Linux it needs access to
+`/dev/uinput`; the tab tells you what to run if it is missing.
 
 ## Build
 
 ```sh
 cargo run
-./scripts/build.sh      # both targets, release
-./scripts/package.sh    # AppImage + Windows zip
+./scripts/build.sh
+./scripts/package.sh
 ```
 
-Windows cross-compiles from Linux via `x86_64-pc-windows-gnu`.
-
-## Macros
-
-Input is synthesised through a uinput virtual device on Linux and `SendInput`
-on Windows. Linux needs access to `/dev/uinput`; the Macros tab prints the
-setup commands if it is missing.
-
-Preset timings are starting points, not tested values.
+MIT licensed.
