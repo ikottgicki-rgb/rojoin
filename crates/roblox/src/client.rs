@@ -219,8 +219,8 @@ impl Client {
 
                 return Err(if challenged {
                     Error::Challenge(
-                        "Roblox wants a captcha for this. Do it on the website once, \
-                         then it will work here."
+                        "Roblox wants to verify this one itself. Open it on the \
+                         website with the ↗ button and do it there."
                             .into(),
                     )
                 } else {

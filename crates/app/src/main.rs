@@ -1376,27 +1376,6 @@ fn wire_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
         let app = app.clone();
         let bridge2 = bridge.clone();
         let weak = ui.as_weak();
-        ui.on_profile_add_friend(move || {
-            let ui = weak.unwrap();
-            let Ok(uid) = ui.get_profile().id.parse::<i64>() else { return };
-            let client = app.client.clone();
-            ui.set_profile_busy(true);
-            bridge2.call_res(
-                move || async move { friends::send_request(&client, uid).await },
-                move |ui, result| {
-                    ui.set_profile_busy(false);
-                    match result {
-                        Ok(()) => tracing::info!(uid, "friend request sent"),
-                        Err(e) => bridge::report(&ui, e),
-                    }
-                },
-            );
-        });
-    }
-    {
-        let app = app.clone();
-        let bridge2 = bridge.clone();
-        let weak = ui.as_weak();
         ui.on_profile_accept_request(move || {
             answer_request(&weak.unwrap(), &app, &bridge2, true);
         });
@@ -1430,39 +1409,6 @@ fn wire_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
                     if let Err(e) = result {
                         let mut p = ui.get_profile();
                         p.is_friend = true;
-                        ui.set_profile(p);
-                        bridge::report(&ui, e);
-                    }
-                },
-            );
-        });
-    }
-    {
-        let app = app.clone();
-        let bridge2 = bridge.clone();
-        let weak = ui.as_weak();
-        ui.on_profile_follow(move || {
-            let ui = weak.unwrap();
-            let Ok(uid) = ui.get_profile().id.parse::<i64>() else { return };
-            let was = ui.get_profile().is_following;
-            let client = app.client.clone();
-
-            let mut p = ui.get_profile();
-            p.is_following = !was;
-            ui.set_profile(p);
-
-            bridge2.call_res(
-                move || async move {
-                    if was {
-                        friends::unfollow(&client, uid).await
-                    } else {
-                        friends::follow(&client, uid).await
-                    }
-                },
-                move |ui, result| {
-                    if let Err(e) = result {
-                        let mut p = ui.get_profile();
-                        p.is_following = was;
                         ui.set_profile(p);
                         bridge::report(&ui, e);
                     }
@@ -3168,7 +3114,6 @@ fn open_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
                     let key = user_id.to_string();
                     ui.get_requests_list().iter().any(|r| r.id == key)
                 },
-                is_following: false,
                 is_self: user_id == me,
                 avatar: slint::Image::default(),
             });
