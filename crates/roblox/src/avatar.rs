@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::models::Page;
-use crate::{Client, Result};
+use crate::{Client, Error, Result};
 
 const AVATAR: &str = "https://avatar.roblox.com";
 const INVENTORY: &str = "https://inventory.roblox.com";
@@ -183,16 +183,53 @@ pub async fn outfit_details(client: &Client, outfit_id: i64) -> Result<Avatar> {
     client.get_json(&format!("{AVATAR}/v1/outfits/{outfit_id}/details")).await
 }
 
+/// The request body `v2/avatar/set-wearing-assets` actually expects.
+///
+/// The v2 endpoint takes `{"assets":[{"id":N}]}`. The `{"assetIds":[N]}` shape
+/// is **v1**, and sending it to v2 leaves `assets` null server-side, which
+/// answers 500 rather than a validation error — so every wear and remove
+/// failed identically and looked like Roblox being flaky.
+///
+/// `meta` (layered-clothing order and puffiness) is deliberately omitted: we
+/// track worn assets by id only, so there is nothing faithful to send and the
+/// server applies its defaults.
+fn wear_body(asset_ids: &[i64]) -> serde_json::Value {
+    serde_json::json!({
+        "assets": asset_ids
+            .iter()
+            .map(|id| serde_json::json!({ "id": id }))
+            .collect::<Vec<_>>(),
+    })
+}
+
 /// Set the complete list of worn assets.
 ///
 /// This is the only wear/remove mechanism: `v2/avatar/set-wearing-assets`
 /// replaces what you are wearing wholesale, so callers compute the new list
 /// and send it. `wear` and `remove` below are conveniences over it.
 pub async fn set_wearing(client: &Client, asset_ids: &[i64]) -> Result<()> {
-    let body = serde_json::json!({ "assetIds": asset_ids });
-    let _: serde_json::Value = client
-        .post_json(&format!("{AVATAR}/v2/avatar/set-wearing-assets"), &body)
+    #[derive(Deserialize, Default)]
+    #[serde(rename_all = "camelCase", default)]
+    struct WearResponse {
+        #[serde(default)]
+        invalid_asset_ids: Vec<i64>,
+        success: bool,
+    }
+
+    let resp: WearResponse = client
+        .post_json(&format!("{AVATAR}/v2/avatar/set-wearing-assets"), &wear_body(asset_ids))
         .await?;
+
+    // A 200 does not mean it worked: the endpoint reports per-asset failures in
+    // the body, and silently claiming success left the UI disagreeing with the
+    // account.
+    if !resp.success {
+        return Err(Error::Api(if resp.invalid_asset_ids.is_empty() {
+            "Roblox would not accept that outfit".into()
+        } else {
+            format!("Roblox refused {} of those items", resp.invalid_asset_ids.len())
+        }));
+    }
     Ok(())
 }
 
@@ -248,13 +285,15 @@ pub async fn set_avatar_type(client: &Client, r15: bool) -> Result<()> {
 }
 
 pub async fn save_outfit(client: &Client, name: &str, avatar: &Avatar) -> Result<()> {
+    // Same v2 shape as wearing, and `outfitType` is an integer here
+    // (Invalid = 0, Avatar = 1, DynamicHead = 2), not the string "Avatar".
     let body = serde_json::json!({
         "name": name,
-        "assetIds": avatar.worn_ids(),
+        "assets": wear_body(&avatar.worn_ids())["assets"],
         "bodyColors": avatar.body_colors,
         "scale": avatar.scales,
         "playerAvatarType": avatar.player_avatar_type,
-        "outfitType": "Avatar",
+        "outfitType": 1,
     });
     let _: serde_json::Value = client
         .post_json(&format!("{AVATAR}/v2/outfits/create"), &body)
@@ -334,5 +373,37 @@ mod tests {
         for (name, _) in CATEGORIES {
             assert!(seen.insert(*name), "duplicate category {name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod wear_body_tests {
+    use super::*;
+
+    #[test]
+    fn sends_the_v2_shape_not_the_v1_one() {
+        // The v1 shape (`assetIds`) makes v2 answer 500 with no explanation,
+        // which is exactly how this went unnoticed. Pin the shape.
+        let body = wear_body(&[1, 2]);
+        assert!(body.get("assetIds").is_none(), "assetIds is the v1 shape");
+        let assets = body["assets"].as_array().expect("assets must be an array");
+        assert_eq!(assets.len(), 2);
+        assert_eq!(assets[0]["id"], 1);
+        assert_eq!(assets[1]["id"], 2);
+    }
+
+    #[test]
+    fn an_empty_wardrobe_still_sends_an_array() {
+        // Taking off the last item must send `[]`, not null or a missing key.
+        let body = wear_body(&[]);
+        assert_eq!(body["assets"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn order_is_preserved_so_the_server_sees_the_list_as_given() {
+        let body = wear_body(&[30, 10, 20]);
+        let ids: Vec<i64> =
+            body["assets"].as_array().unwrap().iter().map(|a| a["id"].as_i64().unwrap()).collect();
+        assert_eq!(ids, vec![30, 10, 20]);
     }
 }
