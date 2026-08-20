@@ -156,7 +156,6 @@ export component MainWindow inherits Window {
     callback profile_accept_request();
     callback profile_decline_request();
     callback profile_unfriend();
-    callback profile_message();
 
     in property <GroupData> group;
     in property <bool> group_loading: false;
@@ -439,7 +438,6 @@ export component MainWindow inherits Window {
                             accept_request => { root.profile_accept_request(); }
                             decline_request => { root.profile_decline_request(); }
                             unfriend => { root.profile_unfriend(); }
-                            message => { root.profile_message(); }
                             open_browser => { root.open_browser(); }
                             copy_link => { root.copy_link(); }
                             copy_id => { root.copy_id(); }

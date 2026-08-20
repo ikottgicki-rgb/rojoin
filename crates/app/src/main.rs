@@ -216,6 +216,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wire_macros(&ui, &app);
     wire_settings(&ui, &app, &bridge, &imgs);
     wire_more_settings(&ui, &app);
+    wire_client_settings(&ui, &app, &bridge);
     wire_home(&ui, &app, &bridge, &imgs);
 
     #[cfg(debug_assertions)]
@@ -1564,6 +1565,7 @@ fn wire_client_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
         let weak = ui.as_weak();
         ui.on_open_client(move || {
             let ui = weak.unwrap();
+            tracing::info!("opening the client screen");
             push_view(&ui, &app, 4);
             load_flag_catalog(&ui, &app, &bridge2);
         });

@@ -66,12 +66,6 @@ pub async fn catalog(client: &rojoin_roblox::Client) -> Vec<Flag> {
     parse(&text)
 }
 
-/// True when a usable catalogue is already on disk, so the UI can say whether
-/// opening the browser will need the network.
-pub fn is_cached() -> bool {
-    cache_path().is_file()
-}
-
 fn parse(text: &str) -> Vec<Flag> {
     let Ok(map) = serde_json::from_str::<HashMap<String, serde_json::Value>>(text) else {
         return Vec::new();

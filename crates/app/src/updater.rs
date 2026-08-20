@@ -48,10 +48,6 @@ impl Status {
             }
         }
     }
-
-    pub fn can_install(&self) -> bool {
-        matches!(self, Status::Available { .. })
-    }
 }
 
 /// The asset this platform should download.
