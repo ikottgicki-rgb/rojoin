@@ -350,15 +350,28 @@ export component ClientScreen inherits Rectangle {
                         }
                         for name in root.presets: Rectangle {
                             height: 28px;
-                            width: pl.preferred-width + Space.md * 2;
+                            // Padding lives inside the layout, so preferred-width
+                            // already accounts for it. Offsetting the row with `x`
+                            // instead left it at the parent's full width, pushing
+                            // the delete button out past the chip's edge.
+                            width: row.preferred-width;
                             background: pta.has-hover ? Theme.bg_3 : Theme.bg_2;
                             border-radius: Theme.radius;
                             border-width: Theme.hairline;
                             border-color: Theme.line;
                             animate background { duration: Motion.fast; easing: Motion.ease; }
 
-                            pl := HorizontalLayout {
-                                x: Space.md;
+                            // Declared first on purpose: later siblings paint on
+                            // top, so the delete button below wins its own clicks
+                            // rather than this whole-chip area swallowing them.
+                            pta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.load_preset(name); }
+                            }
+
+                            row := HorizontalLayout {
+                                padding-left: Space.md;
+                                padding-right: Space.sm;
                                 spacing: Space.sm;
                                 VerticalLayout {
                                     alignment: center;
@@ -370,23 +383,24 @@ export component ClientScreen inherits Rectangle {
                                 }
                                 VerticalLayout {
                                     alignment: center;
-                                    Text {
-                                        text: "×";
-                                        color: dta.has-hover ? Theme.danger : Theme.text_mute;
-                                        font-size: Type.small;
+                                    Rectangle {
+                                        width: 16px;
+                                        height: 16px;
+                                        border-radius: 8px;
+                                        background: dta.has-hover ? Theme.bg_4 : transparent;
+                                        Text {
+                                            text: "×";
+                                            color: dta.has-hover ? Theme.danger : Theme.text_mute;
+                                            font-size: Type.small;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
                                         dta := TouchArea {
-                                            width: 16px;
-                                            height: 16px;
                                             mouse-cursor: pointer;
                                             clicked => { root.delete_preset(name); }
                                         }
                                     }
                                 }
-                            }
-                            pta := TouchArea {
-                                width: pl.preferred-width;
-                                mouse-cursor: pointer;
-                                clicked => { root.load_preset(name); }
                             }
                         }
                         Rectangle { horizontal-stretch: 1; }
