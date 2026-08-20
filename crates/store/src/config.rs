@@ -88,10 +88,7 @@ pub struct Settings {
     pub notify_friends: Vec<String>,
     pub notify_games: Vec<String>,
     pub notify_friend_requests: bool,
-    pub close_to_tray: bool,
     /// place id -> account id, so a game can always launch as a chosen alt.
-    /// Keyed on the ROOT place id so sub-place launches honour it too.
-    pub game_account_bindings: HashMap<String, String>,
     /// User macros. Empty means "use the bundled presets".
     pub macros: Vec<rojoin_macro::Macro>,
 
@@ -152,8 +149,6 @@ impl Default for Settings {
             notify_friends: Vec::new(),
             notify_games: Vec::new(),
             notify_friend_requests: false,
-            close_to_tray: false,
-            game_account_bindings: HashMap::new(),
             macros: Vec::new(),
             macros_enabled: true,
             macros_only_when_focused: true,
@@ -221,7 +216,6 @@ impl Config {
     pub fn remove_account(&mut self, id: &str) -> Option<String> {
         self.accounts.retain(|a| a.id != id);
         self.account_data.remove(id);
-        self.settings.game_account_bindings.retain(|_, v| v != id);
 
         if self.active_account.as_deref() == Some(id) {
             self.active_account = self.accounts.first().map(|a| a.id.clone());
@@ -429,19 +423,15 @@ mod tests {
     }
 
     #[test]
-    fn removing_an_account_clears_its_data_and_bindings() {
+    fn removing_an_account_clears_its_data() {
         let mut c = Config::default();
         c.upsert_account(acct("1"));
         c.upsert_account(acct("2"));
         c.record_launch("123", "Game", 1);
-        c.settings
-            .game_account_bindings
-            .insert("999".into(), "1".into());
 
         let next = c.remove_account("1");
         assert_eq!(next.as_deref(), Some("2"));
         assert!(!c.account_data.contains_key("1"));
-        assert!(c.settings.game_account_bindings.is_empty(), "stale binding left behind");
     }
 
     #[test]

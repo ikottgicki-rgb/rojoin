@@ -140,6 +140,8 @@ export component SettingsScreen inherits Rectangle {
     in property <int> cache_choice;     // index into 100/400/800/2000
     in property <bool> verbose_logging;
     in property <bool> auto_update;
+    in property <bool> has_client: false;
+    callback open_client();
     callback set_server_page(int);
     callback set_timeout_choice(int);
     callback set_cache_choice(int);
@@ -612,6 +614,18 @@ export component SettingsScreen inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             Btn { label: "Clear"; clicked => { root.clear_caches(); } }
+                        }
+                    }
+                }
+
+                if root.has_client: Card {
+                    title: "ROBLOX CLIENT";
+                    Row {
+                        title: "Client settings and FastFlags";
+                        help: "Renderer, Discord activity and engine flags. These belong to the Roblox client, not to RoJoin.";
+                        VerticalLayout {
+                            alignment: center;
+                            Btn { label: "Open"; clicked => { root.open_client(); } }
                         }
                     }
                 }

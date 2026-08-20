@@ -25,6 +25,7 @@ image.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 webbrowser = "1"
 
 # Cookies live in the OS keyring, never in config.json. The backend is

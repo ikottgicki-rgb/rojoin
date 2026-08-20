@@ -65,6 +65,12 @@ impl JoinRequest {
         self
     }
 
+    /// A private (VIP) server, joined by its link code.
+    pub fn private(mut self, access_code: impl Into<String>) -> Self {
+        self.access_code = Some(access_code.into());
+        self
+    }
+
     pub fn is_sub_place(&self) -> bool {
         self.root_place_id != 0 && self.place_id != self.root_place_id
     }

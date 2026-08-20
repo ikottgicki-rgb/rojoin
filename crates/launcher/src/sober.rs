@@ -221,3 +221,199 @@ mod tests {
         assert!(set_cookie("").is_err());
     }
 }
+
+// ---------------------------------------------------------------- config ---
+//
+// Sober keeps its client settings in `config/sober/config.json`, which is the
+// closest Linux equivalent of what Bloxstrap exposes on Windows: engine
+// FastFlags plus a handful of real client toggles.
+
+pub fn config_path() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(
+        std::path::Path::new(&home)
+            .join(".var/app")
+            .join(FLATPAK_ID)
+            .join("config/sober/config.json"),
+    )
+}
+
+/// Strip `//` line comments so the file can be parsed as JSON.
+///
+/// Sober ships its config with a comment header warning you not to edit it by
+/// hand, which means the file is *not* strict JSON and `serde_json` refuses it
+/// outright. Quotes are tracked so a `//` inside a string value survives.
+fn strip_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut cut = line.len();
+        let bytes: Vec<char> = line.chars().collect();
+        for i in 0..bytes.len() {
+            let c = bytes[i];
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match c {
+                '\\' if in_string => escaped = true,
+                '"' => in_string = !in_string,
+                '/' if !in_string && i + 1 < bytes.len() && bytes[i + 1] == '/' => {
+                    cut = i;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        out.push_str(&bytes[..cut].iter().collect::<String>());
+        out.push('\n');
+    }
+    out
+}
+
+/// Sober's settings, as far as RoJoin exposes them.
+pub fn read_config() -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(config_path()?).ok()?;
+    serde_json::from_str(&strip_comments(&text)).ok()
+}
+
+/// Change one top-level key, leaving every other setting untouched.
+///
+/// Refuses while Sober is running: it reads this file at startup and rewrites
+/// it on exit, so an edit mid-session is silently discarded.
+pub fn set_config_key(key: &str, value: serde_json::Value) -> Result<()> {
+    if is_running() {
+        return Err(Error::Launch(
+            "close Roblox first — Sober overwrites its settings when it exits".into(),
+        ));
+    }
+
+    let path = config_path().ok_or_else(|| Error::Launch("no HOME set".into()))?;
+    let mut config = read_config().unwrap_or_else(|| serde_json::json!({}));
+
+    let Some(map) = config.as_object_mut() else {
+        return Err(Error::Launch("Sober's config is not an object".into()));
+    };
+    map.insert(key.to_string(), value);
+
+    let pretty = serde_json::to_string_pretty(&config)
+        .map_err(|e| Error::Launch(format!("could not encode the config: {e}")))?;
+
+    // Write beside the target then rename, so a crash mid-write cannot leave
+    // Sober with a truncated config it refuses to start from.
+    let tmp = path.with_extension("json.rojoin-tmp");
+    std::fs::write(&tmp, pretty).map_err(|e| Error::Launch(format!("could not write: {e}")))?;
+    std::fs::rename(&tmp, &path).map_err(|e| Error::Launch(format!("could not replace: {e}")))?;
+    Ok(())
+}
+
+/// The engine FastFlags currently set, as (name, value) pairs.
+pub fn fflags() -> Vec<(String, String)> {
+    let Some(config) = read_config() else { return Vec::new() };
+    let Some(map) = config.get("fflags").and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, String)> = map
+        .iter()
+        .map(|(k, v)| {
+            let shown = match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            (k.clone(), shown)
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Add or replace a FastFlag. An empty value removes it.
+///
+/// Values are typed the way the engine expects: `true`/`false` as booleans,
+/// digits as numbers, everything else as a string. Sending `"true"` as a string
+/// where a bool is wanted is silently ignored by the engine.
+pub fn set_fflag(name: &str, value: &str) -> Result<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error::Launch("a flag needs a name".into()));
+    }
+
+    let mut config = read_config().unwrap_or_else(|| serde_json::json!({}));
+    let map = config
+        .as_object_mut()
+        .ok_or_else(|| Error::Launch("Sober's config is not an object".into()))?;
+
+    let flags = map
+        .entry("fflags")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| Error::Launch("fflags is not an object".into()))?;
+
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        flags.remove(name);
+    } else {
+        flags.insert(name.to_string(), typed_flag(trimmed));
+    }
+
+    let flags = serde_json::Value::Object(flags.clone());
+    set_config_key("fflags", flags)
+}
+
+fn typed_flag(value: &str) -> serde_json::Value {
+    match value {
+        "true" => serde_json::Value::Bool(true),
+        "false" => serde_json::Value::Bool(false),
+        other => match other.parse::<i64>() {
+            Ok(n) => serde_json::Value::from(n),
+            Err(_) => serde_json::Value::String(other.to_string()),
+        },
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn the_comment_header_sober_ships_is_stripped_and_parses() {
+        // Trimmed from the real file, which is not valid JSON as written.
+        let real = "// !!! STOP !!!\n\
+                    // This file is not meant to be edited by hand\n\
+                    // -------------------------------------------\n\
+                    {\n    \"use_opengl\": true,\n    \"fflags\": { \"FFlagExample\": true }\n}\n";
+        let cleaned = strip_comments(real);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&cleaned).expect("should parse once comments are gone");
+        assert_eq!(parsed["use_opengl"], serde_json::json!(true));
+        assert_eq!(parsed["fflags"]["FFlagExample"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn a_double_slash_inside_a_string_is_not_a_comment() {
+        let text = "{\"url\": \"https://example.com/x\"}";
+        assert_eq!(strip_comments(text).trim(), text);
+    }
+
+    #[test]
+    fn an_escaped_quote_does_not_end_the_string() {
+        let text = r#"{"a": "say \"hi\" // not a comment"}"#;
+        assert!(strip_comments(text).contains("not a comment"));
+    }
+
+    #[test]
+    fn flags_are_typed_the_way_the_engine_expects() {
+        // A bool sent as the string "true" is ignored by the engine.
+        assert_eq!(typed_flag("true"), serde_json::json!(true));
+        assert_eq!(typed_flag("false"), serde_json::json!(false));
+        assert_eq!(typed_flag("240"), serde_json::json!(240));
+        assert_eq!(typed_flag("Balanced"), serde_json::json!("Balanced"));
+    }
+
+    #[test]
+    fn stripping_never_loses_a_line() {
+        let text = "{\n// gone\n\"a\": 1\n}";
+        assert_eq!(strip_comments(text).lines().count(), text.lines().count());
+    }
+}

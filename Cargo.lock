@@ -4365,6 +4365,7 @@ name = "rojoin-launcher"
 version = "0.1.2"
 dependencies = [
  "rojoin-roblox",
+ "serde_json",
  "thiserror 2.0.20",
  "tracing",
 ]
@@ -4423,6 +4424,7 @@ dependencies = [
  "rojoin-roblox",
  "rojoin-store",
  "serde",
+ "serde_json",
  "slint",
  "slint-build",
  "tokio",

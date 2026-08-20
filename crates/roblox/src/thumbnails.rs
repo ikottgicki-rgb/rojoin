@@ -84,6 +84,30 @@ pub async fn avatars(client: &Client, user_ids: &[i64]) -> Result<HashMap<i64, S
     .await
 }
 
+/// An avatar render, waited on until Roblox has actually drawn it.
+///
+/// Changing what you are wearing invalidates the existing render, and the
+/// thumbnail service answers `state: "Pending"` with no usable URL while it
+/// redraws. A single fetch straight after a change therefore returns nothing,
+/// which looks exactly like a view that never finishes loading. Poll instead.
+pub async fn avatar_when_ready(client: &Client, user_id: i64) -> Option<String> {
+    const WAITS_MS: [u64; 5] = [0, 700, 1500, 2500, 4000];
+
+    for wait in WAITS_MS {
+        if wait > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+        }
+        if let Ok(map) = avatars(client, &[user_id]).await {
+            if let Some(url) = map.get(&user_id) {
+                return Some(url.clone());
+            }
+        }
+    }
+
+    tracing::debug!(user_id, "avatar render still pending after waiting");
+    None
+}
+
 pub async fn group_icons(client: &Client, group_ids: &[i64]) -> Result<HashMap<i64, String>> {
     batch(client, group_ids, |ids| {
         format!("{THUMBS}/groups/icons?groupIds={ids}&size=420x420&format=Png&isCircular=false")

@@ -1,0 +1,398 @@
+import { Theme, Space, Type, Motion, Layout } from "theme.slint";
+import { Btn, IconBtn, Segmented, Spinner, EmptyState, Texture } from "components.slint";
+import { DetailItem } from "types.slint";
+import { ScrollView } from "std-widgets.slint";
+
+/// One row of the flag browser. `subtitle` carries the client default and
+/// `name` the note, so no new struct is needed for the model.
+export struct FlagRow {
+    name: string,
+    default_value: string,
+    note: string,
+    set_value: string,   // empty when the flag is not set
+}
+
+component Toggle inherits Rectangle {
+    in property <bool> on;
+    callback toggled();
+    width: 40px;
+    height: 22px;
+    border-radius: 11px;
+    background: root.on ? Theme.accent : Theme.bg_4;
+    animate background { duration: Motion.fast; easing: Motion.ease; }
+
+    Rectangle {
+        x: root.on ? parent.width - self.width - 3px : 3px;
+        y: 3px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: #FFFFFF;
+        animate x { duration: Motion.fast; easing: Motion.ease; }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+}
+
+component Line inherits Rectangle {
+    in property <string> title;
+    in property <string> note;
+    height: Math.max(46px, lay.preferred-height + Space.sm * 2);
+
+    lay := HorizontalLayout {
+        padding-left: Space.lg;
+        padding-right: Space.lg;
+        spacing: Space.lg;
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: Type.body;
+            }
+            if root.note != "": Text {
+                text: root.note;
+                color: Theme.text_mute;
+                font-size: Type.caption;
+                wrap: word-wrap;
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        @children
+    }
+}
+
+export component ClientScreen inherits Rectangle {
+    in property <bool> opengl;
+    in property <bool> hidpi;
+    in property <bool> gamemode;
+    in property <bool> close_on_leave;
+    in property <bool> discord;
+    in property <bool> region;
+    in property <int> graphics;
+    in property <string> status;
+
+    in property <[FlagRow]> flags;
+    in property <bool> loading: false;
+    in-out property <string> filter;
+    in property <int> total: 0;
+
+    callback back();
+    callback set_flag(string, bool);
+    callback set_graphics(int);
+    callback search(string);
+    callback add_flag(string, string);
+    callback remove_flag(string);
+    callback refresh_catalog();
+
+    background: Theme.bg_0;
+    Texture { width: 100%; height: 100%; }
+
+    VerticalLayout {
+        spacing: 0;
+
+        Rectangle {
+            height: 56px;
+            background: Theme.bg_1;
+            HorizontalLayout {
+                padding-left: Space.lg;
+                padding-right: Space.lg;
+                spacing: Space.md;
+                VerticalLayout {
+                    alignment: center;
+                    IconBtn { glyph: "←"; size_px: 30px; clicked => { root.back(); } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: "Roblox client";
+                        color: Theme.text;
+                        font-size: Type.title;
+                        font-weight: Type.w_bold;
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.status;
+                        color: root.status != "" ? Theme.warn : Theme.text_mute;
+                        font-size: Type.small;
+                    }
+                }
+            }
+        }
+        Rectangle { height: Theme.hairline; background: Theme.line; }
+
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                alignment: start;
+                padding: Space.xl;
+                spacing: Space.xl;
+
+                // ---------------------------------------------- client ---
+                Rectangle {
+                    background: Theme.bg_1;
+                    border-radius: Theme.radius;
+                    border-width: Theme.hairline;
+                    border-color: Theme.line;
+                    height: cl.preferred-height;
+                    cl := VerticalLayout {
+                        padding-top: Space.md;
+                        padding-bottom: Space.md;
+                        spacing: Space.xs;
+                        Text {
+                            x: Space.lg;
+                            text: "CLIENT";
+                            color: Theme.text_mute;
+                            font-size: Type.micro;
+                            font-weight: Type.w_bold;
+                            letter-spacing: 0.8px;
+                        }
+                        Line {
+                            title: "Graphics mode";
+                            note: "Performance trades visual quality for frame rate.";
+                            VerticalLayout {
+                                alignment: center;
+                                Segmented {
+                                    options: ["Quality", "Balanced", "Performance"];
+                                    current: root.graphics;
+                                    changed(i) => { root.set_graphics(i); }
+                                }
+                            }
+                        }
+                        Line {
+                            title: "OpenGL renderer";
+                            note: "Use OpenGL instead of Vulkan. Try this if the game crashes on launch.";
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle {
+                                    on: root.opengl;
+                                    toggled => { root.set_flag("use_opengl", !root.opengl); }
+                                }
+                            }
+                        }
+                        Line {
+                            title: "HiDPI scaling";
+                            note: "Render at the display's full resolution. Sharper, heavier on the GPU.";
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle {
+                                    on: root.hidpi;
+                                    toggled => { root.set_flag("enable_hidpi", !root.hidpi); }
+                                }
+                            }
+                        }
+                        Line {
+                            title: "Feral GameMode";
+                            note: "Asks the system to prioritise the game while it runs.";
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle {
+                                    on: root.gamemode;
+                                    toggled => { root.set_flag("enable_gamemode", !root.gamemode); }
+                                }
+                            }
+                        }
+                        Line {
+                            title: "Discord activity";
+                            note: "Handled by the client itself, not by RoJoin.";
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle {
+                                    on: root.discord;
+                                    toggled => { root.set_flag("discord_rpc_enabled", !root.discord); }
+                                }
+                            }
+                        }
+                        Line {
+                            title: "Server region indicator";
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle {
+                                    on: root.region;
+                                    toggled => { root.set_flag("server_location_indicator_enabled", !root.region); }
+                                }
+                            }
+                        }
+                        Line {
+                            title: "Close client on leaving a game";
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle {
+                                    on: root.close_on_leave;
+                                    toggled => { root.set_flag("close_on_leave", !root.close_on_leave); }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --------------------------------------------- fastflags ---
+                VerticalLayout {
+                    spacing: Space.md;
+
+                    HorizontalLayout {
+                        spacing: Space.md;
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: "FastFlags";
+                                color: Theme.text;
+                                font-size: Type.lead;
+                                font-weight: Type.w_bold;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: root.total > 0 ? root.total + " published by Roblox" : "";
+                                color: Theme.text_mute;
+                                font-size: Type.caption;
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        VerticalLayout {
+                            alignment: center;
+                            if root.loading: Spinner { size_px: 14px; }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            IconBtn { glyph: "⟳"; clicked => { root.refresh_catalog(); } }
+                        }
+                    }
+
+                    // search + add
+                    HorizontalLayout {
+                        spacing: Space.sm;
+                        Rectangle {
+                            height: 36px;
+                            background: Theme.bg_2;
+                            border-radius: Theme.radius;
+                            border-width: Theme.hairline;
+                            border-color: q.has-focus ? Theme.accent : Theme.line;
+                            q := TextInput {
+                                x: Space.md;
+                                width: parent.width - Space.md * 2;
+                                height: 100%;
+                                text <=> root.filter;
+                                color: Theme.text;
+                                font-size: Type.body;
+                                vertical-alignment: center;
+                                single-line: true;
+                                edited => { root.search(self.text); }
+                            }
+                            if root.filter == "": Text {
+                                x: Space.md;
+                                height: 100%;
+                                text: "Search flags";
+                                color: Theme.text_mute;
+                                font-size: Type.body;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Rectangle {
+                            width: 120px;
+                            height: 36px;
+                            background: Theme.bg_2;
+                            border-radius: Theme.radius;
+                            border-width: Theme.hairline;
+                            border-color: nv.has-focus ? Theme.accent : Theme.line;
+                            nv := TextInput {
+                                x: Space.md;
+                                width: parent.width - Space.md * 2;
+                                height: 100%;
+                                color: Theme.text;
+                                font-size: Type.body;
+                                vertical-alignment: center;
+                                single-line: true;
+                            }
+                            if nv.text == "": Text {
+                                x: Space.md;
+                                height: 100%;
+                                text: "value";
+                                color: Theme.text_mute;
+                                font-size: Type.body;
+                                vertical-alignment: center;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Btn {
+                                label: "+";
+                                primary: true;
+                                clicked => {
+                                    root.add_flag(root.filter, nv.text);
+                                    nv.text = "";
+                                }
+                            }
+                        }
+                    }
+
+                    if root.flags.length == 0 && !root.loading: EmptyState {
+                        height: 180px;
+                        title: root.total == 0 ? "No flag list yet" : "Nothing matches";
+                        hint: root.total == 0
+                              ? "Press the refresh icon to fetch the flags Roblox publishes. Flags missing from that list can still be set."
+                              : "Not in the published list. Press + to set it anyway — override flags are never published.";
+                    }
+
+                    for f in root.flags: Rectangle {
+                        height: Math.max(52px, fl.preferred-height + Space.sm * 2);
+                        background: f.set_value != "" ? Theme.bg_2 : transparent;
+                        border-radius: Theme.radius;
+
+                        fl := HorizontalLayout {
+                            padding: Space.md;
+                            spacing: Space.md;
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                Text {
+                                    text: f.name;
+                                    color: f.set_value != "" ? Theme.accent : Theme.text;
+                                    font-size: Type.small;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                }
+                                if f.note != "": Text {
+                                    text: f.note;
+                                    color: Theme.text_dim;
+                                    font-size: Type.caption;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: f.set_value != ""
+                                          ? f.set_value
+                                          : "default " + f.default_value;
+                                    color: f.set_value != "" ? Theme.text : Theme.text_mute;
+                                    font-size: Type.caption;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                if f.set_value != "": IconBtn {
+                                    glyph: "×";
+                                    clicked => { root.remove_flag(f.name); }
+                                }
+                                if f.set_value == "": IconBtn {
+                                    glyph: "+";
+                                    clicked => { root.add_flag(f.name, f.default_value); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

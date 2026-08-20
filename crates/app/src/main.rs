@@ -18,6 +18,7 @@ mod images;
 mod linkhandler;
 mod notify;
 mod secrets;
+mod fflags;
 mod shortcut;
 mod updater;
 
@@ -100,6 +101,21 @@ pub(crate) struct App {
     capturing: std::sync::atomic::AtomicBool,
     /// Same, for the panic key in Settings.
     binding_panic: std::sync::atomic::AtomicBool,
+    /// The FastFlag catalogue, once fetched. ~22,500 entries, so it is fetched
+    /// at most once per session and filtered in memory.
+    flag_catalog: Mutex<Vec<fflags::Flag>>,
+    /// The worn list we last wrote successfully, and when.
+    ///
+    /// Roblox's avatar read-back is eventually consistent: fetching straight
+    /// after a change can still report the previous set. Without this, any
+    /// refresh landing in that window resurrects an item the user just took
+    /// off — and the next toggle then sends the stale list back, genuinely
+    /// re-equipping it server-side.
+    worn_write: Mutex<Option<(std::time::Instant, Vec<i64>)>>,
+    /// An avatar write is in flight. Clicking items faster than Roblox answers
+    /// used to start a parallel write *and* a parallel retry chain for each
+    /// one, which is how three follow clicks earned a 429.
+    avatar_busy: std::sync::atomic::AtomicBool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -167,6 +183,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         editing: Mutex::new(None),
         capturing: std::sync::atomic::AtomicBool::new(false),
         binding_panic: std::sync::atomic::AtomicBool::new(false),
+        flag_catalog: Mutex::new(Vec::new()),
+        worn_write: Mutex::new(None),
+        avatar_busy: std::sync::atomic::AtomicBool::new(false),
     });
     *app.bridge.lock().unwrap() = Some(bridge.clone());
     *app.imgs.lock().unwrap() = Some(imgs.clone());
@@ -1386,6 +1405,223 @@ fn apply_ui_scale(ui: &MainWindow, scale: f32) {
     });
 }
 
+/// Mirror Sober's own settings into the CLIENT card.
+///
+/// Read fresh each time rather than cached: Sober rewrites this file when it
+/// exits, so anything remembered from earlier in the session may be stale.
+fn render_client_settings(ui: &MainWindow) {
+    use rojoin_launcher::sober;
+
+    let Some(config) = sober::read_config() else {
+        ui.set_has_client(false);
+        return;
+    };
+    ui.set_has_client(true);
+
+    let flag = |key: &str| config.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
+    ui.set_client_opengl(flag("use_opengl"));
+    ui.set_client_hidpi(flag("enable_hidpi"));
+    ui.set_client_gamemode(flag("enable_gamemode"));
+    ui.set_client_close_on_leave(flag("close_on_leave"));
+    ui.set_client_discord(flag("discord_rpc_enabled"));
+    ui.set_client_region(flag("server_location_indicator_enabled"));
+
+    ui.set_client_graphics(
+        match config.get("graphics_optimization_mode").and_then(|v| v.as_str()) {
+            Some("quality") => 0,
+            Some("performance") => 2,
+            _ => 1,
+        },
+    );
+
+}
+
+/// Rebuild the flag list for whatever is typed in the search box.
+///
+/// Flags the user has actually set always show, regardless of the filter, so a
+/// stray search cannot hide something that is currently in effect.
+fn render_flag_rows(ui: &MainWindow, app: &Arc<App>) {
+    let set: std::collections::HashMap<String, String> =
+        rojoin_launcher::sober::fflags().into_iter().collect();
+    let catalog = app.flag_catalog.lock().unwrap();
+    let needle = ui.get_flag_filter().to_string().to_lowercase();
+
+    ui.set_flag_total(catalog.len() as i32);
+
+    let describe = |name: &str| -> (String, String) {
+        let from_catalog = catalog.iter().find(|f| f.name == name);
+        let note = from_catalog
+            .and_then(|f| f.note)
+            .or_else(|| {
+                fflags::documented()
+                    .into_iter()
+                    .find(|d| d.name == name)
+                    .and_then(|d| d.note)
+            })
+            .unwrap_or_default()
+            .to_string();
+        (from_catalog.map(|f| f.default.clone()).unwrap_or_default(), note)
+    };
+
+    let mut rows: Vec<FlagRow> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Whatever is actually set comes first and always shows, filter or not:
+    // hiding a flag that is in effect would be actively misleading.
+    let mut active: Vec<(&String, &String)> = set.iter().collect();
+    active.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, value) in active {
+        let (default, note) = describe(name);
+        seen.insert(name.clone());
+        rows.push(FlagRow {
+            name: name.clone().into(),
+            default_value: default.into(),
+            note: note.into(),
+            set_value: value.clone().into(),
+        });
+    }
+
+    // Then the documented ones. These come from our own list rather than the
+    // download, because most override flags are never published and would
+    // otherwise be missing from the very screen meant to explain them.
+    let matches = |name: &str| needle.len() < 2 || name.to_lowercase().contains(&needle);
+    for flag in fflags::documented() {
+        if seen.contains(&flag.name) || !matches(&flag.name) {
+            continue;
+        }
+        let (default, _) = describe(&flag.name);
+        seen.insert(flag.name.clone());
+        rows.push(FlagRow {
+            name: flag.name.into(),
+            default_value: default.into(),
+            note: flag.note.unwrap_or_default().into(),
+            set_value: Default::default(),
+        });
+    }
+
+    // Finally the published catalogue, but only once something is typed: 22,500
+    // alphabetical internal flags is not a browsing experience.
+    if needle.len() >= 2 {
+        for flag in catalog
+            .iter()
+            .filter(|f| !seen.contains(&f.name))
+            .filter(|f| f.name.to_lowercase().contains(&needle))
+            .take(200)
+        {
+            rows.push(FlagRow {
+                name: flag.name.clone().into(),
+                default_value: flag.default.clone().into(),
+                note: flag.note.unwrap_or_default().into(),
+                set_value: Default::default(),
+            });
+        }
+    }
+
+    ui.set_flag_rows(ad::model(rows));
+}
+
+/// Fetch the catalogue, then show it.
+fn load_flag_catalog(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
+    if !app.flag_catalog.lock().unwrap().is_empty() {
+        render_flag_rows(ui, app);
+        return;
+    }
+
+    ui.set_flags_loading(true);
+    let client = app.client.clone();
+    let app2 = app.clone();
+
+    bridge.call_res(
+        move || async move { Ok::<_, rojoin_roblox::Error>(fflags::catalog(&client).await) },
+        move |ui, result| {
+            ui.set_flags_loading(false);
+            if let Ok(list) = result {
+                *app2.flag_catalog.lock().unwrap() = list;
+            }
+            render_flag_rows(&ui, &app2);
+        },
+    );
+}
+
+/// Everything on the CLIENT card. Each write is refused while Roblox is open,
+/// because Sober overwrites its own config on exit.
+fn wire_client_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
+    use rojoin_launcher::sober;
+
+    fn report(ui: &MainWindow, result: rojoin_launcher::Result<()>) {
+        match result {
+            Ok(()) => {
+                ui.set_client_status("".into());
+                render_client_settings(ui);
+            }
+            Err(e) => ui.set_client_status(format!("{e}").into()),
+        }
+    }
+
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let weak = ui.as_weak();
+        ui.on_open_client(move || {
+            let ui = weak.unwrap();
+            push_view(&ui, &app, 4);
+            load_flag_catalog(&ui, &app, &bridge2);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_flag_search(move |_| render_flag_rows(&weak.unwrap(), &app));
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let weak = ui.as_weak();
+        ui.on_flag_refresh(move || {
+            let ui = weak.unwrap();
+            // Drop the in-memory copy so the fetch actually re-runs.
+            app.flag_catalog.lock().unwrap().clear();
+            load_flag_catalog(&ui, &app, &bridge2);
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_set_client_flag(move |key, value| {
+            let ui = weak.unwrap();
+            report(&ui, sober::set_config_key(key.as_str(), value.into()));
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_set_client_graphics(move |choice| {
+            let ui = weak.unwrap();
+            let mode = ["quality", "balanced", "performance"][choice.clamp(0, 2) as usize];
+            report(&ui, sober::set_config_key("graphics_optimization_mode", mode.into()));
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_add_fflag(move |name, value| {
+            let ui = weak.unwrap();
+            // A flag with no value would silently delete it, which is not what
+            // pressing "+" means.
+            let value = if value.trim().is_empty() { "true" } else { value.as_str() };
+            report(&ui, sober::set_fflag(name.as_str(), value));
+            render_flag_rows(&ui, &app);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_remove_fflag(move |name| {
+            let ui = weak.unwrap();
+            report(&ui, sober::set_fflag(name.as_str(), ""));
+            render_flag_rows(&ui, &app);
+        });
+    }
+}
+
 fn log_path() -> std::path::PathBuf {
     rojoin_store::config_dir().join("rojoin.log")
 }
@@ -1627,6 +1863,12 @@ fn wire_avatar(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
             let ui = weak.unwrap();
             let Ok(asset_id) = id.parse::<i64>() else { return };
 
+            // One write at a time: this endpoint sends the *whole* worn list,
+            // so two in flight race and the loser silently wins.
+            if app.avatar_busy.swap(true, Ordering::SeqCst) {
+                return;
+            }
+
             let before = app.worn.lock().unwrap().clone();
             let adding = !before.contains(&asset_id);
             let mut after = before.clone();
@@ -1638,6 +1880,7 @@ fn wire_avatar(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
             *app.worn.lock().unwrap() = after.clone();
 
             apply_worn_flags(&ui, &after);
+            sync_worn_list(&ui, &after);
             ui.set_av_worn_count(after.len() as i32);
             ui.set_av_busy(true);
 
@@ -1646,16 +1889,23 @@ fn wire_avatar(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
             let bridge3 = bridge2.clone();
             let imgs3 = imgs2.clone();
             let send = after.clone();
+            let sent = after.clone();
 
             bridge2.call_res(
                 move || async move { rojoin_roblox::avatar::set_wearing(&client, &send).await },
                 move |ui, result| {
                     ui.set_av_busy(false);
+                    app2.avatar_busy.store(false, Ordering::SeqCst);
                     match result {
-                        Ok(()) => refresh_avatar_render(&ui, &app2, &bridge3, &imgs3),
+                        Ok(()) => {
+                            *app2.worn_write.lock().unwrap() =
+                                Some((std::time::Instant::now(), sent));
+                            refresh_avatar_render(&ui, &app2, &bridge3, &imgs3)
+                        }
                         Err(e) => {
                             *app2.worn.lock().unwrap() = before.clone();
                             apply_worn_flags(&ui, &before);
+                            sync_worn_list(&ui, &before);
                             ui.set_av_worn_count(before.len() as i32);
                             bridge::report(&ui, e);
                         }
@@ -1687,6 +1937,8 @@ fn wire_avatar(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
                     match result {
                         Ok(ids) => {
                             *app2.worn.lock().unwrap() = ids.clone();
+                            *app2.worn_write.lock().unwrap() =
+                                Some((std::time::Instant::now(), ids.clone()));
                             apply_worn_flags(&ui, &ids);
                             ui.set_av_worn_count(ids.len() as i32);
                             load_avatar(&ui, &app2, &bridge3, &imgs3);
@@ -1752,6 +2004,8 @@ fn wire_avatar(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
                 move |ui, result| {
                     ui.set_av_busy(false);
                     match result {
+                        // Body type does not change the worn list, so there is
+                        // nothing to protect from a stale read here.
                         Ok(()) => refresh_avatar_render(&ui, &app2, &bridge3, &imgs3),
                         Err(e) => {
                             ui.set_av_is_r15(!r15);
@@ -1765,6 +2019,44 @@ fn wire_avatar(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
 }
 
 /// Re-tick the worn markers across the wardrobe grid and the wearing list.
+/// Bring the "wearing" panel in line with a new worn list.
+///
+/// `apply_worn_flags` only ticks the wardrobe grid, so without this the panel
+/// kept showing an item after it was taken off and omitted one just put on —
+/// until a full reload happened to run. Additions borrow their name and
+/// thumbnail from the wardrobe row that was clicked, so nothing has to be
+/// refetched.
+fn sync_worn_list(ui: &MainWindow, worn: &[i64]) {
+    use slint::Model;
+
+    let items = ui.get_av_items();
+    let current = ui.get_av_worn();
+
+    let mut rows: Vec<DetailItem> = current
+        .iter()
+        .filter(|r| r.id.parse::<i64>().map(|id| worn.contains(&id)).unwrap_or(false))
+        .collect();
+
+    for id in worn {
+        let key = id.to_string();
+        if rows.iter().any(|r| r.id == key) {
+            continue;
+        }
+        // Pull the display details from the wardrobe entry for the same asset.
+        if let Some(item) = items.iter().find(|i| i.id == key) {
+            rows.push(DetailItem {
+                id: key.into(),
+                name: item.name.clone(),
+                subtitle: item.category.clone(),
+                thumb: item.thumb.clone(),
+                kind: 7,
+            });
+        }
+    }
+
+    ui.set_av_worn(ad::model(rows));
+}
+
 fn apply_worn_flags(ui: &MainWindow, worn: &[i64]) {
     use slint::Model;
     let items = ui.get_av_items();
@@ -1809,17 +2101,33 @@ fn load_avatar(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
             Ok(AvatarLoad { av, outfits, body, worn_thumbs, outfit_thumbs })
         },
         move |ui, result| {
+            // Cleared before the staleness check: an early return here used to
+            // leave the skeleton spinning for the rest of the session.
+            ui.set_av_body_loading(false);
             if gen != SESSION_GEN.load(Ordering::SeqCst) {
                 return;
             }
-            ui.set_av_body_loading(false);
 
             let load = match result {
                 Ok(l) => l,
                 Err(e) => return bridge::report(&ui, e),
             };
 
-            let worn_ids = load.av.worn_ids();
+            let mut worn_ids = load.av.worn_ids();
+
+            // Our own recent write beats a contradicting read: we know what we
+            // sent, and Roblox may not have caught up yet.
+            if let Some((at, ours)) = app2.worn_write.lock().unwrap().clone() {
+                if at.elapsed() < std::time::Duration::from_secs(15) && ours != worn_ids {
+                    tracing::debug!(
+                        server = worn_ids.len(),
+                        ours = ours.len(),
+                        "ignoring a stale avatar read-back"
+                    );
+                    worn_ids = ours;
+                }
+            }
+
             *app2.worn.lock().unwrap() = worn_ids.clone();
             ui.set_av_worn_count(worn_ids.len() as i32);
             ui.set_av_is_r15(load.av.player_avatar_type != "R6");
@@ -1950,19 +2258,22 @@ fn refresh_avatar_render(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, 
     let imgs2 = imgs.clone();
     let gen = SESSION_GEN.load(Ordering::SeqCst);
 
+    // Show the skeleton while Roblox redraws, so the wait reads as progress
+    // rather than as a view that has quietly given up.
+    ui.set_av_body_loading(true);
+
     bridge.call_res(
         move || async move {
-            let map = thumbnails::avatars(&client, &[me]).await?;
-            Ok(map.get(&me).cloned())
+            Ok::<_, rojoin_roblox::Error>(thumbnails::avatar_when_ready(&client, me).await)
         },
         move |ui, result| {
             if gen != SESSION_GEN.load(Ordering::SeqCst) {
                 return;
             }
+            ui.set_av_body_loading(false);
             if let Ok(Some(url)) = result {
                 imgs2.load(&url, |ui, img| ui.set_av_body(img));
             }
-            let _ = &ui;
         },
     );
 }
@@ -2964,6 +3275,8 @@ fn render_settings(ui: &MainWindow, app: &Arc<App>) {
     // Account head shots. The stored `avatar_url` is only filled in at sign-in
     // and goes stale as soon as someone changes their avatar, so ask Roblox
     // rather than trusting whatever the config happens to hold.
+    render_client_settings(ui);
+
     let ids: Vec<i64> = cfg.accounts.iter().filter_map(|a| a.id.parse().ok()).collect();
     let imgs = app.imgs.lock().unwrap().clone();
     if let (Some(bridge), Some(loader)) = (app.bridge.lock().unwrap().clone(), imgs) {
@@ -3654,8 +3967,23 @@ fn wire_search(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
         let weak = ui.as_weak();
         ui.on_top_submit(move |q| {
             let ui = weak.unwrap();
-            if let Some(place_id) = search::resolve_place_id(q.as_str()) {
-                open_game(&ui, &app, &bridge2, &imgs2, place_id);
+            if let Some(target) = search::resolve_join_target(q.as_str()) {
+                // A link that names a specific server or a VIP code is a join
+                // instruction, not a browse one — honour it directly instead of
+                // dropping the user on the game page to pick a server again.
+                if target.job_id.is_some() || target.access_code.is_some() {
+                    let mut req = JoinRequest::place(target.place_id);
+                    if let Some(job) = target.job_id {
+                        req = req.server(job);
+                    }
+                    if let Some(code) = target.access_code {
+                        req = req.private(code);
+                    }
+                    open_game(&ui, &app, &bridge2, &imgs2, target.place_id);
+                    launch(&ui, &app, req);
+                    return;
+                }
+                open_game(&ui, &app, &bridge2, &imgs2, target.place_id);
                 return;
             }
             ui.set_section(1);

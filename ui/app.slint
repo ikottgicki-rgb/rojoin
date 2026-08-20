@@ -2,6 +2,7 @@ import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Btn, IconBtn, Segmented, Spinner, EmptyState, Toast } from "components.slint";
 import { GameTile, WearItem, SubPlace, ServerRow, DetailItem, GameDetailData, FriendRow, GroupRow, MacroRow, MacroStepRow } from "types.slint";
 import { Sidebar, TopBar, NavEntry, ExpiredBanner, AccountMismatchBanner } from "shell.slint";
+import { ClientScreen, FlagRow } from "client.slint";
 import { SignInScreen, SignInPhase } from "signin.slint";
 import { HomeScreen, PlayScreen } from "screens.slint";
 import { GameScreen } from "game.slint";
@@ -237,6 +238,26 @@ export component MainWindow inherits Window {
     in property <int> cache_choice;
     in property <bool> verbose_logging;
     in property <bool> auto_update;
+    in property <bool> has_client: false;
+    in property <bool> client_opengl;
+    in property <bool> client_hidpi;
+    in property <bool> client_gamemode;
+    in property <bool> client_close_on_leave;
+    in property <bool> client_discord;
+    in property <bool> client_region;
+    in property <int> client_graphics;
+    in property <[FlagRow]> flag_rows;
+    in-out property <string> flag_filter;
+    in property <bool> flags_loading: false;
+    in property <int> flag_total: 0;
+    callback open_client();
+    callback flag_search(string);
+    callback flag_refresh();
+    in property <string> client_status;
+    callback set_client_flag(string, bool);
+    callback set_client_graphics(int);
+    callback add_fflag(string, string);
+    callback remove_fflag(string);
     callback set_server_page(int);
     callback set_timeout_choice(int);
     callback set_cache_choice(int);
@@ -426,6 +447,28 @@ export component MainWindow inherits Window {
                             open_game(id) => { root.open_game(id); }
                         }
 
+                        if root.view_kind == 4: ClientScreen {
+                            opengl: root.client_opengl;
+                            hidpi: root.client_hidpi;
+                            gamemode: root.client_gamemode;
+                            close_on_leave: root.client_close_on_leave;
+                            discord: root.client_discord;
+                            region: root.client_region;
+                            graphics: root.client_graphics;
+                            status: root.client_status;
+                            flags: root.flag_rows;
+                            filter <=> root.flag_filter;
+                            loading: root.flags_loading;
+                            total: root.flag_total;
+                            back => { root.nav_back(); }
+                            set_flag(k, v) => { root.set_client_flag(k, v); }
+                            set_graphics(i) => { root.set_client_graphics(i); }
+                            search(q) => { root.flag_search(q); }
+                            add_flag(n, v) => { root.add_fflag(n, v); }
+                            remove_flag(n) => { root.remove_fflag(n); }
+                            refresh_catalog => { root.flag_refresh(); }
+                        }
+
                         if root.view_kind == 3: GroupScreen {
                             width: 100%;
                             height: 100%;
@@ -606,6 +649,8 @@ export component MainWindow inherits Window {
                             set_cache_choice(i) => { root.set_cache_choice(i); }
                             set_verbose_logging(v) => { root.set_verbose_logging(v); }
                             set_auto_update(v) => { root.set_auto_update(v); }
+                            has_client: root.has_client;
+                            open_client => { root.open_client(); }
                             open_log => { root.open_log(); }
                             unsub_game(id) => { root.unsub_game(id); }
                             open_data_dir => { root.open_data_dir(); }

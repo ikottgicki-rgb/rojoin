@@ -122,6 +122,53 @@ fn urlencode(s: &str) -> String {
     out
 }
 
+/// A pasted link, broken into everything needed to join it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct JoinTarget {
+    pub place_id: i64,
+    /// A specific running server, from `gameInstanceId`.
+    pub job_id: Option<String>,
+    /// A private/VIP server, from `privateServerLinkCode`.
+    pub access_code: Option<String>,
+}
+
+/// Pull a query parameter out of a link without a URL crate.
+///
+/// Matches on `name=` preceded by `?` or `&` so `placeId` cannot be found
+/// inside `rootPlaceId`, and stops at the next separator or fragment.
+fn query_param(url: &str, name: &str) -> Option<String> {
+    for sep in ['?', '&'] {
+        let needle = format!("{sep}{name}=");
+        if let Some(rest) = url.split(&needle).nth(1) {
+            let value: String = rest
+                .chars()
+                .take_while(|c| *c != '&' && *c != '#')
+                .collect();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+/// Recognise a pasted link, including one that names a specific server.
+///
+/// Handles the game page, `games/start`, the `roblox://` deep link, a VIP
+/// server link, and a bare place id. Anything else is a search term.
+pub fn resolve_join_target(input: &str) -> Option<JoinTarget> {
+    let place_id = resolve_place_id(input)?;
+    let s = input.trim();
+
+    Some(JoinTarget {
+        place_id,
+        job_id: query_param(s, "gameInstanceId").filter(|v| v.len() > 8),
+        access_code: query_param(s, "privateServerLinkCode")
+            .or_else(|| query_param(s, "accessCode"))
+            .filter(|v| !v.is_empty()),
+    })
+}
+
 /// Recognise a pasted Roblox link or a bare place id.
 ///
 /// The 8-digit floor matters: a game genuinely *named* with short digits (say
@@ -159,6 +206,59 @@ mod tests {
         assert_eq!(urlencode("tower defense"), "tower%20defense");
         assert_eq!(urlencode("a&b=c"), "a%26b%3Dc");
         assert_eq!(urlencode("plain-Text_1.0~"), "plain-Text_1.0~");
+    }
+
+    #[test]
+    fn a_server_link_carries_the_instance_through() {
+        let t = resolve_join_target(
+            "https://www.roblox.com/games/start?placeId=606849621&gameInstanceId=1a2b3c4d-5e6f-7890-abcd-ef1234567890",
+        )
+        .unwrap();
+        assert_eq!(t.place_id, 606_849_621);
+        assert_eq!(t.job_id.as_deref(), Some("1a2b3c4d-5e6f-7890-abcd-ef1234567890"));
+        assert!(t.access_code.is_none());
+    }
+
+    #[test]
+    fn a_vip_link_carries_its_code() {
+        let t = resolve_join_target(
+            "https://www.roblox.com/games/606849621/Jailbreak?privateServerLinkCode=abc123XYZ",
+        )
+        .unwrap();
+        assert_eq!(t.place_id, 606_849_621);
+        assert_eq!(t.access_code.as_deref(), Some("abc123XYZ"));
+    }
+
+    #[test]
+    fn a_plain_game_link_names_no_server() {
+        let t = resolve_join_target("https://www.roblox.com/games/606849621/Jailbreak").unwrap();
+        assert_eq!(t.place_id, 606_849_621);
+        assert!(t.job_id.is_none() && t.access_code.is_none());
+    }
+
+    #[test]
+    fn a_deep_link_works_the_same_way() {
+        let t = resolve_join_target(
+            "roblox://experiences/start?placeId=920587237&gameInstanceId=deadbeef-0000-1111-2222-333344445555",
+        )
+        .unwrap();
+        assert_eq!(t.place_id, 920_587_237);
+        assert!(t.job_id.is_some());
+    }
+
+    #[test]
+    fn a_param_is_not_found_inside_a_longer_name() {
+        // `rootPlaceId=` must not satisfy a search for `placeId=`.
+        assert_eq!(query_param("https://x/y?rootPlaceId=5", "placeId"), None);
+        assert_eq!(query_param("https://x/y?placeId=5", "placeId").as_deref(), Some("5"));
+    }
+
+    #[test]
+    fn a_truncated_instance_id_is_rejected_rather_than_joined() {
+        // A stray short value is far more likely junk than a real JobId.
+        let t = resolve_join_target("https://www.roblox.com/games/start?placeId=1&gameInstanceId=x")
+            .unwrap();
+        assert!(t.job_id.is_none());
     }
 
     #[test]
