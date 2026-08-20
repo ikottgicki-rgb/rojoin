@@ -66,6 +66,13 @@ pub struct AccountData {
     /// about the same person's request to another.
     #[serde(default)]
     pub handled_requests: Vec<String>,
+    /// Engine flags for this account.
+    ///
+    /// Sober keeps one global flag set, so RoJoin owns the per-account copy and
+    /// writes the active account's into Sober before a launch. That makes
+    /// Sober's config derived state rather than the source of truth.
+    #[serde(default)]
+    pub fflags: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -135,6 +142,9 @@ pub struct Settings {
     /// on; the swap still only takes effect on the next launch.
     #[serde(default = "yes")]
     pub auto_update: bool,
+    /// Named flag sets, shared across accounts so a tuned set can be reused.
+    #[serde(default)]
+    pub fflag_presets: HashMap<String, HashMap<String, String>>,
 }
 
 /// serde needs a function, not a literal, for a defaulted `true`.
@@ -165,6 +175,7 @@ impl Default for Settings {
             image_cache_size: 0,
             verbose_logging: false,
             auto_update: true,
+            fflag_presets: HashMap::new(),
         }
     }
 }
@@ -264,6 +275,49 @@ impl Config {
             data.handled_requests.drain(0..len - 200);
         }
         true
+    }
+
+    /// The active account's flags.
+    pub fn fflags(&self) -> HashMap<String, String> {
+        self.data().map(|d| d.fflags.clone()).unwrap_or_default()
+    }
+
+    /// Set or clear one flag on the active account. An empty value removes it.
+    pub fn set_fflag(&mut self, name: &str, value: &str) {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let data = self.data_mut();
+        if value.trim().is_empty() {
+            data.fflags.remove(&name);
+        } else {
+            data.fflags.insert(name, value.trim().to_string());
+        }
+    }
+
+    /// Replace the active account's flags wholesale, for loading a preset.
+    pub fn set_fflags(&mut self, flags: HashMap<String, String>) {
+        self.data_mut().fflags = flags;
+    }
+
+    pub fn save_preset(&mut self, name: &str) {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let flags = self.fflags();
+        self.settings.fflag_presets.insert(name, flags);
+    }
+
+    pub fn delete_preset(&mut self, name: &str) {
+        self.settings.fflag_presets.remove(name);
+    }
+
+    pub fn preset_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.settings.fflag_presets.keys().cloned().collect();
+        names.sort();
+        names
     }
 
     pub fn push_recent_search(&mut self, query: &str) {
@@ -534,5 +588,84 @@ mod handled_request_tests {
         assert!(cfg.remember_handled_request("7".into()));
         assert!(!cfg.remember_handled_request("7".into()));
         assert_eq!(cfg.data().unwrap().handled_requests.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod fflag_tests {
+    use super::*;
+
+    fn with_account(id: &str) -> Config {
+        let mut c = Config::default();
+        c.upsert_account(Account {
+            id: id.into(),
+            username: id.into(),
+            display_name: id.into(),
+            avatar_url: String::new(),
+        });
+        c
+    }
+
+    #[test]
+    fn flags_belong_to_one_account_and_do_not_leak_to_another() {
+        let mut c = with_account("1");
+        c.set_fflag("FFlagOne", "true");
+        assert_eq!(c.fflags().get("FFlagOne").map(String::as_str), Some("true"));
+
+        c.upsert_account(Account {
+            id: "2".into(),
+            username: "2".into(),
+            display_name: "2".into(),
+            avatar_url: String::new(),
+        });
+        c.active_account = Some("2".into());
+        assert!(c.fflags().is_empty(), "the second account inherited flags");
+
+        c.active_account = Some("1".into());
+        assert_eq!(c.fflags().len(), 1, "the first account lost its flags");
+    }
+
+    #[test]
+    fn an_empty_value_clears_a_flag() {
+        let mut c = with_account("1");
+        c.set_fflag("FFlagOne", "true");
+        c.set_fflag("FFlagOne", "   ");
+        assert!(c.fflags().is_empty());
+    }
+
+    #[test]
+    fn a_nameless_flag_is_refused_rather_than_stored() {
+        let mut c = with_account("1");
+        c.set_fflag("   ", "true");
+        assert!(c.fflags().is_empty());
+    }
+
+    #[test]
+    fn a_preset_captures_the_current_set_and_survives_changing_it() {
+        let mut c = with_account("1");
+        c.set_fflag("FFlagOne", "true");
+        c.save_preset("fps");
+
+        c.set_fflag("FFlagOne", "false");
+        c.set_fflag("FFlagTwo", "1");
+
+        let preset = c.settings.fflag_presets["fps"].clone();
+        assert_eq!(preset.len(), 1, "the preset followed later edits");
+        assert_eq!(preset["FFlagOne"], "true");
+
+        c.set_fflags(preset);
+        assert_eq!(c.fflags().len(), 1);
+        assert_eq!(c.fflags()["FFlagOne"], "true");
+    }
+
+    #[test]
+    fn presets_are_listed_in_a_stable_order() {
+        let mut c = with_account("1");
+        for n in ["zed", "alpha", "mid"] {
+            c.save_preset(n);
+        }
+        assert_eq!(c.preset_names(), vec!["alpha", "mid", "zed"]);
+        c.delete_preset("mid");
+        assert_eq!(c.preset_names(), vec!["alpha", "zed"]);
     }
 }

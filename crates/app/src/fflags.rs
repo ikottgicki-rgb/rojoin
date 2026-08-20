@@ -12,8 +12,12 @@
 
 use std::collections::HashMap;
 
+/// Sober runs Roblox's **Android** build — its own logs show `rbx.JNIRobloxSettings`
+/// and `nativeInitializeNativeFlags`, and it ships `assets/android`. The desktop
+/// list (22,600 flags) is therefore the wrong client: most of it has no effect
+/// here, and showing it implies otherwise.
 const CATALOG_URL: &str =
-    "https://raw.githubusercontent.com/MaximumADHD/Roblox-FFlag-Tracker/main/PCDesktopClient.json";
+    "https://raw.githubusercontent.com/MaximumADHD/Roblox-FFlag-Tracker/main/AndroidApp.json";
 
 /// Refetch after this long. The list changes with each client release.
 const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(60 * 60 * 24 * 3);
@@ -47,7 +51,7 @@ pub async fn catalog(client: &rojoin_roblox::Client) -> Vec<Flag> {
 
     if !is_fresh(&path) {
         match client.fetch_bytes(CATALOG_URL).await {
-            Ok(bytes) if bytes.len() > 10_000 => {
+            Ok(bytes) if bytes.len() > 2_000 => {
                 if let Some(dir) = path.parent() {
                     let _ = std::fs::create_dir_all(dir);
                 }

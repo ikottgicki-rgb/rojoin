@@ -252,6 +252,10 @@ export component MainWindow inherits Window {
     callback open_client();
     callback flag_search(string);
     callback flag_refresh();
+    in property <[string]> presets;
+    callback save_preset(string);
+    callback load_preset(string);
+    callback delete_preset(string);
     in property <string> client_status;
     callback set_client_flag(string, bool);
     callback set_client_graphics(int);
@@ -465,6 +469,10 @@ export component MainWindow inherits Window {
                             add_flag(n, v) => { root.add_fflag(n, v); }
                             remove_flag(n) => { root.remove_fflag(n); }
                             refresh_catalog => { root.flag_refresh(); }
+                            presets: root.presets;
+                            save_preset(n) => { root.save_preset(n); }
+                            load_preset(n) => { root.load_preset(n); }
+                            delete_preset(n) => { root.delete_preset(n); }
                         }
 
                         if root.view_kind == 3: GroupScreen {

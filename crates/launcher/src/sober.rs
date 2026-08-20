@@ -316,6 +316,7 @@ pub fn fflags() -> Vec<(String, String)> {
     };
     let mut out: Vec<(String, String)> = map
         .iter()
+        .filter(|(k, _)| k.as_str() != PLACEHOLDER_FLAG)
         .map(|(k, v)| {
             let shown = match v {
                 serde_json::Value::String(s) => s.clone(),
@@ -327,6 +328,27 @@ pub fn fflags() -> Vec<(String, String)> {
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
 }
+
+/// Replace Sober's entire flag set with the one given.
+///
+/// RoJoin owns flags per account, so Sober's copy is derived: it is overwritten
+/// wholesale before a launch rather than edited in place. Sober re-creates its
+/// own `FFlagExample` placeholder whenever it rewrites the file, so that name is
+/// dropped here — it does nothing, and letting it through makes it look as
+/// though the user set it.
+pub fn write_fflags(flags: &[(String, String)]) -> Result<()> {
+    let mut obj = serde_json::Map::new();
+    for (name, value) in flags {
+        if name == PLACEHOLDER_FLAG {
+            continue;
+        }
+        obj.insert(name.clone(), typed_flag(value));
+    }
+    set_config_key("fflags", serde_json::Value::Object(obj))
+}
+
+/// Sober writes this into a fresh config as an example. It has no effect.
+pub const PLACEHOLDER_FLAG: &str = "FFlagExample";
 
 /// Add or replace a FastFlag. An empty value removes it.
 ///

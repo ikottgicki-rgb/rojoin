@@ -1442,8 +1442,9 @@ fn render_client_settings(ui: &MainWindow) {
 /// Flags the user has actually set always show, regardless of the filter, so a
 /// stray search cannot hide something that is currently in effect.
 fn render_flag_rows(ui: &MainWindow, app: &Arc<App>) {
-    let set: std::collections::HashMap<String, String> =
-        rojoin_launcher::sober::fflags().into_iter().collect();
+    // The account's own flags are the source of truth; Sober's config is
+    // written from them before a launch.
+    let set = app.config.lock().unwrap().fflags();
     let catalog = app.flag_catalog.lock().unwrap();
     let needle = ui.get_flag_filter().to_string().to_lowercase();
 
@@ -1519,6 +1520,19 @@ fn render_flag_rows(ui: &MainWindow, app: &Arc<App>) {
     }
 
     ui.set_flag_rows(ad::model(rows));
+    ui.set_presets(ad::strings(app.config.lock().unwrap().preset_names()));
+}
+
+/// Push the active account's flags into Sober, so a launch uses them.
+///
+/// Called after every edit and before launching. Sober refuses edits while it
+/// is running, so a failure here is reported rather than hidden.
+fn sync_fflags_to_client(ui: &MainWindow, app: &Arc<App>) {
+    let flags: Vec<(String, String)> = app.config.lock().unwrap().fflags().into_iter().collect();
+    match rojoin_launcher::sober::write_fflags(&flags) {
+        Ok(()) => ui.set_client_status("".into()),
+        Err(e) => ui.set_client_status(format!("{e}").into()),
+    }
 }
 
 /// Fetch the catalogue, then show it.
@@ -1609,7 +1623,12 @@ fn wire_client_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
             // A flag with no value would silently delete it, which is not what
             // pressing "+" means.
             let value = if value.trim().is_empty() { "true" } else { value.as_str() };
-            report(&ui, sober::set_fflag(name.as_str(), value));
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.set_fflag(name.as_str(), value);
+                let _ = cfg.save();
+            }
+            sync_fflags_to_client(&ui, &app);
             render_flag_rows(&ui, &app);
         });
     }
@@ -1618,7 +1637,57 @@ fn wire_client_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
         let weak = ui.as_weak();
         ui.on_remove_fflag(move |name| {
             let ui = weak.unwrap();
-            report(&ui, sober::set_fflag(name.as_str(), ""));
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.set_fflag(name.as_str(), "");
+                let _ = cfg.save();
+            }
+            sync_fflags_to_client(&ui, &app);
+            render_flag_rows(&ui, &app);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_save_preset(move |name| {
+            let ui = weak.unwrap();
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.save_preset(name.as_str());
+                let _ = cfg.save();
+            }
+            render_flag_rows(&ui, &app);
+            toast(&ui, "Preset saved");
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_load_preset(move |name| {
+            let ui = weak.unwrap();
+            {
+                let mut cfg = app.config.lock().unwrap();
+                let Some(flags) = cfg.settings.fflag_presets.get(name.as_str()).cloned() else {
+                    return;
+                };
+                cfg.set_fflags(flags);
+                let _ = cfg.save();
+            }
+            sync_fflags_to_client(&ui, &app);
+            render_flag_rows(&ui, &app);
+            toast(&ui, "Preset loaded");
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_delete_preset(move |name| {
+            let ui = weak.unwrap();
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.delete_preset(name.as_str());
+                let _ = cfg.save();
+            }
             render_flag_rows(&ui, &app);
         });
     }
@@ -4567,6 +4636,15 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
                     },
                     None => tracing::warn!(account = %id, "no stored cookie; launching as whoever Sober has"),
                 }
+            }
+
+            // Sober holds one global flag set, so the active account's copy has
+            // to be written in before the client starts or the previous
+            // account's flags would be used.
+            let flags: Vec<(String, String)> =
+                app.config.lock().unwrap().fflags().into_iter().collect();
+            if let Err(e) = rojoin_launcher::sober::write_fflags(&flags) {
+                tracing::warn!(error = %e, "could not apply this account's flags");
             }
 
             match rojoin_launcher::launch_sober(&req) {

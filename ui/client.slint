@@ -87,6 +87,10 @@ export component ClientScreen inherits Rectangle {
     callback add_flag(string, string);
     callback remove_flag(string);
     callback refresh_catalog();
+    in property <[string]> presets;
+    callback save_preset(string);
+    callback load_preset(string);
+    callback delete_preset(string);
 
     background: Theme.bg_0;
     Texture { width: 100%; height: 100%; }
@@ -328,6 +332,96 @@ export component ClientScreen inherits Rectangle {
                                 clicked => {
                                     root.add_flag(root.filter, nv.text);
                                     nv.text = "";
+                                }
+                            }
+                        }
+                    }
+
+                    // presets
+                    HorizontalLayout {
+                        spacing: Space.sm;
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: "Presets";
+                                color: Theme.text_mute;
+                                font-size: Type.caption;
+                            }
+                        }
+                        for name in root.presets: Rectangle {
+                            height: 28px;
+                            width: pl.preferred-width + Space.md * 2;
+                            background: pta.has-hover ? Theme.bg_3 : Theme.bg_2;
+                            border-radius: Theme.radius;
+                            border-width: Theme.hairline;
+                            border-color: Theme.line;
+                            animate background { duration: Motion.fast; easing: Motion.ease; }
+
+                            pl := HorizontalLayout {
+                                x: Space.md;
+                                spacing: Space.sm;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Text {
+                                        text: name;
+                                        color: Theme.text;
+                                        font-size: Type.small;
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Text {
+                                        text: "×";
+                                        color: dta.has-hover ? Theme.danger : Theme.text_mute;
+                                        font-size: Type.small;
+                                        dta := TouchArea {
+                                            width: 16px;
+                                            height: 16px;
+                                            mouse-cursor: pointer;
+                                            clicked => { root.delete_preset(name); }
+                                        }
+                                    }
+                                }
+                            }
+                            pta := TouchArea {
+                                width: pl.preferred-width;
+                                mouse-cursor: pointer;
+                                clicked => { root.load_preset(name); }
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Rectangle {
+                            width: 130px;
+                            height: 28px;
+                            background: Theme.bg_2;
+                            border-radius: Theme.radius;
+                            border-width: Theme.hairline;
+                            border-color: pn.has-focus ? Theme.accent : Theme.line;
+                            pn := TextInput {
+                                x: Space.sm;
+                                width: parent.width - Space.sm * 2;
+                                height: 100%;
+                                color: Theme.text;
+                                font-size: Type.small;
+                                vertical-alignment: center;
+                                single-line: true;
+                            }
+                            if pn.text == "": Text {
+                                x: Space.sm;
+                                height: 100%;
+                                text: "preset name";
+                                color: Theme.text_mute;
+                                font-size: Type.small;
+                                vertical-alignment: center;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Btn {
+                                label: "Save";
+                                clicked => {
+                                    root.save_preset(pn.text);
+                                    pn.text = "";
                                 }
                             }
                         }
