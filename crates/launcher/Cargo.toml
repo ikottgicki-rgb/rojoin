@@ -10,3 +10,9 @@ rojoin-roblox.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+# ShellExecuteW, for handing a `roblox-player:` URI to the shell directly.
+# Routing it through `cmd /C start` instead flashes a console window and runs a
+# URI full of %XX escapes through cmd's own parser.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

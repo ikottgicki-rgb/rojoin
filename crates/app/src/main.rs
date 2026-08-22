@@ -269,8 +269,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Try the stored cookie. A failure here is not an error the user should see —
-/// it just means the sign-in screen instead of the app.
+/// Try the stored cookie.
+///
+/// Only a 401 means the login is actually gone. Anything else — no network yet,
+/// a throttle, a captcha challenge — says nothing about whether the cookie is
+/// still good, and treating those as a sign-out is what made the app look like
+/// it kept forgetting the login: the cookie was still in the keyring, but the
+/// user was staring at a sign-in screen. Transient failures are retried, and
+/// the stored session is left exactly where it is.
 fn restore_session(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
     let active = app.config.lock().unwrap().active_account.clone();
     let Some(id) = active else { return };
@@ -287,17 +293,66 @@ fn restore_session(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: 
 
     bridge.spawn(async move {
         client.set_cookie(Some(cookie)).await;
-        let me = users::authenticated(&client).await;
 
-        let _ = weak.upgrade_in_event_loop(move |ui| match me {
-            Ok(me) => {
-                tracing::info!(user = %me.name, "restored session");
-                enter_app(&ui, &app, &bridge2, &imgs, &me.display_name, me.id);
+        // Patient on purpose. A desktop launched at login is routinely up
+        // before its network is, and the first attempt fails for reasons that
+        // have nothing to do with the account.
+        const WAITS: [u64; 4] = [0, 2, 5, 15];
+        let mut last: Option<rojoin_roblox::Error> = None;
+
+        for (attempt, wait) in WAITS.iter().enumerate() {
+            if *wait > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(*wait)).await;
             }
-            Err(e) => {
-                tracing::info!(error = %e, "stored session is no longer valid");
-                ui.set_signed_in(false);
+
+            match users::authenticated(&client).await {
+                Ok(me) => {
+                    let app = app.clone();
+                    let bridge2 = bridge2.clone();
+                    let imgs = imgs.clone();
+                    let _ = weak.upgrade_in_event_loop(move |ui| {
+                        tracing::info!(user = %me.name, "restored session");
+                        ui.set_signin_error(Default::default());
+                        enter_app(&ui, &app, &bridge2, &imgs, &me.display_name, me.id);
+                    });
+                    return;
+                }
+
+                // The one failure that really is a signed-out account.
+                Err(rojoin_roblox::Error::Expired) => {
+                    tracing::info!("stored session is no longer valid");
+                    let _ = weak.upgrade_in_event_loop(|ui| {
+                        ui.set_signed_in(false);
+                        ui.set_signin_error(
+                            "Roblox ended this session, so signing in again is needed.".into(),
+                        );
+                    });
+                    return;
+                }
+
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        attempt = attempt + 1,
+                        "could not reach Roblox to restore the session"
+                    );
+                    last = Some(e);
+                }
             }
+        }
+
+        // Out of retries. The cookie is untouched and still stored, so say so —
+        // this is a connection problem, not a lost login.
+        let detail = last.map(|e| e.to_string()).unwrap_or_default();
+        let _ = weak.upgrade_in_event_loop(move |ui| {
+            ui.set_signed_in(false);
+            ui.set_signin_error(
+                format!(
+                    "Could not reach Roblox ({detail}). Your saved login is still \
+                     here — restart RoJoin once you are back online."
+                )
+                .into(),
+            );
         });
     });
 }
@@ -4042,13 +4097,19 @@ fn wire_search(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
                 // A link that names a specific server or a VIP code is a join
                 // instruction, not a browse one — honour it directly instead of
                 // dropping the user on the game page to pick a server again.
-                if target.job_id.is_some() || target.access_code.is_some() {
+                if target.job_id.is_some()
+                    || target.access_code.is_some()
+                    || target.link_code.is_some()
+                {
                     let mut req = JoinRequest::place(target.place_id);
                     if let Some(job) = target.job_id {
                         req = req.server(job);
                     }
                     if let Some(code) = target.access_code {
-                        req = req.private(code);
+                        req = req.reserved(code);
+                    }
+                    if let Some(code) = target.link_code {
+                        req = req.private_link(code);
                     }
                     open_game(&ui, &app, &bridge2, &imgs2, target.place_id);
                     launch(&ui, &app, req);

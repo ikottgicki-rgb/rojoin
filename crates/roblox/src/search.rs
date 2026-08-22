@@ -128,8 +128,13 @@ pub struct JoinTarget {
     pub place_id: i64,
     /// A specific running server, from `gameInstanceId`.
     pub job_id: Option<String>,
-    /// A private/VIP server, from `privateServerLinkCode`.
+    /// A reserved server, from `accessCode`.
     pub access_code: Option<String>,
+    /// A private/VIP server share link, from `privateServerLinkCode`.
+    ///
+    /// Not the same thing as `access_code`: Roblox joins them through different
+    /// parameters, so they are carried separately all the way to the launcher.
+    pub link_code: Option<String>,
 }
 
 /// Pull a query parameter out of a link without a URL crate.
@@ -163,8 +168,9 @@ pub fn resolve_join_target(input: &str) -> Option<JoinTarget> {
     Some(JoinTarget {
         place_id,
         job_id: query_param(s, "gameInstanceId").filter(|v| v.len() > 8),
-        access_code: query_param(s, "privateServerLinkCode")
-            .or_else(|| query_param(s, "accessCode"))
+        access_code: query_param(s, "accessCode").filter(|v| !v.is_empty()),
+        link_code: query_param(s, "privateServerLinkCode")
+            .or_else(|| query_param(s, "linkCode"))
             .filter(|v| !v.is_empty()),
     })
 }
@@ -216,7 +222,7 @@ mod tests {
         .unwrap();
         assert_eq!(t.place_id, 606_849_621);
         assert_eq!(t.job_id.as_deref(), Some("1a2b3c4d-5e6f-7890-abcd-ef1234567890"));
-        assert!(t.access_code.is_none());
+        assert!(t.access_code.is_none() && t.link_code.is_none());
     }
 
     #[test]
@@ -226,14 +232,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(t.place_id, 606_849_621);
-        assert_eq!(t.access_code.as_deref(), Some("abc123XYZ"));
+        assert_eq!(t.link_code.as_deref(), Some("abc123XYZ"));
+        assert!(
+            t.access_code.is_none(),
+            "a share link is a link code, not an access code"
+        );
     }
 
     #[test]
     fn a_plain_game_link_names_no_server() {
         let t = resolve_join_target("https://www.roblox.com/games/606849621/Jailbreak").unwrap();
         assert_eq!(t.place_id, 606_849_621);
-        assert!(t.job_id.is_none() && t.access_code.is_none());
+        assert!(t.job_id.is_none() && t.access_code.is_none() && t.link_code.is_none());
     }
 
     #[test]

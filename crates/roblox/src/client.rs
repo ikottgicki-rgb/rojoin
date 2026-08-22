@@ -44,6 +44,15 @@ pub struct Client {
 struct Inner {
     cookie: RwLock<Option<String>>,
     csrf: RwLock<Option<String>>,
+    /// A `.ROBLOSECURITY` Roblox handed back mid-session, waiting to be written
+    /// to the keyring.
+    ///
+    /// Roblox re-issues the cookie from time to time and retires the previous
+    /// value. Holding the original forever means the stored login quietly stops
+    /// working and the next launch lands on the sign-in screen for no reason the
+    /// user can see, so a re-issued cookie is adopted immediately and parked
+    /// here for the app to persist.
+    refreshed: RwLock<Option<String>>,
 }
 
 impl Client {
@@ -62,6 +71,7 @@ impl Client {
             inner: Arc::new(Inner {
                 cookie: RwLock::new(None),
                 csrf: RwLock::new(None),
+                refreshed: RwLock::new(None),
             }),
         })
     }
@@ -75,6 +85,59 @@ impl Client {
     pub async fn set_cookie(&self, cookie: Option<String>) {
         *self.inner.cookie.write().await = cookie;
         *self.inner.csrf.write().await = None;
+        *self.inner.refreshed.write().await = None;
+    }
+
+    /// Hand over a cookie Roblox re-issued, once, so the caller can store it.
+    ///
+    /// Taking it clears it: the value is already live on this client, and the
+    /// only thing left to do with it is write it to the keyring.
+    pub async fn take_refreshed_cookie(&self) -> Option<String> {
+        self.inner.refreshed.write().await.take()
+    }
+
+    /// Adopt a `.ROBLOSECURITY` that came back on a response.
+    ///
+    /// Roblox only sends one when it has replaced the old value, so this is
+    /// both the new cookie and notice that the previous one is on its way out.
+    async fn absorb_refreshed_cookie(&self, headers: &reqwest::header::HeaderMap) {
+        let fresh = headers
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .filter_map(|line| {
+                line.split(';')
+                    .next()?
+                    .trim()
+                    .strip_prefix(".ROBLOSECURITY=")
+                    .map(str::to_owned)
+            })
+            .find(|v| !v.is_empty());
+
+        let Some(fresh) = fresh else { return };
+
+        // Adopt only something that is unmistakably a session cookie. Roblox
+        // also sends `.ROBLOSECURITY` to *clear* it — on a sign-out, or on an
+        // endpoint that decided this request was anonymous — and adopting one of
+        // those would overwrite a perfectly good login with a blank, which is
+        // the exact failure this whole mechanism exists to prevent.
+        if !fresh.starts_with("_|WARNING:-DO-NOT-SHARE-THIS") || fresh.len() < 200 {
+            tracing::debug!(
+                len = fresh.len(),
+                "ignoring a Set-Cookie that is not a usable session cookie"
+            );
+            return;
+        }
+
+        // Roblox echoes the current cookie on plenty of responses; only a
+        // genuinely different value is a rotation.
+        if self.inner.cookie.read().await.as_deref() == Some(fresh.as_str()) {
+            return;
+        }
+
+        tracing::info!("Roblox re-issued the session cookie; adopting it");
+        *self.inner.cookie.write().await = Some(fresh.clone());
+        *self.inner.refreshed.write().await = Some(fresh);
     }
 
     pub async fn has_cookie(&self) -> bool {
@@ -149,7 +212,9 @@ impl Client {
                 return Err(Error::Api(format!("{} for {url}", resp.status())));
             }
 
-            return Ok(HeaderResponse { headers: resp.headers().clone() });
+            let headers = resp.headers().clone();
+            self.absorb_refreshed_cookie(&headers).await;
+            return Ok(HeaderResponse { headers });
         }
 
         Err(Error::Api(format!("{url} kept refusing the CSRF token")))
@@ -255,6 +320,7 @@ impl Client {
                 return Err(Error::Api(format!("{status}: {}", first_message(&text))));
             }
 
+            self.absorb_refreshed_cookie(&resp.headers().clone()).await;
             return Ok(resp.bytes().await?.to_vec());
         }
     }
@@ -333,5 +399,83 @@ mod tests {
     fn truncates_a_huge_html_error_page() {
         let body = "x".repeat(5000);
         assert_eq!(first_message(&body).len(), 160);
+    }
+
+    fn cookie(tag: &str) -> String {
+        format!("_|WARNING:-DO-NOT-SHARE-THIS.--Sharing-this-will-allow-someone-to-log-in-as-you.|_{tag}{}", "A".repeat(300))
+    }
+
+    fn set_cookie(values: &[&str]) -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        for v in values {
+            headers.append(reqwest::header::SET_COOKIE, v.parse().unwrap());
+        }
+        headers
+    }
+
+    #[tokio::test]
+    async fn a_reissued_cookie_is_adopted_and_offered_once() {
+        let client = Client::new().unwrap();
+        client.set_cookie(Some(cookie("old"))).await;
+
+        let fresh = cookie("new");
+        client
+            .absorb_refreshed_cookie(&set_cookie(&[&format!(
+                ".ROBLOSECURITY={fresh}; Domain=.roblox.com; Path=/; HttpOnly"
+            )]))
+            .await;
+
+        assert_eq!(client.take_refreshed_cookie().await.as_deref(), Some(fresh.as_str()));
+        // Taking it clears it: there is nothing left to persist.
+        assert!(client.take_refreshed_cookie().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_echo_of_the_current_cookie_is_not_a_rotation() {
+        let same = cookie("same");
+        let client = Client::new().unwrap();
+        client.set_cookie(Some(same.clone())).await;
+
+        client
+            .absorb_refreshed_cookie(&set_cookie(&[&format!(".ROBLOSECURITY={same}; Path=/")]))
+            .await;
+
+        assert!(client.take_refreshed_cookie().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_clearing_cookie_never_overwrites_a_good_login() {
+        // Roblox sends these to sign a session out. Adopting one would persist a
+        // blank over a working cookie — the exact failure this guards.
+        for clearing in [
+            ".ROBLOSECURITY=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+            ".ROBLOSECURITY=deleted; Path=/",
+            ".ROBLOSECURITY=short-and-not-a-session; Path=/",
+        ] {
+            let client = Client::new().unwrap();
+            client.set_cookie(Some(cookie("good"))).await;
+            client.absorb_refreshed_cookie(&set_cookie(&[clearing])).await;
+
+            assert!(
+                client.take_refreshed_cookie().await.is_none(),
+                "adopted {clearing}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn switching_account_drops_a_pending_refresh() {
+        let client = Client::new().unwrap();
+        client.set_cookie(Some(cookie("first"))).await;
+        client
+            .absorb_refreshed_cookie(&set_cookie(&[&format!(
+                ".ROBLOSECURITY={}; Path=/",
+                cookie("rotated")
+            )]))
+            .await;
+
+        // A pending refresh belongs to the account that produced it.
+        client.set_cookie(Some(cookie("second"))).await;
+        assert!(client.take_refreshed_cookie().await.is_none());
     }
 }

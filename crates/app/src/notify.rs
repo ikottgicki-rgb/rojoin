@@ -36,6 +36,8 @@ impl Watcher {
         loop {
             tokio::time::sleep(POLL).await;
 
+            self.persist_refreshed_cookie().await;
+
             let (watched, want_requests) = {
                 let cfg = match self.app.config.lock() {
                     Ok(c) => c,
@@ -58,6 +60,30 @@ impl Watcher {
             if want_requests {
                 self.sweep_requests(&mut previous_requests).await;
             }
+        }
+    }
+
+    /// Write through a cookie Roblox re-issued mid-session.
+    ///
+    /// This loop is the app's one dependable heartbeat, so it is where the
+    /// write-through lives. Without it a rotation is only ever held in memory:
+    /// the keyring keeps the retired value, and the next launch finds a dead
+    /// cookie and asks the user to sign in again for no visible reason.
+    async fn persist_refreshed_cookie(&self) {
+        let Some(cookie) = self.client.take_refreshed_cookie().await else {
+            return;
+        };
+
+        let active = match self.app.config.lock() {
+            Ok(cfg) => cfg.active_account.clone(),
+            Err(_) => return,
+        };
+
+        let Some(id) = active else { return };
+
+        match crate::secrets::store(&id, &cookie) {
+            Ok(()) => tracing::info!(account = %id, "stored the re-issued cookie"),
+            Err(e) => tracing::error!(error = %e, "could not store the re-issued cookie"),
         }
     }
 

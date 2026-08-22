@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Produce the two shipping artifacts:
+# Produce the shipping artifacts:
 #   dist/RoJoin-x86_64.AppImage   — single-file Linux build
 #   dist/RoJoin-windows-x64.zip   — the standalone .exe plus a README
+#   dist/RoJoin.exe               — the same .exe, unwrapped, for the updater
 #
 # Runs scripts/build.sh first, so the Windows self-contained and no-console
 # assertions gate packaging too.
@@ -36,6 +37,25 @@ EOF
 
 (cd dist/windows && zip -q -r "../RoJoin-windows-x64.zip" .)
 echo "    dist/RoJoin-windows-x64.zip ($(du -h dist/RoJoin-windows-x64.zip | cut -f1))"
+
+# The bare .exe ships as its own release asset because that is what the
+# self-updater downloads and writes over the running binary. Handing it the zip
+# instead replaced RoJoin.exe with an archive and left the install unable to
+# start, so the runnable artifact has to be attached in its own right.
+cp "$WIN_BIN" dist/RoJoin.exe
+echo "    dist/RoJoin.exe ($(du -h dist/RoJoin.exe | cut -f1))  <- the self-update asset"
+
+cat <<'WARN'
+
+    ! Do not attach RoJoin-windows-x64.zip to a GitHub release yet.
+      Builds up to 0.1.6 shipped an updater that downloads whatever asset ends
+      in .zip and writes it straight over RoJoin.exe, with no extraction. Any
+      install still on one of those versions will overwrite itself with the
+      archive and stop launching. With no .zip asset attached, those same builds
+      find nothing to fetch and simply stay put.
+
+      Attach RoJoin.exe only. The zip is fine for handing to someone directly.
+WARN
 
 # ------------------------------------------------------------------ Linux ---
 echo

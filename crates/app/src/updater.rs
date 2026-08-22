@@ -48,12 +48,50 @@ impl Status {
             }
         }
     }
+
+    /// Is there something here to install? Only an available update qualifies —
+    /// "up to date" and "not configured" are both dead ends.
+    pub fn can_install(&self) -> bool {
+        matches!(self, Status::Available { .. })
+    }
 }
 
 /// The asset this platform should download.
+///
+/// It has to be the runnable artifact, not the archive around it. `install`
+/// writes what it downloads straight over the running binary, so picking the
+/// `.zip` — as this once did — replaced `RoJoin.exe` with a zip file and left
+/// the install unable to start at all. Releases carry a bare `RoJoin.exe`
+/// alongside the zip for exactly this reason; an archive is never a candidate.
 fn wanted_asset(assets: &[Asset]) -> Option<&Asset> {
-    let want = if cfg!(windows) { ".zip" } else { ".AppImage" };
-    assets.iter().find(|a| a.name.ends_with(want))
+    let want = if cfg!(windows) { ".exe" } else { ".AppImage" };
+    assets
+        .iter()
+        .find(|a| a.name.ends_with(want) && !is_archive(&a.name))
+}
+
+fn is_archive(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    [".zip", ".tar", ".gz", ".xz", ".7z", ".bz2"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
+/// Does this payload actually start with the magic of something this platform
+/// can execute?
+///
+/// The last line of defence before overwriting the binary the user launches.
+/// A truncated download, an HTML error page served with a 200, or a release
+/// asset that turns out to be an archive all fail here instead of bricking the
+/// install.
+fn looks_executable(bytes: &[u8]) -> bool {
+    if cfg!(windows) {
+        // PE/COFF images all begin with the DOS stub's "MZ".
+        bytes.starts_with(b"MZ")
+    } else {
+        // An AppImage is an ELF with a squashfs appended.
+        bytes.starts_with(b"\x7fELF")
+    }
 }
 
 pub async fn check() -> Status {
@@ -119,6 +157,14 @@ pub async fn install(url: &str) -> Result<std::path::PathBuf, String> {
 
     if bytes.len() < 1_000_000 {
         return Err("that download is too small to be a real build".into());
+    }
+
+    if !looks_executable(&bytes) {
+        return Err(
+            "that download is not a runnable build, so it was left alone. \
+             Download the new version by hand instead."
+                .into(),
+        );
     }
 
     let staged = exe.with_extension("update");
@@ -246,7 +292,8 @@ mod tests {
     #[test]
     fn the_asset_for_this_platform_is_chosen() {
         let assets = vec![
-            Asset { name: "RoJoin-windows-x64.zip".into(), browser_download_url: "w".into() },
+            Asset { name: "RoJoin.exe".into(), browser_download_url: "w".into() },
+            Asset { name: "RoJoin-windows-x64.zip".into(), browser_download_url: "z".into() },
             Asset { name: "RoJoin-x86_64.AppImage".into(), browser_download_url: "l".into() },
         ];
         let picked = wanted_asset(&assets).unwrap();
@@ -255,6 +302,31 @@ mod tests {
         } else {
             assert_eq!(picked.browser_download_url, "l");
         }
+    }
+
+    #[test]
+    fn a_zip_is_never_a_candidate() {
+        // Installing writes the payload straight over the running binary, so an
+        // archive here means an install that cannot start again.
+        let assets = vec![Asset {
+            name: "RoJoin-windows-x64.zip".into(),
+            browser_download_url: "z".into(),
+        }];
+        assert!(wanted_asset(&assets).is_none());
+        assert!(is_archive("RoJoin-windows-x64.zip"));
+        assert!(!is_archive("RoJoin.exe"));
+    }
+
+    #[test]
+    fn only_a_real_executable_is_allowed_over_the_binary() {
+        let zip = b"PK\x03\x04and then some";
+        let html = b"<!doctype html><title>404</title>";
+        assert!(!looks_executable(zip));
+        assert!(!looks_executable(html));
+        assert!(!looks_executable(b""));
+
+        let real: &[u8] = if cfg!(windows) { b"MZ\x90\x00rest" } else { b"\x7fELFrest" };
+        assert!(looks_executable(real));
     }
 
     #[test]

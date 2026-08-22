@@ -45,8 +45,16 @@ pub struct JoinRequest {
     pub root_place_id: i64,
     /// Specific server to join, from the server browser.
     pub job_id: Option<String>,
-    /// Private-server access code.
+    /// Reserved-server access code.
     pub access_code: Option<String>,
+    /// Private (VIP) server *link* code — what a
+    /// `?privateServerLinkCode=` URL carries.
+    ///
+    /// Deliberately separate from `access_code`. Roblox treats `linkCode` and
+    /// `accessCode` as different parameters and refuses a join that sends one
+    /// where the other belongs; collapsing them into one field is what made
+    /// private-server links fail to open.
+    pub link_code: Option<String>,
 }
 
 impl JoinRequest {
@@ -65,8 +73,14 @@ impl JoinRequest {
         self
     }
 
-    /// A private (VIP) server, joined by its link code.
-    pub fn private(mut self, access_code: impl Into<String>) -> Self {
+    /// A private (VIP) server, joined by its share link code.
+    pub fn private_link(mut self, link_code: impl Into<String>) -> Self {
+        self.link_code = Some(link_code.into());
+        self
+    }
+
+    /// A reserved server, joined by its access code.
+    pub fn reserved(mut self, access_code: impl Into<String>) -> Self {
         self.access_code = Some(access_code.into());
         self
     }
@@ -87,6 +101,9 @@ impl JoinRequest {
         if let Some(code) = &self.access_code {
             uri.push_str(&format!("&accessCode={code}"));
         }
+        if let Some(code) = &self.link_code {
+            uri.push_str(&format!("&linkCode={code}"));
+        }
         uri
     }
 }
@@ -102,12 +119,11 @@ pub fn launch_sober(req: &JoinRequest) -> Result<()> {
 
 /// Launch on Windows with a freshly minted authentication ticket.
 pub fn launch_windows(req: &JoinRequest, ticket: &str, launch_time_ms: i64) -> Result<()> {
-    let inner = windows::place_launcher_url(
-        req.place_id,
-        req.job_id.as_deref(),
-        req.access_code.as_deref(),
-    );
-    let uri = windows::launch_uri(ticket, &inner, launch_time_ms, 1);
+    // The same tracker id has to appear inside the PlaceLauncher URL and as the
+    // outer `browsertrackerid:` field — Roblox cross-checks them.
+    let tracker = windows::tracker_id();
+    let inner = windows::place_launcher_url(req, tracker);
+    let uri = windows::launch_uri(ticket, &inner, launch_time_ms, tracker);
     windows::open_uri(&uri)
 }
 
