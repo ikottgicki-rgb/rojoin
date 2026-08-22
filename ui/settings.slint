@@ -236,6 +236,13 @@ export component SettingsScreen inherits Rectangle {
                         background: ata.has-hover ? Theme.bg_2 : transparent;
                         animate background { duration: Motion.instant; easing: Motion.ease; }
 
+                        // Declared FIRST on purpose. This TouchArea exists only
+                        // to light the row on hover, but it fills the row, and a
+                        // later sibling sits above an earlier one — so with it
+                        // last it swallowed every click on Switch and ×, which
+                        // is exactly why neither button did anything.
+                        ata := TouchArea { mouse-cursor: pointer; }
+
                         HorizontalLayout {
                             padding-left: Space.lg;
                             padding-right: Space.lg;
@@ -285,8 +292,6 @@ export component SettingsScreen inherits Rectangle {
                                 }
                             }
                         }
-
-                        ata := TouchArea { mouse-cursor: pointer; }
                     }
 
                     Row {

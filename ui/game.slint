@@ -35,6 +35,13 @@ component SubPlaceRow inherits Rectangle {
     border-color: ta.has-hover ? Theme.accent : Theme.line;
     animate background, border-color { duration: Motion.fast; easing: Motion.ease; }
 
+    // First, so the Join button below is a later sibling and therefore on top:
+    // this area fills the row, and whatever is declared last wins the click.
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.play(); }
+    }
+
     HorizontalLayout {
         padding-left: Space.md;
         padding-right: Space.sm;
@@ -87,15 +94,17 @@ component SubPlaceRow inherits Rectangle {
         }
     }
 
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.play(); }
-    }
 }
 
 component ServerCard inherits Rectangle {
     in property <ServerRow> server;
     callback join();
+
+    // Declared before the content for the same reason as SubPlaceRow. With
+    // this last it covered the whole card and, carrying no handler of its own,
+    // swallowed every click on Join — the server browser's Join button did
+    // nothing at all.
+    ta := TouchArea { mouse-cursor: pointer; }
 
     height: 76px;
     background: Theme.bg_2;
@@ -177,8 +186,6 @@ component ServerCard inherits Rectangle {
             }
         }
     }
-
-    ta := TouchArea { mouse-cursor: pointer; }
 }
 
 export component GameScreen inherits Rectangle {

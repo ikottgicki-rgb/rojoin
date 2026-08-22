@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use rojoin_launcher::JoinRequest;
-use rojoin_roblox::{auth, friends, games, groups, search, thumbnails, users, Client};
+use rojoin_roblox::{auth, discovery, friends, games, groups, search, thumbnails, users, Client};
 use rojoin_store::Config;
 use slint::ComponentHandle;
 
@@ -3553,7 +3553,7 @@ fn load_pinned(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
     let gen = SESSION_GEN.load(Ordering::SeqCst);
 
     bridge.call_res(
-        move || async move { fetch_home(&client, &places).await },
+        move || async move { fetch_by_places(&client, &places).await },
         move |ui, result| {
             if gen != SESSION_GEN.load(Ordering::SeqCst) {
                 return;
@@ -4019,36 +4019,14 @@ fn load_favorites(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &
 }
 
 fn load_home(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
-    let history: Vec<(i64, i64)> = {
-        let cfg = app.config.lock().unwrap();
-        let Some(data) = cfg.data() else {
-            ui.set_home_loading(false);
-            return;
-        };
-        let mut items: Vec<_> = data.history.values().collect();
-        items.sort_by_key(|h| std::cmp::Reverse(h.last_played));
-        items
-            .iter()
-            .filter_map(|h| h.place_id.parse::<i64>().ok().map(|p| (p, h.last_played)))
-            .take(12)
-            .collect()
-    };
-
-    if history.is_empty() {
-        ui.set_home_loading(false);
-        ui.set_has_hero(false);
-        return;
-    }
-
     ui.set_home_loading(true);
 
     let client = app.client.clone();
     let imgs = imgs.clone();
     let gen = SESSION_GEN.load(Ordering::SeqCst);
-    let place_ids: Vec<i64> = history.iter().map(|(p, _)| *p).collect();
 
     bridge.call_res(
-        move || async move { fetch_home(&client, &place_ids).await },
+        move || async move { fetch_home(&client).await },
         move |ui, result| {
             if gen != SESSION_GEN.load(Ordering::SeqCst) {
                 return;
@@ -4069,9 +4047,14 @@ fn load_home(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
                 })
                 .collect();
 
-            if let Some(first) = tiles.first().cloned() {
-                ui.set_hero(first);
-                ui.set_has_hero(true);
+            match tiles.first().cloned() {
+                Some(first) => {
+                    ui.set_hero(first);
+                    ui.set_has_hero(true);
+                }
+                // A new account has nothing to continue, and Roblox omits the
+                // sort rather than sending an empty one.
+                None => ui.set_has_hero(false),
             }
             ui.set_recent(ad::model(tiles));
 
@@ -4775,13 +4758,20 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
 
 /// Everything Home needs, in `Send`-safe form. No `slint::Image` here —
 /// images are not `Send`, so the tile structs are assembled on the UI thread.
+#[derive(Default)]
 struct HomeLoad {
     details: Vec<rojoin_roblox::models::GameDetail>,
     votes: Vec<rojoin_roblox::models::Votes>,
     art: std::collections::HashMap<i64, String>,
 }
 
-async fn fetch_home(client: &Client, place_ids: &[i64]) -> rojoin_roblox::Result<HomeLoad> {
+/// Load games the caller already knows by *place* id.
+///
+/// Local pins are stored as place ids, so this path still has to resolve each
+/// one to its universe before the batch endpoints can be used. The Continue
+/// sort hands back universe ids directly, which is why `fetch_home` no longer
+/// needs any of this.
+async fn fetch_by_places(client: &Client, place_ids: &[i64]) -> rojoin_roblox::Result<HomeLoad> {
     let mut universes = Vec::new();
     for place in place_ids {
         if let Ok(u) = games::universe_of(client, *place).await {
@@ -4789,8 +4779,39 @@ async fn fetch_home(client: &Client, place_ids: &[i64]) -> rojoin_roblox::Result
         }
     }
 
+    if universes.is_empty() {
+        return Ok(HomeLoad::default());
+    }
+
     Ok(HomeLoad {
         details: games::details(client, &universes).await?,
+        votes: or_default("ratings", games::votes(client, &universes).await),
+        art: or_default("game art", thumbnails::game_art(client, &universes).await),
+    })
+}
+
+/// Recency comes from Roblox's own Continue sort rather than from anything
+/// RoJoin recorded, so a game played on a phone, from the website or through
+/// the official client shows up here too.
+///
+/// It also hands back universe ids directly, which retires the twelve
+/// sequential place-to-universe lookups the local history needed.
+async fn fetch_home(client: &Client) -> rojoin_roblox::Result<HomeLoad> {
+    let universes = discovery::recently_played(client, 12).await?;
+    if universes.is_empty() {
+        return Ok(HomeLoad::default());
+    }
+
+    let mut details = games::details(client, &universes).await?;
+
+    // `details` comes back in Roblox's order, not the order asked for, and
+    // recency order is the entire point of this list.
+    details.sort_by_key(|d| {
+        universes.iter().position(|u| *u == d.id).unwrap_or(usize::MAX)
+    });
+
+    Ok(HomeLoad {
+        details,
         votes: or_default("ratings", games::votes(client, &universes).await),
         art: or_default("game art", thumbnails::game_art(client, &universes).await),
     })
