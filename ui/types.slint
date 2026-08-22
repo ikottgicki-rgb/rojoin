@@ -131,3 +131,17 @@ export struct GameDetailData {
     icon: image,
     hero: image,
 }
+
+/// Someone who has asked to be your friend.
+///
+/// Carries enough to decide without leaving the list — who they are, what they
+/// say about themselves, and whether they are around right now.
+export struct RequestRow {
+    id: string,
+    name: string,
+    username: string,
+    description: string,
+    presence: int,          // 0 offline · 1 online · 2 in game · 3 studio
+    presence_label: string,
+    thumb: image,
+}

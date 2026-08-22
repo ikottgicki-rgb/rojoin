@@ -1,6 +1,6 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Btn, IconBtn, Segmented, Spinner, EmptyState, Toast } from "components.slint";
-import { GameTile, WearItem, SubPlace, ServerRow, DetailItem, GameDetailData, FriendRow, GroupRow, MacroRow, MacroStepRow } from "types.slint";
+import { GameTile, WearItem, SubPlace, ServerRow, DetailItem, GameDetailData, FriendRow, GroupRow, MacroRow, MacroStepRow, RequestRow } from "types.slint";
 import { Sidebar, TopBar, NavEntry, ExpiredBanner, AccountMismatchBanner } from "shell.slint";
 import { ClientScreen, FlagRow } from "client.slint";
 import { SignInScreen, SignInPhase } from "signin.slint";
@@ -54,6 +54,7 @@ export component MainWindow inherits Window {
     callback open_settings();
     callback open_account();
     callback open_my_profile();
+    callback open_request(string);
     in property <bool> profile_is_me: false;
     in property <bool> saving_bio: false;
     in property <string> bio_status;
@@ -98,7 +99,8 @@ export component MainWindow inherits Window {
     callback clear_recents();
 
     in property <[FriendRow]> friend_rows;
-    in property <[DetailItem]> requests_list;
+    in property <[RequestRow]> requests_list;
+    in-out property <bool> requests_open: false;
     in property <bool> friends_loading: false;
     in property <string> request_status;
     in property <int> friends_in_game: 0;
@@ -554,6 +556,9 @@ export component MainWindow inherits Window {
                             height: 100%;
                             rows: root.friend_rows;
                             requests: root.requests_list;
+                            requests_open <=> root.requests_open;
+                            open_request(id) => { root.open_request(id); }
+                            toggle_requests => { root.requests_open = !root.requests_open; }
                             loading: root.friends_loading;
                             request_status: root.request_status;
                             in_game: root.friends_in_game;

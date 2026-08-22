@@ -1,6 +1,6 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Avatar, Btn, IconBtn, Chip, Badge, Spinner, BusySlot, Bell, EmptyState, MetaStat, Texture } from "components.slint";
-import { FriendRow, DetailItem } from "types.slint";
+import { FriendRow, DetailItem, RequestRow } from "types.slint";
 import { ListView } from "std-widgets.slint";
 
 component PresenceDot inherits Rectangle {
@@ -202,7 +202,9 @@ component FriendListRow inherits Rectangle {
 
 export component FriendsScreen inherits Rectangle {
     in property <[FriendRow]> rows;
-    in property <[DetailItem]> requests;
+    in property <[RequestRow]> requests;
+    /// Is the requests panel showing?
+    in-out property <bool> requests_open: false;
     in property <bool> loading: false;
     in property <int> in_game: 0;
     in property <int> online: 0;
@@ -211,6 +213,8 @@ export component FriendsScreen inherits Rectangle {
 
     callback refresh();
     callback filter_changed(string);
+    callback open_request(string);
+    callback toggle_requests();
     callback open(string);
     callback join(string);
     callback pin(string);
@@ -303,6 +307,28 @@ export component FriendsScreen inherits Rectangle {
                     }
                 }
 
+                // Requests live behind this rather than in a bar across the
+                // top: they are occasional, and a permanent strip spends the
+                // screen's most valuable row on something usually empty.
+                if root.requests.length > 0: VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 30px;
+                        height: 30px;
+                        IconBtn {
+                            glyph: "✉";
+                            size_px: 30px;
+                            active: root.requests_open;
+                            clicked => { root.toggle_requests(); }
+                        }
+                        Badge {
+                            x: parent.width - self.width + 5px;
+                            y: -4px;
+                            count: root.requests.length;
+                        }
+                    }
+                }
+
                 VerticalLayout {
                     alignment: center;
                     BusySlot {
@@ -314,90 +340,6 @@ export component FriendsScreen inherits Rectangle {
         }
         Rectangle { height: Theme.hairline; background: Theme.line; }
 
-        if root.requests.length > 0 && root.filter == "": Rectangle {
-            height: 92px;
-            background: Theme.bg_1;
-            VerticalLayout {
-                padding: Space.md;
-                spacing: Space.sm;
-
-                HorizontalLayout {
-                    spacing: Space.sm;
-                    Text {
-                        text: "Friend requests";
-                        color: Theme.text_dim;
-                        font-size: Type.caption;
-                        font-weight: Type.w_bold;
-                        letter-spacing: 0.6px;
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        Badge { count: root.requests.length; }
-                    }
-                    if root.request_status != "": VerticalLayout {
-                        alignment: center;
-                        Text {
-                            text: root.request_status;
-                            color: Theme.warn;
-                            font-size: Type.caption;
-                        }
-                    }
-                    Rectangle { horizontal-stretch: 1; }
-                }
-
-                HorizontalLayout {
-                    spacing: Space.sm;
-                    alignment: start;
-                    for r in root.requests: Rectangle {
-                        width: 236px;
-                        height: 40px;
-                        background: Theme.bg_2;
-                        border-radius: Theme.radius;
-                        border-width: Theme.hairline;
-                        border-color: Theme.line;
-
-                        Avatar {
-                            x: Space.sm;
-                            y: (parent.height - self.height) / 2;
-                            source: r.thumb;
-                            size_px: 26px;
-                        }
-
-                        Text {
-                            x: Space.sm + 26px + Space.sm;
-                            width: parent.width - (Space.sm + 26px + Space.sm) - 60px;
-                            height: 100%;
-                            text: r.name;
-                            color: Theme.text;
-                            font-size: Type.small;
-                            overflow: elide;
-                            wrap: no-wrap;
-                            vertical-alignment: center;
-                        }
-
-                        Rectangle {
-                            x: parent.width - 56px;
-                            y: (parent.height - self.height) / 2;
-                            width: 56px;
-                            height: 26px;
-
-                            IconBtn {
-                                x: 0;
-                                glyph: "✓";
-                                size_px: 26px;
-                                clicked => { root.accept(r.id); }
-                            }
-                            IconBtn {
-                                x: 28px;
-                                glyph: "×";
-                                size_px: 26px;
-                                clicked => { root.decline(r.id); }
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
         if !root.loading && root.rows.length == 0: EmptyState {
             vertical-stretch: 1;
@@ -418,4 +360,153 @@ export component FriendsScreen inherits Rectangle {
             }
         }
     }
+        // The requests panel. A later sibling than the content, so it draws
+        // over it; the scrim underneath both dims the list and gives an
+        // anywhere-click way out.
+        if root.requests_open: Rectangle {
+            background: #00000099;
+            opacity: 0;
+            animate opacity { duration: Motion.fast; easing: Motion.ease; }
+            init => { self.opacity = 1.0; }
+
+            TouchArea { clicked => { root.toggle_requests(); } }
+
+            Rectangle {
+                x: parent.width - self.width - Space.lg;
+                y: Space.lg;
+                width: min(420px, parent.width - Space.lg * 2);
+                // Sized from the row count, not from the ListView: a ListView is
+                // a scrolling viewport and reports no useful preferred height,
+                // so asking it collapsed the panel to a single row.
+                height: min(38px + root.requests.length * 66px + Space.md * 2,
+                            parent.height - Space.lg * 2);
+                background: Theme.bg_1;
+                border-radius: Theme.radius;
+                border-width: Theme.hairline;
+                border-color: Theme.line_strong;
+
+                // Fades in. Cheap, and it stops the panel from snapping into
+                // existence.
+                opacity: 0;
+                animate opacity { duration: Motion.normal; easing: Motion.ease; }
+                init => { self.opacity = 1.0; }
+
+                // Swallow clicks so they do not reach the dismiss scrim.
+                TouchArea {}
+
+                VerticalLayout {
+                    padding: Space.md;
+                    spacing: Space.sm;
+
+                    head := HorizontalLayout {
+                        spacing: Space.sm;
+                        Text {
+                            text: "Friend requests";
+                            color: Theme.text;
+                            font-size: Type.small;
+                            font-weight: Type.w_bold;
+                            vertical-alignment: center;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Badge { count: root.requests.length; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        IconBtn {
+                            glyph: "×";
+                            size_px: 26px;
+                            clicked => { root.toggle_requests(); }
+                        }
+                    }
+
+                    if root.request_status != "": Text {
+                        text: root.request_status;
+                        color: Theme.warn;
+                        font-size: Type.caption;
+                        wrap: word-wrap;
+                    }
+
+                    list := ListView {
+                        vertical-stretch: 1;
+                        for r in root.requests: Rectangle {
+                            height: 66px;
+                            background: rta.has-hover ? Theme.bg_2 : transparent;
+                            border-radius: Theme.radius;
+                            animate background { duration: Motion.instant; easing: Motion.ease; }
+
+                            rta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.open_request(r.id); }
+                            }
+
+                            HorizontalLayout {
+                                padding: Space.sm;
+                                spacing: Space.sm;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 38px;
+                                        height: 38px;
+                                        Avatar { source: r.thumb; size_px: 38px; }
+                                        PresenceDot {
+                                            x: parent.width - self.width;
+                                            y: parent.height - self.height;
+                                            presence: r.presence;
+                                        }
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 1;
+                                    spacing: 1px;
+
+                                    HorizontalLayout {
+                                        spacing: Space.xs;
+                                        Text {
+                                            text: r.name;
+                                            color: Theme.text;
+                                            font-size: Type.small;
+                                            font-weight: Type.w_medium;
+                                            overflow: elide;
+                                            wrap: no-wrap;
+                                        }
+                                        Text {
+                                            text: "@" + r.username;
+                                            color: Theme.text_mute;
+                                            font-size: Type.caption;
+                                            overflow: elide;
+                                            wrap: no-wrap;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: r.description != "" ? r.description
+                                              : (r.presence_label != "" ? r.presence_label
+                                                                        : "No description.");
+                                        color: Theme.text_mute;
+                                        font-size: Type.caption;
+                                        overflow: elide;
+                                        wrap: no-wrap;
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    Text {
+                                        text: "›";
+                                        color: Theme.text_mute;
+                                        font-size: Type.body;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
 }

@@ -337,6 +337,28 @@ fn presence_rank(presence: i32) -> u8 {
     }
 }
 
+/// A short "what are they up to" line straight from a presence record.
+///
+/// Same wording as the friends list, but for someone who is not a friend yet
+/// and so has no `FriendInput` to go through.
+pub fn presence_label(p: Option<&rojoin_roblox::friends::Presence>) -> String {
+    use rojoin_roblox::friends::PresenceKind;
+
+    let Some(p) = p else { return String::new() };
+    match p.kind {
+        PresenceKind::InGame => {
+            if p.location.is_empty() {
+                "In game".into()
+            } else {
+                format!("Playing {}", p.location)
+            }
+        }
+        PresenceKind::Online => "Online".into(),
+        PresenceKind::InStudio => "In Studio".into(),
+        _ => String::new(),
+    }
+}
+
 fn subtitle_for(f: &FriendInput) -> String {
     match f.presence {
         2 => {

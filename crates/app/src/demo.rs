@@ -137,6 +137,11 @@ pub fn seed(ui: &MainWindow) {
 
     seed_profile(ui);
 
+    // ROJOIN_REQUESTS=1 opens the requests panel so it can be rendered.
+    if std::env::var("ROJOIN_REQUESTS").is_ok_and(|v| v == "1") {
+        ui.set_requests_open(true);
+    }
+
     if let Some(n) = env_int("ROJOIN_SECTION") {
         ui.set_section(n);
     }
@@ -206,16 +211,23 @@ fn seed_friends(ui: &MainWindow) {
         .collect();
     ui.set_friend_rows(ad::model(rows));
 
+    let requests: &[(&str, &str, &str, &str, i32, &str)] = &[
+        ("101", "NewPerson", "newperson", "Builder. Mostly obbies.", 2, "Playing Doors"),
+        ("102", "SomeoneElse", "someoneelse", "", 1, "Online"),
+        ("103", "Quiet", "quietone", "Just here for the trains.", 0, ""),
+    ];
     ui.set_requests_list(ad::model(
-        [("101", "NewPerson"), ("102", "SomeoneElse")]
+        requests
             .iter()
             .enumerate()
-            .map(|(i, (id, name))| DetailItem {
+            .map(|(i, (id, name, username, about, presence, label))| crate::RequestRow {
                 id: (*id).into(),
                 name: (*name).into(),
-                subtitle: "".into(),
+                username: (*username).into(),
+                description: (*about).into(),
+                presence: *presence,
+                presence_label: (*label).into(),
                 thumb: swatch(i + 90, 72, 72),
-                kind: 8,
             })
             .collect(),
     ));

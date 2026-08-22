@@ -710,20 +710,33 @@ fn load_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
                 Err(e) => return bridge::report(&ui, e),
             };
 
-            let requests: Vec<DetailItem> = load
+            let requests: Vec<RequestRow> = load
                 .requests
                 .iter()
-                .map(|u| DetailItem {
-                    id: u.id.to_string().into(),
-                    name: u.display_name.clone().into(),
-                    subtitle: u.name.clone().into(),
-                    thumb: slint::Image::default(),
-                    kind: 8,
+                .map(|u| {
+                    let p = load.request_presence.iter().find(|p| p.user_id == u.id);
+                    let kind = p.map(|p| p.kind).unwrap_or(friends::PresenceKind::Offline);
+                    RequestRow {
+                        id: u.id.to_string().into(),
+                        name: u.display_name.clone().into(),
+                        username: u.name.clone().into(),
+                        description: u
+                            .description
+                            .clone()
+                            .unwrap_or_default()
+                            .replace('\n', " ")
+                            .trim()
+                            .to_string()
+                            .into(),
+                        presence: kind as i32,
+                        presence_label: ad::presence_label(p).into(),
+                        thumb: slint::Image::default(),
+                    }
                 })
                 .collect();
 
             let handled = app2.handled_requests.lock().unwrap().clone();
-            let requests: Vec<DetailItem> = requests
+            let requests: Vec<RequestRow> = requests
                 .into_iter()
                 .filter(|r| !handled.contains(&r.id.to_string()))
                 .collect();
@@ -735,7 +748,7 @@ fn load_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
                 if let Some(url) = load.avatars.get(&u.id).cloned() {
                     let id = u.id.to_string();
                     imgs2.load(&url, move |ui, img| {
-                        set_item_thumb(&ui.get_requests_list(), i, &id, img)
+                        set_request_thumb(&ui.get_requests_list(), i, &id, img)
                     });
                 }
             }
@@ -879,15 +892,23 @@ fn drop_request_row(ui: &MainWindow, user_id: i64) {
     use slint::Model;
     let model = ui.get_requests_list();
     let key = user_id.to_string();
-    let kept: Vec<DetailItem> = model.iter().filter(|r| r.id != key).collect();
+    let kept: Vec<RequestRow> = model.iter().filter(|r| r.id != key).collect();
     let remaining = kept.len() as i32;
     ui.set_requests_list(ad::model(kept));
     ui.set_friend_requests(remaining);
+    // Nothing left to show, so the panel should not stay open over an empty
+    // list — and its button is gone by now too.
+    if remaining == 0 {
+        ui.set_requests_open(false);
+    }
 }
 
 struct FriendsLoad {
     friends: Vec<ad::FriendInput>,
     requests: Vec<rojoin_roblox::models::User>,
+    /// Presence for the requesters. They are not friends yet, so the friends
+    /// presence call does not cover them.
+    request_presence: Vec<friends::Presence>,
     avatars: std::collections::HashMap<i64, String>,
     /// Users resolved this round, to be folded into the persistent cache.
     resolved: Vec<(i64, rojoin_store::CachedUser)>,
@@ -925,6 +946,16 @@ async fn fetch_friends(
 
     let presence = or_default("friend presence", friends::presence(client, &list.ids).await);
     let requests = or_default("friend requests", friends::requests(client, 25).await);
+
+    let request_ids: Vec<i64> = requests.iter().map(|u| u.id).collect();
+    let request_presence = if request_ids.is_empty() {
+        Vec::new()
+    } else {
+        or_default(
+            "requester presence",
+            friends::presence(client, &request_ids).await,
+        )
+    };
 
     let mut avatar_ids: Vec<i64> = fetched.iter().map(|u| u.id).collect();
     avatar_ids.extend(requests.iter().map(|u| u.id));
@@ -1008,7 +1039,7 @@ async fn fetch_friends(
         })
         .collect();
 
-    Ok(FriendsLoad { friends, requests, avatars, resolved })
+    Ok(FriendsLoad { friends, requests, request_presence, avatars, resolved })
 }
 
 fn wire_signin(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
@@ -3236,6 +3267,24 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
         let bridge2 = bridge.clone();
         let imgs2 = imgs.clone();
         let weak = ui.as_weak();
+        ui.on_open_request(move |id| {
+            let ui = weak.unwrap();
+            let Ok(user_id) = id.parse::<i64>() else {
+                tracing::error!(%id, "request row has an unparseable user id");
+                return;
+            };
+            // Accepting and declining live on the profile, where you can see who
+            // you are answering. Close the panel on the way so returning with
+            // Back lands on the friends list rather than back under the panel.
+            ui.set_requests_open(false);
+            open_profile(&ui, &app, &bridge2, &imgs2, user_id);
+        });
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
         ui.on_open_my_profile(move || {
             let ui = weak.unwrap();
             let me = *app.me.lock().unwrap();
@@ -4914,6 +4963,23 @@ fn set_item_thumb(
     // been replaced since — a second search, a different profile — the row now
     // at that index belongs to something else, and writing to it would show
     // the wrong picture rather than none.
+    if row.id != expect_id {
+        return;
+    }
+    row.thumb = img;
+    model.set_row_data(index, row);
+}
+
+fn set_request_thumb(
+    model: &slint::ModelRc<RequestRow>,
+    index: usize,
+    expect_id: &str,
+    img: slint::Image,
+) {
+    use slint::Model;
+    let Some(mut row) = model.row_data(index) else { return };
+    // Same guard as everywhere else: the index was captured before the download
+    // started, and the model may have been replaced since.
     if row.id != expect_id {
         return;
     }
