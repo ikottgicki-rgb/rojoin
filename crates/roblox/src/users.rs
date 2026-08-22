@@ -108,3 +108,15 @@ mod tests {
         assert!(!u.has_verified_badge);
     }
 }
+
+/// Replace the signed-in account's "About me".
+///
+/// `POST users/v1/description`, not `PATCH` — the PATCH form 404s. Verified
+/// live: the POST answers "XSRF token invalid" unauthenticated, so the route is
+/// there and the usual CSRF dance covers it.
+pub async fn set_description(client: &Client, text: &str) -> Result<()> {
+    let url = format!("{USERS}/description");
+    let body = serde_json::json!({ "description": text });
+    let _: serde_json::Value = client.post_json(&url, &body).await?;
+    Ok(())
+}

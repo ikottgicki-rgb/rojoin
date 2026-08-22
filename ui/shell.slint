@@ -146,6 +146,7 @@ export component TopBar inherits Rectangle {
     callback back();
     callback submit(string);
     callback open_account();
+    callback open_my_profile();
     callback live_search(string);
 
     public function focus_search() {
@@ -243,6 +244,21 @@ export component TopBar inherits Rectangle {
         VerticalLayout {
             alignment: center;
             BusySlot { busy: root.busy; slot: 20px; Rectangle {} }
+        }
+
+        // Straight to your own profile. A sibling of the account button, not a
+        // child of it — nesting it inside that wrapper stacked the two
+        // vertically instead of putting them side by side.
+        VerticalLayout {
+            alignment: center;
+            IconBtn {
+                // Filled, where the Avatar tab's is hollow: the bundled font
+                // has both, and glyphs it lacks render as an empty box that
+                // reads as a missing character rather than an icon.
+                glyph: "☻";
+                size_px: 30px;
+                clicked => { root.open_my_profile(); }
+            }
         }
 
         VerticalLayout {

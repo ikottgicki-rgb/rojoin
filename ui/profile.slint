@@ -50,6 +50,11 @@ export component ProfileScreen inherits Rectangle {
     in property <[DetailItem]> badges;
     in property <[GameTile]> favorites;
     in-out property <int> tab: 0;   // 0 Overview · 1 Groups · 2 Badges
+    /// Your own profile, so the About me becomes editable.
+    in property <bool> is_me: false;
+    in property <bool> saving_bio: false;
+    in property <string> bio_status;
+    callback save_description(string);
 
     callback join();
     callback accept_request();
@@ -262,7 +267,7 @@ export component ProfileScreen inherits Rectangle {
                     spacing: Space.lg;
                     alignment: start;
 
-                    if root.profile.description != "": Rectangle {
+                    if !root.is_me && root.profile.description != "": Rectangle {
                         background: Theme.bg_1;
                         border-radius: Theme.radius;
                         border-width: Theme.hairline;
@@ -279,7 +284,69 @@ export component ProfileScreen inherits Rectangle {
                         }
                     }
 
-                    if root.profile.description == "" && root.favorites.length == 0: EmptyState {
+                    // Your own About me, editable in place. Mounted only for
+                    // your own profile so nobody gets an edit box over someone
+                    // else's words.
+                    if root.is_me: VerticalLayout {
+                        spacing: Space.sm;
+
+                        HorizontalLayout {
+                            Text {
+                                text: "About me";
+                                color: Theme.text;
+                                font-size: Type.small;
+                                font-weight: Type.w_bold;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            if root.bio_status != "": Text {
+                                text: root.bio_status;
+                                color: Theme.text_mute;
+                                font-size: Type.caption;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Rectangle {
+                            height: 132px;
+                            background: Theme.bg_1;
+                            border-radius: Theme.radius;
+                            border-width: Theme.hairline;
+                            border-color: bioedit.has-focus ? Theme.accent : Theme.line;
+                            animate border-color { duration: Motion.fast; easing: Motion.ease; }
+
+                            bioedit := TextInput {
+                                x: Space.lg;
+                                y: Space.md;
+                                width: parent.width - Space.lg * 2;
+                                height: parent.height - Space.md * 2;
+                                text: root.profile.description;
+                                color: Theme.text_dim;
+                                font-size: Type.body;
+                                wrap: word-wrap;
+                                single-line: false;
+                            }
+
+                            if bioedit.text == "": Text {
+                                x: Space.lg;
+                                y: Space.md;
+                                text: "Say something about yourself.";
+                                color: Theme.text_mute;
+                                font-size: Type.body;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: Space.sm;
+                            Rectangle { horizontal-stretch: 1; }
+                            Btn {
+                                label: root.saving_bio ? "Saving…" : "Save";
+                                primary: true;
+                                clicked => { root.save_description(bioedit.text); }
+                            }
+                        }
+                    }
+
+                    if !root.is_me && root.profile.description == "" && root.favorites.length == 0: EmptyState {
                         height: 160px;
                         title: "Nothing to show";
                         hint: "This profile has no description.";

@@ -135,6 +135,8 @@ pub fn seed(ui: &MainWindow) {
 
     seed_friends(ui);
 
+    seed_profile(ui);
+
     if let Some(n) = env_int("ROJOIN_SECTION") {
         ui.set_section(n);
     }
@@ -237,4 +239,32 @@ fn swatch(seed: usize, w: u32, h: u32) -> Image {
     }
 
     Image::from_rgba8(buf)
+}
+
+/// A profile to look at. `ROJOIN_ME=1` makes it your own, which is what mounts
+/// the editable About me.
+fn seed_profile(ui: &MainWindow) {
+    let me = std::env::var("ROJOIN_ME").is_ok_and(|v| v == "1");
+
+    ui.set_profile_is_me(me);
+    ui.set_profile(crate::ProfileData {
+        id: "9314226124".into(),
+        name: if me { "adam".into() } else { "UsedHenry06".into() },
+        username: if me { "adam".into() } else { "usedhenry06".into() },
+        description: "Building things in Studio, mostly. Ask me about trains."
+            .into(),
+        joined: "3 years".into(),
+        also_known_as: "".into(),
+        verified: false,
+        friends: "48".into(),
+        followers: "126".into(),
+        following: "83".into(),
+        presence: 2,
+        presence_label: "In Jailbreak".into(),
+        place_id: "606849621".into(),
+        is_friend: !me,
+        has_incoming_request: false,
+        is_self: me,
+        avatar: swatch(3, 96, 96),
+    });
 }

@@ -116,6 +116,8 @@ pub(crate) struct App {
     /// used to start a parallel write *and* a parallel retry chain for each
     /// one, which is how three follow clicks earned a 429.
     avatar_busy: std::sync::atomic::AtomicBool,
+    /// Guards the About me save against a double click.
+    bio_busy: std::sync::atomic::AtomicBool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -186,6 +188,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         flag_catalog: Mutex::new(Vec::new()),
         worn_write: Mutex::new(None),
         avatar_busy: std::sync::atomic::AtomicBool::new(false),
+        bio_busy: std::sync::atomic::AtomicBool::new(false),
     });
     *app.bridge.lock().unwrap() = Some(bridge.clone());
     *app.imgs.lock().unwrap() = Some(imgs.clone());
@@ -3230,6 +3233,60 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
     }
     {
         let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_open_my_profile(move || {
+            let ui = weak.unwrap();
+            let me = *app.me.lock().unwrap();
+            if me == 0 {
+                tracing::warn!("no signed-in user id yet; ignoring");
+                return;
+            }
+            open_profile(&ui, &app, &bridge2, &imgs2, me);
+        });
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let weak = ui.as_weak();
+        ui.on_save_description(move |text| {
+            let ui = weak.unwrap();
+            if app.bio_busy.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            ui.set_saving_bio(true);
+            ui.set_bio_status("".into());
+
+            let client = app.client.clone();
+            let app2 = app.clone();
+            let body = text.to_string();
+
+            bridge2.call_res(
+                move || async move { users::set_description(&client, &body).await },
+                move |ui, result| {
+                    app2.bio_busy.store(false, Ordering::SeqCst);
+                    ui.set_saving_bio(false);
+                    match result {
+                        Ok(()) => {
+                            // Reflect it locally too, so leaving and coming back
+                            // shows the new text without another round trip.
+                            let mut p = ui.get_profile();
+                            p.description = text.clone();
+                            ui.set_profile(p);
+                            ui.set_bio_status("Saved".into());
+                        }
+                        Err(e) => {
+                            ui.set_bio_status(format!("Could not save: {e}").into());
+                            bridge::report(&ui, e);
+                        }
+                    }
+                },
+            );
+        });
+    }
+    {
+        let app = app.clone();
         let weak = ui.as_weak();
         ui.on_open_account(move || {
             let ui = weak.unwrap();
@@ -3671,6 +3728,10 @@ fn open_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
     push_view(ui, app, 2);
     ui.set_profile_loading(true);
     ui.set_profile_tab(0);
+    // Your own profile gets the editable About me; everyone else's stays read
+    // only. Set before the fetch so the editor does not flash into view.
+    ui.set_profile_is_me(user_id != 0 && user_id == *app.me.lock().unwrap());
+    ui.set_bio_status(Default::default());
     ui.set_profile_groups(ad::model(Vec::new()));
     ui.set_profile_favorites(ad::model(Vec::new()));
 

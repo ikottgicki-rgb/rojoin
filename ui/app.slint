@@ -53,6 +53,11 @@ export component MainWindow inherits Window {
     callback nav_back();
     callback open_settings();
     callback open_account();
+    callback open_my_profile();
+    in property <bool> profile_is_me: false;
+    in property <bool> saving_bio: false;
+    in property <string> bio_status;
+    callback save_description(string);
     callback top_submit(string);
     callback top_live_search(string);
     callback dismiss_expired();
@@ -388,6 +393,7 @@ export component MainWindow inherits Window {
                         submit(q) => { root.top_submit(q); }
                         live_search(q) => { root.top_live_search(q); }
                         open_account => { root.open_account(); }
+                        open_my_profile => { root.open_my_profile(); }
                     }
                     Rectangle { height: Theme.hairline; background: Theme.line; }
 
@@ -438,6 +444,10 @@ export component MainWindow inherits Window {
                             badges: root.profile_badges;
                             favorites: root.profile_favorites;
                             tab <=> root.profile_tab;
+                            is_me: root.profile_is_me;
+                            saving_bio: root.saving_bio;
+                            bio_status: root.bio_status;
+                            save_description(t) => { root.save_description(t); }
                             join => { root.profile_join(); }
                             accept_request => { root.profile_accept_request(); }
                             decline_request => { root.profile_decline_request(); }
