@@ -183,10 +183,18 @@ impl Default for RawPresence {
 
 /// Presence for a batch of users. Roblox caps this well below the friend-list
 /// size, so chunk it.
+/// Ids per presence request.
+///
+/// Verified against the live endpoint: 50 is accepted, 60 is rejected with
+/// "Too many User Ids being sent in the request." This was 100, which meant the
+/// very first batch 400d for anyone with more than fifty friends and the loop
+/// gave up — so a big friends list showed nobody online at all.
+pub const PRESENCE_BATCH: usize = 50;
+
 pub async fn presence(client: &Client, user_ids: &[i64]) -> Result<Vec<Presence>> {
     let mut out = Vec::with_capacity(user_ids.len());
 
-    for (i, chunk) in user_ids.chunks(100).enumerate() {
+    for (i, chunk) in user_ids.chunks(PRESENCE_BATCH).enumerate() {
         if i > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         }
@@ -346,5 +354,16 @@ mod tests {
         let resp: PresenceResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.user_presences.len(), 1);
         assert_eq!(resp.user_presences[0].user_id, 156);
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    #[test]
+    fn presence_batches_stay_within_what_roblox_accepts() {
+        assert!(
+            super::PRESENCE_BATCH <= 50,
+            "presence rejects more than 50 ids per request"
+        );
     }
 }

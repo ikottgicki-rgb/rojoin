@@ -15,6 +15,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub mod playtime;
 pub mod config;
 
 pub use config::{Account, AccountData, Config, GameHistory, Settings};

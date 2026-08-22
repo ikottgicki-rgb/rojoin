@@ -16,6 +16,9 @@ use crate::{config_dir, read_json, write_atomic, Result};
 
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// `playtime_retention_days` value meaning "never prune".
+pub const UNLIMITED_RETENTION: u32 = u32::MAX;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -73,6 +76,19 @@ pub struct AccountData {
     /// Sober's config derived state rather than the source of truth.
     #[serde(default)]
     pub fflags: HashMap<String, String>,
+    /// Observed play sessions for this account, oldest first.
+    ///
+    /// Kept as individual sessions rather than a running total so the graph can
+    /// show *when* as well as how much. Pruned to the retention window.
+    #[serde(default)]
+    pub sessions: Vec<crate::playtime::PlaySession>,
+    /// Sampled sessions for pinned friends, keyed by user id.
+    ///
+    /// Only pinned friends are tracked: it is a short, explicitly chosen list,
+    /// which keeps the presence poll small — polling everyone's presence every
+    /// minute is what got the account throttled in v2.
+    #[serde(default)]
+    pub friend_sessions: HashMap<String, Vec<crate::playtime::PlaySession>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -145,6 +161,19 @@ pub struct Settings {
     /// Named flag sets, shared across accounts so a tuned set can be reused.
     #[serde(default)]
     pub fflag_presets: HashMap<String, HashMap<String, String>>,
+
+    /// Days of play history to keep. `0` means keep everything.
+    ///
+    /// Read through [`Config::retention_days`], which enforces the floor — a
+    /// window shorter than a month makes the graph useless.
+    #[serde(default)]
+    pub playtime_retention_days: u32,
+    /// Show the playtime graph on Home. On by default.
+    #[serde(default = "yes")]
+    pub show_playtime_graph: bool,
+    /// Sample pinned friends' playtime alongside your own. On by default.
+    #[serde(default = "yes")]
+    pub track_friend_playtime: bool,
 }
 
 /// serde needs a function, not a literal, for a defaulted `true`.
@@ -176,6 +205,11 @@ impl Default for Settings {
             verbose_logging: false,
             auto_update: true,
             fflag_presets: HashMap::new(),
+            // Zero means "unset" here as elsewhere; the accessor turns it into
+            // the real default so an older config needs no migration.
+            playtime_retention_days: 0,
+            show_playtime_graph: true,
+            track_friend_playtime: true,
         }
     }
 }
@@ -332,6 +366,113 @@ impl Config {
 
     /// Server page size, snapped to a value Roblox accepts. Zero means unset,
     /// which is the common case for a config written before this existed.
+    /// The window to pass to [`crate::playtime::prune`].
+    ///
+    /// Deliberately *not* called `retention_days`: the number it returns is a
+    /// prune argument, where `0` is prune's own sentinel for "keep everything".
+    /// The stored setting uses `0` for "unset" instead, so the two zeroes mean
+    /// opposite things and translating between them belongs in exactly one
+    /// place — here.
+    ///
+    /// Anything from 1 to 29 is raised to 30: the setting offers unlimited or a
+    /// real window, and a few days of history leaves the graph nothing to draw.
+    pub fn prune_window_days(&self) -> u32 {
+        match self.settings.playtime_retention_days {
+            UNLIMITED_RETENTION => 0,
+            0 => 90,
+            n if n >= 30 => n,
+            _ => 30,
+        }
+    }
+
+    /// The retention window as the user set it, `None` meaning unlimited.
+    /// For display; use [`Config::prune_window_days`] to actually prune.
+    pub fn retention_days(&self) -> Option<u32> {
+        match self.settings.playtime_retention_days {
+            UNLIMITED_RETENTION => None,
+            0 => Some(90),
+            n if n >= 30 => Some(n),
+            _ => Some(30),
+        }
+    }
+
+    /// `true` when the user asked to keep everything.
+    pub fn retention_unlimited(&self) -> bool {
+        self.settings.playtime_retention_days == UNLIMITED_RETENTION
+    }
+
+    /// Note that the active account was seen in a game.
+    ///
+    /// Repeated calls while still in the same game extend the open session
+    /// rather than starting another, so a poll every minute produces one
+    /// session per sitting.
+    pub fn observe_session(
+        &mut self,
+        universe_id: i64,
+        root_place_id: i64,
+        name: &str,
+        at: i64,
+        gap_secs: i64,
+    ) {
+        let keep = self.prune_window_days();
+        let data = self.data_mut();
+        crate::playtime::observe(
+            &mut data.sessions,
+            universe_id,
+            root_place_id,
+            name,
+            at,
+            gap_secs,
+        );
+        crate::playtime::prune(&mut data.sessions, keep, at);
+    }
+
+    /// The same, for a pinned friend.
+    pub fn observe_friend_session(
+        &mut self,
+        user_id: &str,
+        universe_id: i64,
+        root_place_id: i64,
+        name: &str,
+        at: i64,
+        gap_secs: i64,
+    ) {
+        let keep = self.prune_window_days();
+        let data = self.data_mut();
+        let list = data.friend_sessions.entry(user_id.to_string()).or_default();
+        crate::playtime::observe(list, universe_id, root_place_id, name, at, gap_secs);
+        crate::playtime::prune(list, keep, at);
+    }
+
+    /// Sessions for the active account.
+    pub fn sessions(&self) -> &[crate::playtime::PlaySession] {
+        self.data().map(|d| d.sessions.as_slice()).unwrap_or(&[])
+    }
+
+    /// Sessions recorded for one friend.
+    pub fn friend_sessions(&self, user_id: &str) -> &[crate::playtime::PlaySession] {
+        self.data()
+            .and_then(|d| d.friend_sessions.get(user_id))
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Apply the retention window to everything, for when it is shortened.
+    ///
+    /// Recording prunes the list it touches, which is enough day to day but
+    /// leaves a friend who has not been seen lately holding stale sessions
+    /// after the window changes.
+    pub fn prune_all_playtime(&mut self, now: i64) {
+        let keep = self.prune_window_days();
+        for data in self.account_data.values_mut() {
+            crate::playtime::prune(&mut data.sessions, keep, now);
+            for list in data.friend_sessions.values_mut() {
+                crate::playtime::prune(list, keep, now);
+            }
+            data.friend_sessions.retain(|_, v| !v.is_empty());
+        }
+    }
+
     pub fn server_page_size(&self) -> u32 {
         match self.settings.server_page_size {
             10 | 25 | 50 | 100 => self.settings.server_page_size,
@@ -668,4 +809,83 @@ mod fflag_tests {
         c.delete_preset("mid");
         assert_eq!(c.preset_names(), vec!["alpha", "zed"]);
     }
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+
+    fn cfg(days: u32) -> Config {
+        let mut c = Config::default();
+        c.settings.playtime_retention_days = days;
+        c
+    }
+
+    #[test]
+    fn unset_means_ninety_days() {
+        assert_eq!(cfg(0).prune_window_days(), 90);
+        assert_eq!(cfg(0).retention_days(), Some(90));
+    }
+
+    #[test]
+    fn unlimited_becomes_prunes_keep_everything_sentinel() {
+        let c = cfg(UNLIMITED_RETENTION);
+        assert_eq!(c.prune_window_days(), 0, "0 tells prune to keep everything");
+        assert_eq!(c.retention_days(), None);
+        assert!(c.retention_unlimited());
+    }
+
+    #[test]
+    fn a_window_shorter_than_a_month_is_raised() {
+        assert_eq!(cfg(7).prune_window_days(), 30);
+        assert_eq!(cfg(29).prune_window_days(), 30);
+        assert_eq!(cfg(30).prune_window_days(), 30);
+    }
+
+    #[test]
+    fn a_longer_window_is_honoured() {
+        assert_eq!(cfg(365).prune_window_days(), 365);
+        assert_eq!(cfg(365).retention_days(), Some(365));
+    }
+
+    #[test]
+    fn unlimited_really_does_keep_an_ancient_session() {
+        let mut c = cfg(UNLIMITED_RETENTION);
+        c.active_account = Some("1".into());
+        let now = 1_700_000_000;
+        c.observe_session(7, 70, "Game", now - 3650 * 86_400, 180);
+        c.prune_all_playtime(now);
+        assert_eq!(c.sessions().len(), 1, "ten years old and still kept");
+    }
+
+    #[test]
+    fn a_sweep_prunes_friend_sessions_outside_the_window() {
+        let mut c = cfg(30);
+        c.active_account = Some("1".into());
+        let now = 1_700_000_000;
+        // Recording prunes relative to when the session happened, so an old
+        // session survives being recorded — it was current at the time.
+        c.observe_friend_session("42", 7, 70, "Game", now - 200 * 86_400, 180);
+        assert_eq!(c.friend_sessions("42").len(), 1);
+
+        // A sweep against the real clock is what clears it out.
+        c.prune_all_playtime(now);
+        assert_eq!(c.friend_sessions("42").len(), 0);
+
+        c.observe_friend_session("42", 7, 70, "Game", now - 5 * 86_400, 180);
+        c.prune_all_playtime(now);
+        assert_eq!(c.friend_sessions("42").len(), 1, "inside the window, kept");
+    }
+
+    #[test]
+    fn a_poll_every_minute_makes_one_session_not_sixty() {
+        let mut c = cfg(90);
+        c.active_account = Some("1".into());
+        let start = 1_700_000_000;
+        for i in 0..60 {
+            c.observe_session(7, 70, "Game", start + i * 60, 180);
+        }
+        assert_eq!(c.sessions().len(), 1);
+        assert_eq!(c.sessions()[0].secs(), 59 * 60);
+    }
+}
 }

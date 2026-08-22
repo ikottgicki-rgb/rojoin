@@ -4401,6 +4401,7 @@ dependencies = [
 name = "rojoin-store"
 version = "0.1.7"
 dependencies = [
+ "chrono",
  "directories",
  "rojoin-macro",
  "serde",
