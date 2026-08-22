@@ -269,6 +269,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// `unwrap_or_default()`, but it says what broke first.
+///
+/// Swallowing these is how a dead endpoint hid in plain sight: game passes
+/// 404'd for every game on the platform and the detail page simply rendered an
+/// empty section for as long as nobody thought to check. Defaulting is still
+/// the right behaviour — one missing strip should not take down a whole page —
+/// but it has to leave a trace in the log.
+fn or_default<T: Default>(what: &str, result: rojoin_roblox::Result<T>) -> T {
+    match result {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, what, "could not be loaded; showing nothing");
+            T::default()
+        }
+    }
+}
+
 /// Try the stored cookie.
 ///
 /// Only a 401 means the login is actually gone. Anything else — no network yet,
@@ -900,18 +917,18 @@ async fn fetch_friends(
             outstanding = unknown.len(),
             "resolving unseen users"
         );
-        users::batch(client, &to_resolve).await.unwrap_or_default()
+        or_default("usernames", users::batch(client, &to_resolve).await)
     };
 
-    let presence = friends::presence(client, &list.ids).await.unwrap_or_default();
-    let requests = friends::requests(client, 25).await.unwrap_or_default();
+    let presence = or_default("friend presence", friends::presence(client, &list.ids).await);
+    let requests = or_default("friend requests", friends::requests(client, 25).await);
 
     let mut avatar_ids: Vec<i64> = fetched.iter().map(|u| u.id).collect();
     avatar_ids.extend(requests.iter().map(|u| u.id));
     let mut avatars = if avatar_ids.is_empty() {
         Default::default()
     } else {
-        thumbnails::headshots(client, &avatar_ids).await.unwrap_or_default()
+        or_default("friend avatars", thumbnails::headshots(client, &avatar_ids).await)
     };
     for (id, entry) in &cached {
         if let Ok(id) = id.parse::<i64>() {
@@ -2213,16 +2230,16 @@ fn load_avatar(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
     bridge.call_res(
         move || async move {
             let av = rojoin_roblox::avatar::mine(&client).await?;
-            let outfits = rojoin_roblox::avatar::outfits(&client, me, 24).await.unwrap_or_default();
+            let outfits = or_default("outfits", rojoin_roblox::avatar::outfits(&client, me, 24).await);
             let body = thumbnails::avatars(&client, &[me])
                 .await
                 .ok()
                 .and_then(|m| m.get(&me).cloned());
 
             let worn_ids = av.worn_ids();
-            let worn_thumbs = thumbnails::assets(&client, &worn_ids).await.unwrap_or_default();
+            let worn_thumbs = or_default("item thumbnails", thumbnails::assets(&client, &worn_ids).await);
             let outfit_ids: Vec<i64> = outfits.iter().map(|o| o.id).collect();
-            let outfit_thumbs = thumbnails::outfits(&client, &outfit_ids).await.unwrap_or_default();
+            let outfit_thumbs = or_default("outfit thumbnails", thumbnails::outfits(&client, &outfit_ids).await);
 
             Ok(AvatarLoad { av, outfits, body, worn_thumbs, outfit_thumbs })
         },
@@ -2341,7 +2358,7 @@ fn load_wardrobe(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
             let items =
                 rojoin_roblox::avatar::inventory_for_category(&client, me, &category, 100).await?;
             let ids: Vec<i64> = items.iter().map(|i| i.asset_id).collect();
-            let thumbs = thumbnails::assets(&client, &ids).await.unwrap_or_default();
+            let thumbs = or_default("item thumbnails", thumbnails::assets(&client, &ids).await);
             Ok((items, thumbs))
         },
         move |ui, result| {
@@ -3792,14 +3809,14 @@ struct ProfileLoad {
 
 async fn fetch_profile(client: &Client, user_id: i64) -> rojoin_roblox::Result<ProfileLoad> {
     let user = users::get(client, user_id).await?;
-    let previous_names = users::previous_usernames(client, user_id).await.unwrap_or_default();
+    let previous_names = or_default("previous usernames", users::previous_usernames(client, user_id).await);
     let counts = friends::counts(client, user_id).await;
     let presence = friends::presence(client, &[user_id])
         .await
         .ok()
         .and_then(|v| v.into_iter().next());
-    let groups = groups::of_user(client, user_id).await.unwrap_or_default();
-    let favorites = games::user_favorites(client, user_id, 12).await.unwrap_or_default();
+    let groups = or_default("the user's groups", groups::of_user(client, user_id).await);
+    let favorites = or_default("favourite games", games::user_favorites(client, user_id, 12).await);
 
     let avatar = thumbnails::avatars(client, &[user_id])
         .await
@@ -3807,10 +3824,10 @@ async fn fetch_profile(client: &Client, user_id: i64) -> rojoin_roblox::Result<P
         .and_then(|m| m.get(&user_id).cloned());
 
     let group_ids: Vec<i64> = groups.iter().map(|m| m.group.id).collect();
-    let group_icons = thumbnails::group_icons(client, &group_ids).await.unwrap_or_default();
+    let group_icons = or_default("group icons", thumbnails::group_icons(client, &group_ids).await);
 
     let universe_ids: Vec<i64> = favorites.iter().map(|d| d.id).collect();
-    let game_art = thumbnails::game_art(client, &universe_ids).await.unwrap_or_default();
+    let game_art = or_default("game art", thumbnails::game_art(client, &universe_ids).await);
 
     Ok(ProfileLoad {
         user,
@@ -3838,9 +3855,9 @@ fn open_group(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
     bridge.call_res(
         move || async move {
             let group = groups::get(&client, group_id).await?;
-            let mine = groups::of_user(&client, me).await.unwrap_or_default();
+            let mine = or_default("the user's groups", groups::of_user(&client, me).await);
             let membership = mine.into_iter().find(|m| m.group.id == group_id);
-            let games_list = games::group_games(&client, group_id, 12).await.unwrap_or_default();
+            let games_list = or_default("the group's games", games::group_games(&client, group_id, 12).await);
 
             let icon = thumbnails::group_icons(&client, &[group_id])
                 .await
@@ -3854,7 +3871,7 @@ fn open_group(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
                 None => None,
             };
             let universe_ids: Vec<i64> = games_list.iter().map(|d| d.id).collect();
-            let art = thumbnails::game_art(&client, &universe_ids).await.unwrap_or_default();
+            let art = or_default("game art", thumbnails::game_art(&client, &universe_ids).await);
 
             Ok(GroupLoad { group, membership, games: games_list, icon, owner_avatar, art })
         },
@@ -3969,7 +3986,7 @@ fn load_favorites(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &
         move || async move {
             let games = games::user_favorites(&client, me, 50).await?;
             let ids: Vec<i64> = games.iter().map(|g| g.id).collect();
-            let art = thumbnails::game_art(&client, &ids).await.unwrap_or_default();
+            let art = or_default("game art", thumbnails::game_art(&client, &ids).await);
             Ok((games, art))
         },
         move |ui, result| {
@@ -4185,7 +4202,7 @@ fn run_search(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
         move || async move {
             let page = search::games(&client, &q2, &session, None).await?;
             let ids: Vec<i64> = page.games.iter().map(|g| g.universe_id).collect();
-            let art = thumbnails::game_art(&client, &ids).await.unwrap_or_default();
+            let art = or_default("game art", thumbnails::game_art(&client, &ids).await);
             Ok((page.games, art))
         },
         move |ui, result| {
@@ -4253,8 +4270,8 @@ fn search_people(
             let user_ids: Vec<i64> = users.iter().map(|u| u.id).collect();
             let group_ids: Vec<i64> = groups.iter().map(|g| g.id).collect();
 
-            let heads = thumbnails::headshots(&client, &user_ids).await.unwrap_or_default();
-            let icons = thumbnails::group_icons(&client, &group_ids).await.unwrap_or_default();
+            let heads = or_default("avatars", thumbnails::headshots(&client, &user_ids).await);
+            let icons = or_default("group icons", thumbnails::group_icons(&client, &group_ids).await);
 
             Ok::<_, rojoin_roblox::Error>((users, groups, heads, icons))
         },
@@ -4441,19 +4458,19 @@ fn open_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
         move || async move {
             let universe_id = games::universe_of(&client, place_id).await?;
             let detail = games::detail(&client, universe_id).await?;
-            let votes = games::votes(&client, &[universe_id]).await.unwrap_or_default();
+            let votes = or_default("ratings", games::votes(&client, &[universe_id]).await);
             let subs = games::sub_places(&client, universe_id, detail.root_place_id)
                 .await
                 .unwrap_or_default();
-            let passes = games::game_passes(&client, universe_id).await.unwrap_or_default();
-            let badges = games::badges(&client, universe_id).await.unwrap_or_default();
-            let icons = thumbnails::game_icons(&client, &[universe_id]).await.unwrap_or_default();
-            let art = thumbnails::game_art(&client, &[universe_id]).await.unwrap_or_default();
+            let passes = or_default("game passes", games::game_passes(&client, universe_id).await);
+            let badges = or_default("badges", games::badges(&client, universe_id).await);
+            let icons = or_default("game icons", thumbnails::game_icons(&client, &[universe_id]).await);
+            let art = or_default("game art", thumbnails::game_art(&client, &[universe_id]).await);
 
             let badge_ids: Vec<i64> = badges.iter().map(|b| b.id).collect();
-            let badge_icons = thumbnails::badges(&client, &badge_ids).await.unwrap_or_default();
+            let badge_icons = or_default("badge icons", thumbnails::badges(&client, &badge_ids).await);
             let pass_ids: Vec<i64> = passes.iter().map(|p| p.id).collect();
-            let pass_icons = thumbnails::game_passes(&client, &pass_ids).await.unwrap_or_default();
+            let pass_icons = or_default("game-pass icons", thumbnails::game_passes(&client, &pass_ids).await);
 
             Ok(GameLoad {
                 universe_id,
@@ -4774,8 +4791,8 @@ async fn fetch_home(client: &Client, place_ids: &[i64]) -> rojoin_roblox::Result
 
     Ok(HomeLoad {
         details: games::details(client, &universes).await?,
-        votes: games::votes(client, &universes).await.unwrap_or_default(),
-        art: thumbnails::game_art(client, &universes).await.unwrap_or_default(),
+        votes: or_default("ratings", games::votes(client, &universes).await),
+        art: or_default("game art", thumbnails::game_art(client, &universes).await),
     })
 }
 

@@ -72,9 +72,15 @@ pub async fn join(client: &Client, group_id: i64) -> Result<()> {
     client.post_action(&format!("{GROUPS}/groups/{group_id}/users")).await
 }
 
+/// Leave a group.
+///
+/// `POST .../users/{id}/leave` is **dead** — it 404s, and because Roblox routes
+/// before it validates CSRF, an unauthenticated probe gets a 404 where every
+/// live write answers "XSRF token invalid". Leaving is a `DELETE` on the
+/// membership itself, which is the same call the site uses to remove any member.
 pub async fn leave(client: &Client, group_id: i64, user_id: i64) -> Result<()> {
     client
-        .post_action(&format!("{GROUPS}/groups/{group_id}/users/{user_id}/leave"))
+        .delete_action(&format!("{GROUPS}/groups/{group_id}/users/{user_id}"))
         .await
 }
 

@@ -168,6 +168,16 @@ impl Client {
             .map(|_| ())
     }
 
+    /// A removal with no meaningful response.
+    ///
+    /// Roblox models a few of these as `DELETE` on the resource rather than a
+    /// `POST` to a verb, and it does not offer a POST alias — leaving a group
+    /// is the one that matters here. Goes through the same CSRF dance and
+    /// backoff as everything else.
+    pub async fn delete_action(&self, url: &str) -> Result<()> {
+        self.send(Method::Delete, url, None).await.map(|_| ())
+    }
+
     /// A POST whose *response headers* matter, with extra request headers.
     ///
     /// Exists for the authentication-ticket flow, where the ticket comes back
@@ -334,6 +344,7 @@ impl Client {
         let mut req = match method {
             Method::Get => self.http.get(url),
             Method::Post => self.http.post(url),
+            Method::Delete => self.http.delete(url),
         };
 
         if let Some(cookie) = self.inner.cookie.read().await.as_ref() {
@@ -354,6 +365,7 @@ impl Client {
 enum Method {
     Get,
     Post,
+    Delete,
 }
 
 /// Roblox errors come back as `{"errors":[{"code":0,"message":"..."}]}`.

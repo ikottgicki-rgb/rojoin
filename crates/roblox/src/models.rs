@@ -160,7 +160,6 @@ pub struct MediaItem {
 pub struct GamePass {
     pub id: i64,
     pub name: String,
-    pub price: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

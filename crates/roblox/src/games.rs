@@ -14,6 +14,9 @@ use crate::{Client, Error, Result};
 const GAMES: &str = "https://games.roblox.com/v1";
 const GAMES_V2: &str = "https://games.roblox.com/v2";
 const DEVELOP: &str = "https://develop.roblox.com/v1";
+/// Game passes moved off games.roblox.com entirely; this host is the only
+/// one that still answers.
+const GAME_PASSES: &str = "https://apis.roblox.com/game-passes";
 const BADGES: &str = "https://badges.roblox.com/v1";
 
 /// The only `limit` values Roblox accepts on the servers endpoint. Anything
@@ -150,10 +153,23 @@ pub async fn badges(client: &Client, universe_id: i64) -> Result<Vec<Badge>> {
     Ok(page.data)
 }
 
+/// A game's passes.
+///
+/// `games.roblox.com/v1/games/{id}/game-passes` is **dead** — it 404s for a
+/// universe id and for a place id alike, and the caller swallowed that with
+/// `unwrap_or_default`, so every game detail page has quietly shown no passes
+/// at all. The live endpoint lives on `apis.roblox.com`, answers with a
+/// `gamePasses` array rather than the usual `data` page, and carries no price.
 pub async fn game_passes(client: &Client, universe_id: i64) -> Result<Vec<GamePass>> {
-    let url = format!("{GAMES}/games/{universe_id}/game-passes?limit=100&sortOrder=Asc");
-    let page: Page<GamePass> = client.get_json(&url).await?;
-    Ok(page.data)
+    #[derive(serde::Deserialize, Default)]
+    #[serde(rename_all = "camelCase", default)]
+    struct Resp {
+        game_passes: Vec<GamePass>,
+    }
+
+    let url = format!("{GAME_PASSES}/v1/universes/{universe_id}/game-passes?limit=100");
+    let resp: Resp = client.get_json(&url).await?;
+    Ok(resp.game_passes)
 }
 
 /// Games a user has favourited. Public, so it works for other people's
@@ -220,6 +236,44 @@ mod tests {
         assert_eq!(nearest_allowed_limit(30), 25);
         assert_eq!(nearest_allowed_limit(60), 50);
         assert_eq!(nearest_allowed_limit(1000), 100);
+    }
+
+    /// A trimmed but otherwise verbatim response from
+    /// `apis.roblox.com/game-passes/v1/universes/245662005/game-passes`, so a
+    /// future rename of the outer key fails here rather than silently showing a
+    /// game with no passes.
+    #[test]
+    fn the_live_game_pass_shape_still_parses() {
+        #[derive(serde::Deserialize, Default)]
+        #[serde(rename_all = "camelCase", default)]
+        struct Resp {
+            game_passes: Vec<GamePass>,
+        }
+
+        let body = r#"{"gamePasses":[{"id":56149618,"productId":1279254518,
+            "name":"VIP Trading","isForSale":true,"displayName":"VIP Trading",
+            "displayIconImageAssetId":11461109674,
+            "created":"2022-07-01T21:31:48.907Z"}],"nextPageToken":null}"#;
+
+        let resp: Resp = serde_json::from_str(body).unwrap();
+        assert_eq!(resp.game_passes.len(), 1);
+        assert_eq!(resp.game_passes[0].id, 56149618);
+        assert_eq!(resp.game_passes[0].name, "VIP Trading");
+    }
+
+    /// The old shape must NOT parse into passes any more — if it does, the
+    /// endpoint swap was cosmetic.
+    #[test]
+    fn the_retired_page_shape_yields_nothing() {
+        #[derive(serde::Deserialize, Default)]
+        #[serde(rename_all = "camelCase", default)]
+        struct Resp {
+            game_passes: Vec<GamePass>,
+        }
+
+        let old = r#"{"data":[{"id":1,"name":"Old"}]}"#;
+        let resp: Resp = serde_json::from_str(old).unwrap();
+        assert!(resp.game_passes.is_empty());
     }
 
     #[test]
