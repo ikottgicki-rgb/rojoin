@@ -193,6 +193,21 @@ pub fn badges(list: &[Badge]) -> Vec<DetailItem> {
 
 /// "3m ago", "2h ago", "5d ago". Empty for anything unparseable, because a raw
 /// timestamp under someone's name is worse than no subtitle at all.
+/// "3h ago" from two unix timestamps.
+///
+/// The ISO-string variant below exists because Roblox sends dates that way;
+/// play sessions are already numbers, so they take the short path.
+pub fn time_ago_unix(then: i64, now: i64) -> String {
+    let secs = (now - then).max(0);
+    match secs {
+        s if s < 90 => "just now".into(),
+        s if s < 3_600 => format!("{}m ago", s / 60),
+        s if s < 86_400 => format!("{}h ago", s / 3_600),
+        s if s < 7 * 86_400 => format!("{}d ago", s / 86_400),
+        s => format!("{}w ago", s / (7 * 86_400)),
+    }
+}
+
 pub fn time_ago(iso: &str) -> String {
     let Ok(then) = chrono::DateTime::parse_from_rfc3339(iso) else {
         return String::new();
@@ -613,5 +628,314 @@ mod tests {
     fn a_future_timestamp_does_not_produce_negative_time() {
         let future = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
         assert_eq!(time_ago(&future), "just now");
+    }
+}
+
+// ---------------------------------------------------------------- graph ---
+
+/// Everything the playtime chart needs, already flattened for Slint.
+pub struct GraphModel {
+    pub segments: Vec<crate::GraphSegment>,
+    pub days: Vec<crate::GraphDay>,
+    pub legend: Vec<crate::GraphLegend>,
+    pub ceiling: String,
+    pub total: String,
+    pub range: String,
+    pub empty: bool,
+}
+
+/// How many distinct tints the palette has before it starts reusing the last.
+const TINTS: usize = 6;
+
+/// Build the chart from raw sessions.
+///
+/// The tint a game gets comes from its rank across the *whole* window, not from
+/// its rank within each day. That is the difference between a chart you can read
+/// and a kaleidoscope: a game keeps one colour from one column to the next, so
+/// the eye can follow it.
+pub fn build_graph(
+    sessions: &[rojoin_store::playtime::PlaySession],
+    days: u32,
+    now: i64,
+) -> GraphModel {
+    use rojoin_store::playtime;
+
+    let buckets = playtime::daily(sessions, days, now);
+    let ceiling = playtime::axis_ceiling_secs(&buckets);
+    let overall = playtime::totals(sessions);
+
+    // universe -> palette step, by overall rank.
+    let tint_of: std::collections::HashMap<i64, i32> = overall
+        .iter()
+        .enumerate()
+        .map(|(i, g)| (g.universe_id, i.min(TINTS - 1) as i32))
+        .collect();
+
+    let mut segments = Vec::new();
+    for (day, bucket) in buckets.iter().enumerate() {
+        // Stack from the baseline up, biggest first, so the heaviest band sits
+        // on the axis where it is easiest to compare between columns.
+        let mut start = 0.0_f32;
+        let drawn = bucket.games.iter().filter(|g| g.secs > 0).count();
+        let mut placed = 0usize;
+        for g in &bucket.games {
+            if g.secs == 0 {
+                continue;
+            }
+            placed += 1;
+            let size = g.secs as f32 / ceiling as f32;
+            segments.push(crate::GraphSegment {
+                day: day as i32,
+                start,
+                size,
+                tint: tint_of.get(&g.universe_id).copied().unwrap_or(TINTS as i32 - 1),
+                name: game_label(&g.name).into(),
+                label: fmt_duration(g.secs).into(),
+                day_label: bucket.label.clone().into(),
+                top: placed == drawn,
+            });
+            start += size;
+        }
+    }
+
+    let day_rows: Vec<crate::GraphDay> = buckets
+        .iter()
+        .map(|b| crate::GraphDay {
+            label: b.label.clone().into(),
+            total: fmt_duration(b.total_secs).into(),
+            played: b.total_secs > 0,
+        })
+        .collect();
+
+    let legend: Vec<crate::GraphLegend> = overall
+        .iter()
+        .filter(|g| g.secs > 0)
+        .take(TINTS)
+        .map(|g| crate::GraphLegend {
+            name: game_label(&g.name).into(),
+            label: fmt_duration(g.secs).into(),
+            tint: tint_of.get(&g.universe_id).copied().unwrap_or(0),
+        })
+        .collect();
+
+    let played: u64 = buckets.iter().map(|b| b.total_secs).sum();
+
+    GraphModel {
+        segments,
+        days: day_rows,
+        legend,
+        ceiling: fmt_duration(ceiling).into(),
+        total: format!("{} total", fmt_duration(played)),
+        range: format!("last {days} days"),
+        empty: played == 0,
+    }
+}
+
+/// A name for a game the platform would not identify.
+fn game_label(name: &str) -> String {
+    if name.trim().is_empty() {
+        "Hidden game".into()
+    } else {
+        name.to_string()
+    }
+}
+
+#[cfg(test)]
+mod graph_tests {
+    use super::*;
+    use rojoin_store::playtime::PlaySession;
+
+    fn session(universe: i64, name: &str, start: i64, secs: i64) -> PlaySession {
+        PlaySession {
+            universe_id: universe,
+            root_place_id: universe * 10,
+            name: name.into(),
+            start,
+            end: start + secs,
+        }
+    }
+
+    /// Midday, so a session in the same day cannot spill over a boundary.
+    fn now() -> i64 {
+        1_700_000_000
+    }
+
+    #[test]
+    fn an_empty_history_reports_empty() {
+        let g = build_graph(&[], 7, now());
+        assert!(g.empty);
+        assert!(g.segments.is_empty());
+        assert_eq!(g.days.len(), 7, "the axis still spans the window");
+    }
+
+    #[test]
+    fn segments_stack_without_overflowing_the_ceiling() {
+        let g = build_graph(
+            &[
+                session(1, "Alpha", now() - 7200, 3600),
+                session(2, "Beta", now() - 3600, 1800),
+            ],
+            3,
+            now(),
+        );
+        assert!(!g.empty);
+        // Everything on one day, so the stack tops out at start+size <= 1.
+        let top = g
+            .segments
+            .iter()
+            .map(|s| s.start + s.size)
+            .fold(0.0_f32, f32::max);
+        assert!(top <= 1.0001, "stack overflowed the plot: {top}");
+        assert!(top > 0.0);
+    }
+
+    #[test]
+    fn a_game_keeps_one_tint_across_days() {
+        let g = build_graph(
+            &[
+                session(1, "Alpha", now() - 86_400 - 3600, 3600),
+                session(2, "Beta", now() - 86_400 - 7200, 600),
+                session(1, "Alpha", now() - 3600, 1800),
+            ],
+            3,
+            now(),
+        );
+        let alpha: Vec<i32> = g
+            .segments
+            .iter()
+            .filter(|s| s.name == "Alpha")
+            .map(|s| s.tint)
+            .collect();
+        assert!(alpha.len() >= 2, "Alpha should appear on two days");
+        assert!(
+            alpha.iter().all(|t| *t == alpha[0]),
+            "one game, one colour: {alpha:?}"
+        );
+    }
+
+    #[test]
+    fn the_biggest_game_overall_gets_the_first_tint() {
+        let g = build_graph(
+            &[
+                session(2, "Small", now() - 7200, 600),
+                session(1, "Big", now() - 3600, 7200),
+            ],
+            2,
+            now(),
+        );
+        let big = g.segments.iter().find(|s| s.name == "Big").unwrap();
+        assert_eq!(big.tint, 0);
+        assert_eq!(g.legend[0].name, "Big");
+    }
+
+    #[test]
+    fn more_games_than_tints_reuse_the_last_step() {
+        let sessions: Vec<PlaySession> = (1..=9)
+            .map(|i| session(i, &format!("G{i}"), now() - i * 600, 600 - i))
+            .collect();
+        let g = build_graph(&sessions, 2, now());
+        assert!(g.segments.iter().all(|s| s.tint < TINTS as i32));
+        assert_eq!(g.legend.len(), TINTS, "legend stops at the palette size");
+    }
+
+    #[test]
+    fn a_hidden_game_is_labelled_rather_than_blank() {
+        let mut s = session(0, "", now() - 3600, 1800);
+        s.name = String::new();
+        let g = build_graph(&[s], 2, now());
+        assert!(g.segments.iter().any(|s| s.name == "Hidden game"));
+    }
+
+    #[test]
+    fn zero_length_sessions_do_not_become_invisible_segments() {
+        let g = build_graph(&[session(1, "Alpha", now() - 60, 0)], 2, now());
+        assert!(g.segments.is_empty(), "a zero-length slice is not drawn");
+    }
+}
+
+#[cfg(test)]
+mod graph_cap_tests {
+    use super::*;
+    use rojoin_store::playtime::PlaySession;
+
+    fn session(universe: i64, name: &str, start: i64, secs: i64) -> PlaySession {
+        PlaySession {
+            universe_id: universe,
+            root_place_id: universe * 10,
+            name: name.into(),
+            start,
+            end: start + secs,
+        }
+    }
+
+    #[test]
+    fn exactly_one_slice_per_column_is_capped() {
+        let now = 1_700_000_000;
+        let g = build_graph(
+            &[
+                session(1, "Alpha", now - 7200, 3600),
+                session(2, "Beta", now - 3600, 1800),
+                session(3, "Gamma", now - 1800, 600),
+            ],
+            2,
+            now,
+        );
+        for day in 0..2 {
+            let caps = g
+                .segments
+                .iter()
+                .filter(|s| s.day == day && s.top)
+                .count();
+            let any = g.segments.iter().any(|s| s.day == day);
+            assert_eq!(caps, if any { 1 } else { 0 }, "day {day} caps");
+        }
+    }
+
+    #[test]
+    fn the_cap_is_the_highest_slice() {
+        let now = 1_700_000_000;
+        let g = build_graph(
+            &[
+                session(1, "Alpha", now - 7200, 3600),
+                session(2, "Beta", now - 3600, 1800),
+            ],
+            1,
+            now,
+        );
+        let top = g.segments.iter().find(|s| s.top).unwrap();
+        let highest = g
+            .segments
+            .iter()
+            .max_by(|a, b| (a.start + a.size).partial_cmp(&(b.start + b.size)).unwrap())
+            .unwrap();
+        assert_eq!(top.name, highest.name);
+    }
+
+    #[test]
+    fn every_slice_knows_its_day_for_the_hover_readout() {
+        let now = 1_700_000_000;
+        let g = build_graph(&[session(1, "Alpha", now - 3600, 1800)], 3, now);
+        assert!(g.segments.iter().all(|s| !s.day_label.is_empty()));
+    }
+}
+
+#[cfg(test)]
+mod time_ago_unix_tests {
+    use super::*;
+
+    #[test]
+    fn scales_from_minutes_to_weeks() {
+        let now = 1_700_000_000;
+        assert_eq!(time_ago_unix(now - 10, now), "just now");
+        assert_eq!(time_ago_unix(now - 600, now), "10m ago");
+        assert_eq!(time_ago_unix(now - 7200, now), "2h ago");
+        assert_eq!(time_ago_unix(now - 3 * 86_400, now), "3d ago");
+        assert_eq!(time_ago_unix(now - 21 * 86_400, now), "3w ago");
+    }
+
+    #[test]
+    fn a_clock_that_went_backwards_does_not_produce_a_negative() {
+        let now = 1_700_000_000;
+        assert_eq!(time_ago_unix(now + 5000, now), "just now");
     }
 }

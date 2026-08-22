@@ -60,6 +60,108 @@ impl Watcher {
             if want_requests {
                 self.sweep_requests(&mut previous_requests).await;
             }
+
+            self.sweep_playtime().await;
+        }
+    }
+
+    /// Record who is playing what, for you and for pinned friends.
+    ///
+    /// Presence rather than watching for a game process, which buys three
+    /// things: it is identical on Windows and Linux with no platform code, it
+    /// catches a session started anywhere — the website, a phone, the official
+    /// client — and it names the game, which a process cannot.
+    ///
+    /// The cost is that it samples. A session's length is only known to within
+    /// one poll, and nothing is recorded while RoJoin is closed. Both are
+    /// honest limits of watching from outside rather than from inside the game.
+    async fn sweep_playtime(&self) {
+        let (me, pinned, track_friends) = {
+            let cfg = match self.app.config.lock() {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+            let pinned: Vec<i64> = cfg
+                .data()
+                .map(|d| {
+                    d.pinned_friends
+                        .iter()
+                        .filter_map(|id| id.parse::<i64>().ok())
+                        .collect()
+                })
+                .unwrap_or_default();
+            (
+                *self.app.me.lock().unwrap_or_else(|e| e.into_inner()),
+                pinned,
+                cfg.settings.track_friend_playtime,
+            )
+        };
+
+        let mut ids = Vec::new();
+        if me != 0 {
+            ids.push(me);
+        }
+        if track_friends {
+            ids.extend(pinned.iter().copied().filter(|id| *id != me));
+        }
+        if ids.is_empty() {
+            return;
+        }
+
+        let presences = match friends::presence(&self.client, &ids).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(error = %e, "playtime sweep could not read presence");
+                return;
+            }
+        };
+
+        // Three polls of slack. One missed sweep — a hiccup, a throttle — should
+        // not split a single sitting into two sessions.
+        let gap = POLL.as_secs() as i64 * 3;
+        let now = chrono::Utc::now().timestamp();
+        let mut touched = false;
+
+        {
+            let mut cfg = match self.app.config.lock() {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+
+            for p in &presences {
+                if p.kind != friends::PresenceKind::InGame {
+                    continue;
+                }
+                // Null when the account's privacy hides where they are. The time
+                // is still real, so it is recorded against the unknown bucket
+                // rather than dropped.
+                let universe = p.universe_id.unwrap_or(rojoin_store::playtime::UNKNOWN_UNIVERSE);
+                let root = p.root_place_id.or(p.place_id).unwrap_or(0);
+
+                if p.user_id == me {
+                    cfg.observe_session(universe, root, &p.location, now, gap);
+                } else {
+                    cfg.observe_friend_session(
+                        &p.user_id.to_string(),
+                        universe,
+                        root,
+                        &p.location,
+                        now,
+                        gap,
+                    );
+                }
+                touched = true;
+            }
+
+            if touched {
+                if let Err(e) = cfg.save() {
+                    tracing::warn!(error = %e, "could not persist play sessions");
+                }
+            }
+        }
+
+        if touched {
+            tracing::debug!("recorded a playtime sample");
         }
     }
 

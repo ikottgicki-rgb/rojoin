@@ -484,6 +484,7 @@ fn enter_app(
     load_home(ui, app, bridge, imgs);
     load_pinned(ui, app, bridge, imgs);
     render_library(ui, app);
+    render_graph(ui, app);
     render_settings(ui, app);
 
     stagger(ui, app, bridge, imgs, 300, load_favorites);
@@ -3388,6 +3389,51 @@ fn wire_more_settings(ui: &MainWindow, app: &Arc<App>) {
     });
     setting!(on_set_verbose_logging, bool, |cfg, v| { cfg.settings.verbose_logging = v; });
     setting!(on_set_auto_update, bool, |cfg, v| { cfg.settings.auto_update = v; });
+    setting!(on_set_track_friend_playtime, bool, |cfg, v| {
+        cfg.settings.track_friend_playtime = v;
+    });
+
+    // These two change the chart itself, so they re-render it. Written out
+    // rather than going through `setting!` because that helper ends in
+    // `render_settings`, which holds the config lock — and `render_graph` takes
+    // it too. std mutexes are not reentrant, so calling one from inside the
+    // other is a hang, not a warning.
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_set_show_playtime_graph(move |v| {
+            let ui = weak.unwrap();
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.settings.show_playtime_graph = v;
+                let _ = cfg.save();
+            }
+            render_settings(&ui, &app);
+            render_graph(&ui, &app);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_set_retention_choice(move |v| {
+            let ui = weak.unwrap();
+            {
+                let mut cfg = app.config.lock().unwrap();
+                // Matches the Segmented options:
+                // 30 days · 90 days · 1 year · Unlimited.
+                cfg.settings.playtime_retention_days = match v {
+                    0 => 30,
+                    2 => 365,
+                    3 => rojoin_store::config::UNLIMITED_RETENTION,
+                    _ => 90,
+                };
+                cfg.prune_all_playtime(chrono::Utc::now().timestamp());
+                let _ = cfg.save();
+            }
+            render_settings(&ui, &app);
+            render_graph(&ui, &app);
+        });
+    }
 
     setting!(on_set_macros_enabled, bool, |cfg, v| { cfg.settings.macros_enabled = v; });
     setting!(on_set_only_when_focused, bool, |cfg, v| {
@@ -3467,6 +3513,17 @@ fn wire_more_settings(ui: &MainWindow, app: &Arc<App>) {
 
 fn render_settings(ui: &MainWindow, app: &Arc<App>) {
     let cfg = app.config.lock().unwrap();
+
+    // Read straight off the guard this function already holds — calling
+    // render_graph from here would deadlock on the same mutex.
+    ui.set_show_graph(cfg.settings.show_playtime_graph);
+    ui.set_track_friend_playtime(cfg.settings.track_friend_playtime);
+    ui.set_retention_choice(match cfg.settings.playtime_retention_days {
+        30 => 0,
+        365 => 2,
+        rojoin_store::config::UNLIMITED_RETENTION => 3,
+        _ => 1,
+    });
 
     let rows: Vec<AccountRow> = cfg
         .accounts
@@ -3688,6 +3745,111 @@ fn load_pinned(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Ima
     );
 }
 
+/// Push the playtime chart into the UI from whatever has been recorded.
+///
+/// Cheap and synchronous — it is all local data — so it can be re-run after
+/// anything that adds a session rather than being carefully invalidated.
+/// Push a pinned friend's tracked playtime into their profile.
+///
+/// Only pinned friends are sampled, so most profiles have nothing to show and
+/// the Statistics tab is simply absent rather than present and empty.
+fn render_profile_stats(ui: &MainWindow, app: &Arc<App>, user_id: i64) {
+    use rojoin_store::playtime;
+
+    let cfg = app.config.lock().unwrap();
+    let sessions: Vec<playtime::PlaySession> = cfg.friend_sessions(&user_id.to_string()).to_vec();
+    let window = cfg.retention_days().unwrap_or(90).min(90);
+    drop(cfg);
+
+    if sessions.is_empty() {
+        ui.set_profile_has_stats(false);
+        return;
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    let g = ad::build_graph(&sessions, window, now);
+
+    ui.set_profile_has_stats(true);
+    ui.set_profile_graph_segments(ad::model(g.segments));
+    ui.set_profile_graph_days(ad::model(g.days));
+    ui.set_profile_graph_legend(ad::model(g.legend));
+    ui.set_profile_graph_ceiling(g.ceiling.into());
+    ui.set_profile_graph_total(g.total.into());
+    ui.set_profile_graph_range(g.range.into());
+    ui.set_profile_graph_empty(g.empty);
+
+    let totals = playtime::totals(&sessions);
+    let top = totals.first().map(|t| t.secs).unwrap_or(0);
+    let stats: Vec<PlayStat> = totals
+        .iter()
+        .filter(|t| t.secs > 0)
+        .take(6)
+        .map(|t| PlayStat {
+            id: t.root_place_id.to_string().into(),
+            name: if t.name.trim().is_empty() {
+                "Hidden game".into()
+            } else {
+                t.name.clone().into()
+            },
+            value: ad::fmt_duration(t.secs).into(),
+            fraction: if top > 0 { t.secs as f32 / top as f32 } else { 0.0 },
+        })
+        .collect();
+    ui.set_profile_most_played(ad::model(stats));
+
+    let tracked: u64 = sessions.iter().map(|s| s.secs()).sum();
+    ui.set_profile_stat_total(ad::fmt_duration(tracked).into());
+    ui.set_profile_stat_longest(
+        playtime::longest(&sessions)
+            .map(|s| ad::fmt_duration(s.secs()))
+            .unwrap_or_default()
+            .into(),
+    );
+    ui.set_profile_stat_sessions(sessions.len().to_string().into());
+
+    let first = sessions.iter().map(|s| s.start).min().unwrap_or(now);
+    let days = playtime::days_between(first, now).max(1);
+    ui.set_profile_stat_since(format!("{days}d").into());
+
+    let recent: Vec<DetailItem> = playtime::latest(&sessions, 8)
+        .into_iter()
+        .map(|s| DetailItem {
+            id: s.root_place_id.to_string().into(),
+            name: if s.name.trim().is_empty() {
+                "Hidden game".into()
+            } else {
+                s.name.clone().into()
+            },
+            subtitle: format!(
+                "{} · {}",
+                ad::time_ago_unix(s.end, now),
+                ad::fmt_duration(s.secs())
+            )
+            .into(),
+            thumb: slint::Image::default(),
+            kind: 1,
+        })
+        .collect();
+    ui.set_profile_recent_sessions(ad::model(recent));
+}
+
+fn render_graph(ui: &MainWindow, app: &Arc<App>) {
+    let cfg = app.config.lock().unwrap();
+    ui.set_show_graph(cfg.settings.show_playtime_graph);
+
+    let window = cfg.retention_days().unwrap_or(90).min(90);
+    let g = ad::build_graph(cfg.sessions(), window, chrono::Utc::now().timestamp());
+    drop(cfg);
+
+    ui.set_graph_segments(ad::model(g.segments));
+    ui.set_graph_days(ad::model(g.days));
+    ui.set_graph_legend(ad::model(g.legend));
+    ui.set_graph_ceiling(g.ceiling.into());
+    ui.set_graph_total(g.total.into());
+    ui.set_graph_range(g.range.into());
+    ui.set_graph_empty(g.empty);
+}
+
 fn render_library(ui: &MainWindow, app: &Arc<App>) {
     let cfg = app.config.lock().unwrap();
     let Some(data) = cfg.data() else {
@@ -3781,6 +3943,7 @@ fn open_profile(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
     // only. Set before the fetch so the editor does not flash into view.
     ui.set_profile_is_me(user_id != 0 && user_id == *app.me.lock().unwrap());
     ui.set_bio_status(Default::default());
+    render_profile_stats(ui, app, user_id);
     ui.set_profile_groups(ad::model(Vec::new()));
     ui.set_profile_favorites(ad::model(Vec::new()));
 

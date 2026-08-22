@@ -231,6 +231,18 @@ pub fn totals(sessions: &[PlaySession]) -> Vec<GameSlice> {
     out
 }
 
+/// The most recent sessions, newest first.
+///
+/// Sessions are appended in observation order, so this is a reverse walk rather
+/// than a sort — and it collapses nothing, because "played Doors twice on
+/// Tuesday" is exactly what a recent list should say.
+pub fn latest(sessions: &[PlaySession], limit: usize) -> Vec<&PlaySession> {
+    let mut out: Vec<&PlaySession> = sessions.iter().collect();
+    out.sort_by_key(|s| std::cmp::Reverse(s.end));
+    out.truncate(limit);
+    out
+}
+
 /// The longest single session in the list.
 pub fn longest(sessions: &[PlaySession]) -> Option<&PlaySession> {
     sessions.iter().max_by_key(|s| s.secs())
@@ -446,6 +458,16 @@ mod tests {
         let ceil = axis_ceiling_secs(&buckets);
         assert!(ceil >= 5000, "ceiling must not clip the tallest bar");
         assert_eq!(ceil, 7200);
+    }
+
+    #[test]
+    fn latest_is_newest_first_and_capped() {
+        let t = base();
+        let list = [session(1, t, 600), session(2, t + 5000, 600), session(3, t + 20000, 600)];
+        let out = latest(&list, 2);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].universe_id, 3, "newest first");
+        assert_eq!(out[1].universe_id, 2);
     }
 
     #[test]

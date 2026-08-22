@@ -2,6 +2,8 @@ import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, Spinner, EmptyState, MetaStat, Skeleton, Texture } from "components.slint";
 import { GameGrid, ItemGrid } from "cards.slint";
 import { GameTile, DetailItem, GroupRow } from "types.slint";
+import { PlaytimeGraph, GraphSegment, GraphDay, GraphLegend } from "graph.slint";
+import { PlayStat } from "library.slint";
 import { ScrollView } from "std-widgets.slint";
 
 export struct ProfileData {
@@ -55,6 +57,24 @@ export component ProfileScreen inherits Rectangle {
     in property <bool> saving_bio: false;
     in property <string> bio_status;
     callback save_description(string);
+
+    /// Playtime we have observed for this person. Only pinned friends are
+    /// tracked, so most profiles have nothing here.
+    in property <bool> has_stats: false;
+    in property <[GraphSegment]> graph_segments;
+    in property <[GraphDay]> graph_days;
+    in property <[GraphLegend]> graph_legend;
+    in property <string> graph_ceiling;
+    in property <string> graph_total;
+    in property <string> graph_range;
+    in property <bool> graph_empty: true;
+    in property <[PlayStat]> most_played;
+    in property <string> stat_total;
+    in property <string> stat_longest;
+    in property <string> stat_sessions;
+    in property <string> stat_since;
+    /// Latest sessions: name in `name`, when and how long in `subtitle`.
+    in property <[DetailItem]> recent_sessions;
 
     callback join();
     callback accept_request();
@@ -258,7 +278,9 @@ export component ProfileScreen inherits Rectangle {
                 HorizontalLayout {
                     alignment: start;
                     Segmented {
-                        options: ["Overview", "Groups", "Badges"];
+                        options: root.has_stats
+                            ? ["Overview", "Statistics", "Groups", "Badges"]
+                            : ["Overview", "Groups", "Badges"];
                         current <=> root.tab;
                     }
                 }
@@ -368,7 +390,150 @@ export component ProfileScreen inherits Rectangle {
                     }
                 }
 
-                if root.tab == 1: VerticalLayout {
+                if root.has_stats && root.tab == 1: VerticalLayout {
+                    spacing: Space.lg;
+                    alignment: start;
+
+                    Rectangle {
+                        height: 240px;
+                        background: Theme.bg_1;
+                        border-radius: Theme.radius;
+                        border-width: Theme.hairline;
+                        border-color: Theme.line;
+
+                        PlaytimeGraph {
+                            x: Space.lg;
+                            y: Space.md;
+                            width: parent.width - Space.lg * 2;
+                            height: parent.height - Space.md * 2;
+                            segments: root.graph_segments;
+                            days: root.graph_days;
+                            legend: root.graph_legend;
+                            ceiling_label: root.graph_ceiling;
+                            total_label: root.graph_total;
+                            range_label: root.graph_range;
+                            empty: root.graph_empty;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Space.md;
+                        for st in [
+                            { k: "Tracked", v: root.stat_total },
+                            { k: "Longest session", v: root.stat_longest },
+                            { k: "Sessions", v: root.stat_sessions },
+                            { k: "Since", v: root.stat_since },
+                        ]: Rectangle {
+                            horizontal-stretch: 1;
+                            height: 62px;
+                            background: Theme.bg_1;
+                            border-radius: Theme.radius;
+                            border-width: Theme.hairline;
+                            border-color: Theme.line;
+                            VerticalLayout {
+                                padding: Space.md;
+                                spacing: 1px;
+                                alignment: center;
+                                Text {
+                                    text: st.v != "" ? st.v : "—";
+                                    color: Theme.text;
+                                    font-size: Type.title;
+                                    font-weight: Type.w_bold;
+                                }
+                                Text {
+                                    text: st.k;
+                                    color: Theme.text_mute;
+                                    font-size: Type.caption;
+                                }
+                            }
+                        }
+                    }
+
+                    if root.recent_sessions.length > 0: VerticalLayout {
+                        spacing: Space.sm;
+                        Text {
+                            text: "Latest games";
+                            color: Theme.text;
+                            font-size: Type.small;
+                            font-weight: Type.w_bold;
+                        }
+                        for r in root.recent_sessions: Rectangle {
+                            height: 34px;
+                            background: lta.has-hover ? Theme.bg_2 : transparent;
+                            border-radius: Theme.radius;
+                            animate background { duration: Motion.instant; easing: Motion.ease; }
+
+                            lta := TouchArea {
+                                mouse-cursor: r.id != "0" ? pointer : default;
+                                clicked => { if (r.id != "0") { root.open_game(r.id); } }
+                            }
+
+                            HorizontalLayout {
+                                padding-left: Space.sm;
+                                padding-right: Space.sm;
+                                spacing: Space.sm;
+                                Text {
+                                    text: r.name;
+                                    color: Theme.text_dim;
+                                    font-size: Type.caption;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                    horizontal-stretch: 1;
+                                }
+                                Text {
+                                    text: r.subtitle;
+                                    color: Theme.text_mute;
+                                    font-size: Type.caption;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    if root.most_played.length > 0: VerticalLayout {
+                        spacing: Space.sm;
+                        Text {
+                            text: "Most played";
+                            color: Theme.text;
+                            font-size: Type.small;
+                            font-weight: Type.w_bold;
+                        }
+                        for st in root.most_played: VerticalLayout {
+                            spacing: 3px;
+                            HorizontalLayout {
+                                Text {
+                                    text: st.name;
+                                    color: Theme.text_dim;
+                                    font-size: Type.caption;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                    horizontal-stretch: 1;
+                                }
+                                Text {
+                                    text: st.value;
+                                    color: Theme.text_mute;
+                                    font-size: Type.caption;
+                                }
+                            }
+                            Rectangle {
+                                height: 5px;
+                                background: Theme.bg_3;
+                                border-radius: 2px;
+                                Rectangle {
+                                    x: 0;
+                                    width: parent.width * st.fraction;
+                                    height: 100%;
+                                    background: Theme.accent;
+                                    border-radius: 2px;
+                                    animate width { duration: Motion.normal; easing: Motion.ease; }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.tab == (root.has_stats ? 2 : 1): VerticalLayout {
                     spacing: Space.sm;
                     alignment: start;
 
@@ -422,7 +587,7 @@ export component ProfileScreen inherits Rectangle {
                     }
                 }
 
-                if root.tab == 2: VerticalLayout {
+                if root.tab == (root.has_stats ? 3 : 2): VerticalLayout {
                     spacing: Space.md;
                     alignment: start;
                     if root.badges.length == 0: EmptyState {

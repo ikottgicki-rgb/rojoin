@@ -12,9 +12,10 @@ import { GroupScreen, GroupData } from "group.slint";
 import { AvatarScreen } from "avatar.slint";
 import { MacrosScreen, StepEditor } from "macros.slint";
 import { LibraryScreen, PlayStat } from "library.slint";
+import { GraphSegment, GraphDay, GraphLegend } from "graph.slint";
 import { SettingsScreen, AccountRow } from "settings.slint";
 
-export { Theme, SignInPhase, ProfileData, GroupData, PlayStat, AccountRow }
+export { Theme, SignInPhase, ProfileData, GroupData, PlayStat, AccountRow, GraphSegment, GraphDay, GraphLegend }
 
 export component MainWindow inherits Window {
     title: "RoJoin";
@@ -55,6 +56,33 @@ export component MainWindow inherits Window {
     callback open_account();
     callback open_my_profile();
     callback open_request(string);
+    in property <bool> show_graph: true;
+    in property <[GraphSegment]> graph_segments;
+    in property <[GraphDay]> graph_days;
+    in property <[GraphLegend]> graph_legend;
+    in property <string> graph_ceiling;
+    in property <string> graph_total;
+    in property <string> graph_range;
+    in property <bool> graph_empty: true;
+    in property <bool> track_friend_playtime: true;
+    in property <int> retention_choice: 1;
+    in property <bool> profile_has_stats: false;
+    in property <[GraphSegment]> profile_graph_segments;
+    in property <[GraphDay]> profile_graph_days;
+    in property <[GraphLegend]> profile_graph_legend;
+    in property <string> profile_graph_ceiling;
+    in property <string> profile_graph_total;
+    in property <string> profile_graph_range;
+    in property <bool> profile_graph_empty: true;
+    in property <[PlayStat]> profile_most_played;
+    in property <string> profile_stat_total;
+    in property <string> profile_stat_longest;
+    in property <string> profile_stat_sessions;
+    in property <string> profile_stat_since;
+    in property <[DetailItem]> profile_recent_sessions;
+    callback set_show_playtime_graph(bool);
+    callback set_track_friend_playtime(bool);
+    callback set_retention_choice(int);
     in property <bool> profile_is_me: false;
     in property <bool> saving_bio: false;
     in property <string> bio_status;
@@ -447,6 +475,20 @@ export component MainWindow inherits Window {
                             favorites: root.profile_favorites;
                             tab <=> root.profile_tab;
                             is_me: root.profile_is_me;
+                            has_stats: root.profile_has_stats;
+                            graph_segments: root.profile_graph_segments;
+                            graph_days: root.profile_graph_days;
+                            graph_legend: root.profile_graph_legend;
+                            graph_ceiling: root.profile_graph_ceiling;
+                            graph_total: root.profile_graph_total;
+                            graph_range: root.profile_graph_range;
+                            graph_empty: root.profile_graph_empty;
+                            most_played: root.profile_most_played;
+                            stat_total: root.profile_stat_total;
+                            stat_longest: root.profile_stat_longest;
+                            stat_sessions: root.profile_stat_sessions;
+                            stat_since: root.profile_stat_since;
+                            recent_sessions: root.profile_recent_sessions;
                             saving_bio: root.saving_bio;
                             bio_status: root.bio_status;
                             save_description(t) => { root.save_description(t); }
@@ -522,6 +564,14 @@ export component MainWindow inherits Window {
                             show_pinned: root.show_pinned;
                             show_recent: root.show_recent;
                             show_favorites: root.show_favorites;
+                            show_graph: root.show_graph;
+                            graph_segments: root.graph_segments;
+                            graph_days: root.graph_days;
+                            graph_legend: root.graph_legend;
+                            graph_ceiling: root.graph_ceiling;
+                            graph_total: root.graph_total;
+                            graph_range: root.graph_range;
+                            graph_empty: root.graph_empty;
                             unpin(id) => { root.unpin_game(id); }
                             open(id) => { root.open_game(id); }
                             play(id) => { root.play_game(id); }
@@ -645,6 +695,12 @@ export component MainWindow inherits Window {
                             data_dir: root.data_dir;
                             update_status: root.update_status;
                             checking_update: root.checking_update;
+                            show_playtime_graph: root.show_graph;
+                            track_friend_playtime: root.track_friend_playtime;
+                            retention_choice: root.retention_choice;
+                            set_show_playtime_graph(v) => { root.set_show_playtime_graph(v); }
+                            set_track_friend_playtime(v) => { root.set_track_friend_playtime(v); }
+                            set_retention_choice(i) => { root.set_retention_choice(i); }
                             switch_account(id) => { root.switch_account(id); }
                             remove_account(id) => { root.remove_account(id); }
                             add_account => { root.add_account(); }

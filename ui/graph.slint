@@ -1,0 +1,238 @@
+import { Theme, Space, Type, Motion } from "theme.slint";
+
+/// One coloured block in a stacked column.
+///
+/// Deliberately flat rather than nested inside a per-day struct: Slint has no
+/// array-inside-array, so the whole chart travels as one list and each block
+/// carries the column it belongs to.
+export struct GraphSegment {
+    day: int,           // which column
+    start: float,       // 0..1 up from the baseline
+    size: float,        // 0..1 of the plot height
+    tint: int,          // palette step, stable per game across the window
+    name: string,
+    label: string,      // "1h 20m"
+    day_label: string,  // "Fri 14", for the hover readout
+    top: bool,          // topmost slice of its column, so it gets the cap
+}
+
+export struct GraphDay {
+    label: string,      // "Mon 18"
+    total: string,      // "2h 10m", empty when nothing was played
+    played: bool,
+}
+
+export struct GraphLegend {
+    name: string,
+    label: string,
+    tint: int,
+}
+
+/// A stacked-by-game playtime chart.
+///
+/// The palette is a ramp of the one accent rather than a set of hues: this app
+/// is monochrome plus a single accent used for state, and six competing colours
+/// would break that on the busiest screen it has. A ramp still separates the
+/// series, and it orders them meaningfully — the brightest band is the game you
+/// played most that day.
+export component PlaytimeGraph inherits Rectangle {
+    in property <[GraphSegment]> segments;
+    in property <[GraphDay]> days;
+    in property <[GraphLegend]> legend;
+    in property <string> ceiling_label;
+    in property <string> total_label;
+    in property <string> range_label;
+    in property <bool> empty: false;
+
+    /// Drives the grow-in. Animated from 0 so the columns rise out of the
+    /// baseline instead of appearing fully formed.
+    property <float> grow: 0.0;
+    animate grow { duration: 700ms; easing: ease-out-quad; }
+    init => { self.grow = 1.0; }
+
+    /// What the pointer is over, echoed in the header so there are no floating
+    /// tooltips to position or clip.
+    property <string> hover_text;
+
+    /// The palette alternates hard between light and dark rather than walking
+    /// down a smooth ramp. A smooth ramp looks tidy in isolation and then turns
+    /// into one indistinguishable blue once the swatches are 8px in a legend.
+    pure function tint_of(i: int) -> color {
+        return i == 0 ? #4C8DFF
+             : i == 1 ? #CBDDFF
+             : i == 2 ? #2C5DA8
+             : i == 3 ? #8FB6FF
+             : i == 4 ? #1C3C6E
+             : #E6EEFF;
+    }
+
+    VerticalLayout {
+        spacing: Space.sm;
+
+        HorizontalLayout {
+            spacing: Space.sm;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 1px;
+                Text {
+                    text: "Playtime";
+                    color: Theme.text;
+                    font-size: Type.small;
+                    font-weight: Type.w_bold;
+                }
+                Text {
+                    text: root.range_label;
+                    color: Theme.text_mute;
+                    font-size: Type.caption;
+                }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    // The hover readout takes over the total's slot, so nothing
+                    // moves when the pointer enters the plot.
+                    text: root.hover_text != "" ? root.hover_text : root.total_label;
+                    color: root.hover_text != "" ? Theme.accent : Theme.text_dim;
+                    font-size: Type.caption;
+                    horizontal-alignment: right;
+                }
+            }
+        }
+
+        if root.empty: Rectangle {
+            vertical-stretch: 1;
+            min-height: 120px;
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: "No playtime recorded yet";
+                    color: Theme.text_dim;
+                    font-size: Type.body;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "RoJoin notes what you play while it is open. Come back after a session.";
+                    color: Theme.text_mute;
+                    font-size: Type.caption;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+
+        if !root.empty: HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: Space.sm;
+
+            // Y axis: just the ceiling and the baseline. A full set of
+            // gridlines would out-weigh the bars at this size.
+            VerticalLayout {
+                width: 34px;
+                Text {
+                    text: root.ceiling_label;
+                    color: Theme.text_mute;
+                    font-size: Type.micro;
+                    horizontal-alignment: right;
+                }
+                Rectangle { vertical-stretch: 1; }
+                Text {
+                    text: "0";
+                    color: Theme.text_mute;
+                    font-size: Type.micro;
+                    horizontal-alignment: right;
+                }
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Space.xs;
+
+                plot := Rectangle {
+                    vertical-stretch: 1;
+                    min-height: 110px;
+
+                    // Baseline, so an empty day still reads as a day.
+                    Rectangle {
+                        y: parent.height - Theme.hairline;
+                        height: Theme.hairline;
+                        background: Theme.line;
+                    }
+
+                    for seg in root.segments: Rectangle {
+                        property <length> colw: plot.width / max(1, root.days.length);
+                        property <length> gap: min(6px, self.colw * 0.22);
+
+                        x: seg.day * self.colw + self.gap / 2;
+                        width: self.colw - self.gap;
+                        height: plot.height * seg.size * root.grow;
+                        y: plot.height * (1.0 - (seg.start + seg.size) * root.grow);
+
+                        background: root.tint_of(seg.tint);
+                        // Only the top slice is capped; rounding every one puts
+                        // notches down the middle of the stack.
+                        border-top-left-radius: seg.top ? 3px : 0;
+                        border-top-right-radius: seg.top ? 3px : 0;
+
+                        opacity: sta.has-hover ? 1.0 : 0.88;
+                        animate opacity { duration: Motion.instant; easing: Motion.ease; }
+
+                        sta := TouchArea {
+                            mouse-cursor: default;
+                            changed has-hover => {
+                                root.hover_text = self.has-hover
+                                    ? seg.day_label + " · " + seg.name + " · " + seg.label
+                                    : "";
+                            }
+                        }
+                    }
+                }
+
+                // Day labels. Every column gets one slot; the text is dropped on
+                // narrow charts rather than overlapping into a smear.
+                HorizontalLayout {
+                    height: 12px;
+                    for d in root.days: Rectangle {
+                        horizontal-stretch: 1;
+                        Text {
+                            width: 100%;
+                            text: d.label;
+                            color: d.played ? Theme.text_dim : Theme.text_mute;
+                            font-size: Type.micro;
+                            horizontal-alignment: center;
+                            overflow: elide;
+                            wrap: no-wrap;
+                        }
+                    }
+                }
+            }
+        }
+
+        if !root.empty && root.legend.length > 0: HorizontalLayout {
+            spacing: Space.md;
+            alignment: start;
+            for l in root.legend: HorizontalLayout {
+                spacing: Space.xs;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 2px;
+                        background: root.tint_of(l.tint);
+                    }
+                }
+                Text {
+                    text: l.name + " " + l.label;
+                    color: Theme.text_mute;
+                    font-size: Type.micro;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    wrap: no-wrap;
+                }
+            }
+        }
+    }
+}

@@ -2,6 +2,7 @@ import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Thumb, Avatar, Btn, IconBtn, Chip, Badge, Skeleton, EmptyState, Spinner, BusySlot, MetaStat, Segmented, Texture } from "components.slint";
 import { GameGrid, GameListRow, ItemGrid } from "cards.slint";
 import { GameTile, DetailItem } from "types.slint";
+import { PlaytimeGraph, GraphSegment, GraphDay, GraphLegend } from "graph.slint";
 import { ScrollView } from "std-widgets.slint";
 
 component SectionHead inherits HorizontalLayout {
@@ -45,6 +46,15 @@ export component HomeScreen inherits Rectangle {
     in property <bool> show_recent: true;
     in property <bool> show_favorites: true;
 
+    in property <bool> show_graph: true;
+    in property <[GraphSegment]> graph_segments;
+    in property <[GraphDay]> graph_days;
+    in property <[GraphLegend]> graph_legend;
+    in property <string> graph_ceiling;
+    in property <string> graph_total;
+    in property <string> graph_range;
+    in property <bool> graph_empty: false;
+
     callback open(string);
     callback play(string);
     callback favorite(string);
@@ -75,6 +85,28 @@ export component HomeScreen inherits Rectangle {
                     text: root.date_label;
                     color: Theme.text_mute;
                     font-size: Type.small;
+                }
+            }
+
+            if root.show_graph: Rectangle {
+                height: 232px;
+                background: Theme.bg_1;
+                border-radius: Theme.radius;
+                border-width: Theme.hairline;
+                border-color: Theme.line;
+
+                PlaytimeGraph {
+                    x: Space.lg;
+                    y: Space.md;
+                    width: parent.width - Space.lg * 2;
+                    height: parent.height - Space.md * 2;
+                    segments: root.graph_segments;
+                    days: root.graph_days;
+                    legend: root.graph_legend;
+                    ceiling_label: root.graph_ceiling;
+                    total_label: root.graph_total;
+                    range_label: root.graph_range;
+                    empty: root.graph_empty;
                 }
             }
 

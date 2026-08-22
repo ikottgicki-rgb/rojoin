@@ -194,6 +194,13 @@ export component SettingsScreen inherits Rectangle {
     callback set_startup_section(int);
     callback set_presence_secs(int);
     callback set_confirm_destructive(bool);
+    in property <bool> show_playtime_graph: true;
+    in property <bool> track_friend_playtime: true;
+    /// Index into the retention choices below.
+    in property <int> retention_choice: 1;
+    callback set_show_playtime_graph(bool);
+    callback set_track_friend_playtime(bool);
+    callback set_retention_choice(int);
     callback clear_caches();
     callback toggle_home_section(int);
 
@@ -299,6 +306,44 @@ export component SettingsScreen inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             Btn { label: "Add"; primary: true; clicked => { root.add_account(); } }
+                        }
+                    }
+                }
+
+                Card {
+                    title: "PLAYTIME";
+                    Row {
+                        title: "Graph on Home";
+                        hint: "A day-by-day chart of what you have been playing.";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.show_playtime_graph;
+                                toggled => { root.set_show_playtime_graph(!root.show_playtime_graph); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Track pinned friends";
+                        hint: "Records what your pinned friends play, for the graph on their profile.";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.track_friend_playtime;
+                                toggled => { root.set_track_friend_playtime(!root.track_friend_playtime); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Keep history for";
+                        hint: "Older sessions are discarded. Unlimited keeps everything.";
+                        VerticalLayout {
+                            alignment: center;
+                            Segmented {
+                                options: ["30 days", "90 days", "1 year", "Unlimited"];
+                                current: root.retention_choice;
+                                changed(i) => { root.set_retention_choice(i); }
+                            }
                         }
                     }
                 }

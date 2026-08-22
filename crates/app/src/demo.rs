@@ -136,6 +136,7 @@ pub fn seed(ui: &MainWindow) {
     seed_friends(ui);
 
     seed_profile(ui);
+    seed_graph(ui);
 
     // ROJOIN_REQUESTS=1 opens the requests panel so it can be rendered.
     if std::env::var("ROJOIN_REQUESTS").is_ok_and(|v| v == "1") {
@@ -279,4 +280,114 @@ fn seed_profile(ui: &MainWindow) {
         is_self: me,
         avatar: swatch(3, 96, 96),
     });
+
+    // Someone else's profile gets the tracked-playtime tab; your own does not,
+    // since we only sample pinned friends.
+    if !me {
+        seed_profile_stats(ui);
+    }
+}
+
+fn seed_profile_stats(ui: &MainWindow) {
+    use rojoin_store::playtime;
+
+    let now = chrono::Utc::now().timestamp();
+    let sessions = fake_sessions(now, 11);
+    let g = ad::build_graph(&sessions, 14, now);
+
+    ui.set_profile_has_stats(true);
+    ui.set_profile_graph_segments(ad::model(g.segments));
+    ui.set_profile_graph_days(ad::model(g.days));
+    ui.set_profile_graph_legend(ad::model(g.legend));
+    ui.set_profile_graph_ceiling(g.ceiling.into());
+    ui.set_profile_graph_total(g.total.into());
+    ui.set_profile_graph_range(g.range.into());
+    ui.set_profile_graph_empty(g.empty);
+
+    let totals = playtime::totals(&sessions);
+    let top = totals.first().map(|t| t.secs).unwrap_or(1);
+    ui.set_profile_most_played(ad::model(
+        totals
+            .iter()
+            .take(5)
+            .map(|t| crate::PlayStat {
+                id: t.root_place_id.to_string().into(),
+                name: if t.name.is_empty() { "Hidden game".into() } else { t.name.clone().into() },
+                value: ad::fmt_duration(t.secs).into(),
+                fraction: t.secs as f32 / top as f32,
+            })
+            .collect(),
+    ));
+
+    let tracked: u64 = sessions.iter().map(|s| s.secs()).sum();
+    ui.set_profile_stat_total(ad::fmt_duration(tracked).into());
+    ui.set_profile_stat_longest(
+        playtime::longest(&sessions).map(|s| ad::fmt_duration(s.secs())).unwrap_or_default().into(),
+    );
+    ui.set_profile_stat_sessions(sessions.len().to_string().into());
+    ui.set_profile_stat_since("14d".into());
+    ui.set_profile_recent_sessions(ad::model(
+        playtime::latest(&sessions, 6)
+            .into_iter()
+            .map(|s| crate::DetailItem {
+                id: s.root_place_id.to_string().into(),
+                name: if s.name.is_empty() { "Hidden game".into() } else { s.name.clone().into() },
+                subtitle: format!(
+                    "{} · {}",
+                    ad::time_ago_unix(s.end, now),
+                    ad::fmt_duration(s.secs())
+                )
+                .into(),
+                thumb: slint::Image::default(),
+                kind: 1,
+            })
+            .collect(),
+    ));
+    ui.set_profile_tab(1);
+}
+
+/// A fortnight of plausible sessions, so the chart can be looked at.
+fn fake_sessions(now: i64, spread: i64) -> Vec<rojoin_store::playtime::PlaySession> {
+    use rojoin_store::playtime::PlaySession;
+
+    let games = [
+        (245662005_i64, "Jailbreak"),
+        (1962086868, "Tower Defense Simulator"),
+        (2440500124, "Doors"),
+        (0, ""),
+    ];
+
+    let mut sessions = Vec::new();
+    for day in 0..14_i64 {
+        let base = now - day * 86_400 - 6 * 3600;
+        let n = ((day * spread) % 3) + 1;
+        for k in 0..n {
+            let (universe, name) = games[((day + k + spread) % 4) as usize];
+            let start = base + k * 5400;
+            let secs = 900 + ((day * 13 + k * 29 + spread) % 47) * 120;
+            sessions.push(PlaySession {
+                universe_id: universe,
+                root_place_id: universe * 10,
+                name: name.to_string(),
+                start,
+                end: start + secs,
+            });
+        }
+    }
+    sessions
+}
+
+fn seed_graph(ui: &MainWindow) {
+    let now = chrono::Utc::now().timestamp();
+    // Deterministic but uneven, so the columns do not all look the same.
+    let sessions = fake_sessions(now, 7);
+    let g = ad::build_graph(&sessions, 14, now);
+    ui.set_show_graph(true);
+    ui.set_graph_segments(ad::model(g.segments));
+    ui.set_graph_days(ad::model(g.days));
+    ui.set_graph_legend(ad::model(g.legend));
+    ui.set_graph_ceiling(g.ceiling.into());
+    ui.set_graph_total(g.total.into());
+    ui.set_graph_range(g.range.into());
+    ui.set_graph_empty(g.empty);
 }
