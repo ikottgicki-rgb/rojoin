@@ -147,6 +147,9 @@ export component Avatar inherits Rectangle {
 export component Btn inherits Rectangle {
     in property <string> label;
     in property <bool> primary: false;
+    /// Destructive. Red label and border, filled only on hover — a wall of
+    /// solid red buttons reads as an error state rather than a set of choices.
+    in property <bool> danger: false;
     in property <bool> enabled: true;
     in property <length> pad_h: Space.lg;
     callback clicked();
@@ -156,19 +159,23 @@ export component Btn inherits Rectangle {
     border-radius: Theme.radius;
     opacity: root.enabled ? 1.0 : 0.4;
 
-    background: root.primary
+    background: root.danger
+        ? (ta.pressed ? Theme.danger
+           : ta.has-hover ? Theme.danger.with-alpha(0.18) : Theme.bg_2)
+        : root.primary
         ? (!root.enabled ? Theme.accent
            : ta.pressed ? Theme.accent_press
            : ta.has-hover ? Theme.accent_hover : Theme.accent)
         : (ta.pressed ? Theme.bg_4 : ta.has-hover ? Theme.bg_3 : Theme.bg_2);
     animate background { duration: Motion.instant; easing: Motion.ease; }
 
-    border-width: root.primary ? 0px : Theme.hairline;
-    border-color: Theme.line;
+    border-width: root.primary && !root.danger ? 0px : Theme.hairline;
+    border-color: root.danger ? Theme.danger : Theme.line;
 
     txt := Text {
         text: root.label;
-        color: root.primary ? Theme.on_accent : Theme.text;
+        color: root.danger ? (ta.pressed ? Theme.on_accent : Theme.danger)
+               : root.primary ? Theme.on_accent : Theme.text;
         font-size: Type.body;
         font-weight: Type.w_medium;
         vertical-alignment: center;
@@ -394,4 +401,76 @@ export component Texture inherits Image {
     vertical-tiling: repeat;
     colorize: Theme.text;
     opacity: 0.035;
+}
+
+/// A modal confirmation.
+///
+/// Exists because `confirm_destructive` was a setting nothing read — the toggle
+/// was there and every destructive action went ahead regardless. One dialog
+/// driven by root state serves all of them rather than each growing its own.
+export component ConfirmDialog inherits Rectangle {
+    in property <bool> open: false;
+    in property <string> title;
+    in property <string> body;
+    in property <string> action_label: "Confirm";
+    in property <bool> danger: false;
+    callback accept();
+    callback cancel();
+
+    visible: root.open;
+    background: #000000AA;
+
+    // Swallow anything aimed at the page behind, and offer the usual
+    // click-outside-to-dismiss.
+    TouchArea { clicked => { root.cancel(); } }
+
+    if root.open: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: min(430px, parent.width - Space.xl * 2);
+        height: lay.preferred-height;
+        background: Theme.bg_1;
+        border-radius: Theme.radius;
+        border-width: Theme.hairline;
+        border-color: root.danger ? Theme.danger : Theme.line_strong;
+
+        opacity: 0;
+        animate opacity { duration: Motion.fast; easing: Motion.ease; }
+        init => { self.opacity = 1.0; }
+
+        TouchArea {}
+
+        lay := VerticalLayout {
+            padding: Space.lg;
+            spacing: Space.md;
+
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: Type.body;
+                font-weight: Type.w_bold;
+                wrap: word-wrap;
+            }
+            Text {
+                text: root.body;
+                color: Theme.text_mute;
+                font-size: Type.caption;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: Space.sm;
+                Rectangle { horizontal-stretch: 1; }
+                Btn {
+                    label: "Cancel";
+                    clicked => { root.cancel(); }
+                }
+                Btn {
+                    label: root.action_label;
+                    danger: root.danger;
+                    primary: !root.danger;
+                    clicked => { root.accept(); }
+                }
+            }
+        }
+    }
 }

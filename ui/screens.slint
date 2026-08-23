@@ -62,6 +62,7 @@ export component HomeScreen inherits Rectangle {
     callback go_friends();
     callback go_play();
     callback unpin(string);
+    callback remove_recent(string);
 
     background: Theme.bg_0;
 
@@ -254,6 +255,9 @@ export component HomeScreen inherits Rectangle {
                     open(id) => { root.open(id); }
                     play(id) => { root.play(id); }
                     favorite(id) => { root.favorite(id); }
+                    // Only here: this is the one row a tile can be removed from.
+                    removable: true;
+                    remove(universe) => { root.remove_recent(universe); }
                 }
             }
 

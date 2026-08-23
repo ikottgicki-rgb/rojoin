@@ -46,6 +46,19 @@ const NAV: &[(&str, &str)] = &[
     ("Macros", "⌨"),
 ];
 
+/// A destructive action waiting on the user's confirmation.
+///
+/// Held in one place so there is a single dialog rather than one per action, and
+/// so nothing irreversible can run without having been asked about — the
+/// `confirm_destructive` setting used to be a toggle that nothing read.
+#[derive(Debug, Clone, PartialEq)]
+enum Pending {
+    RemoveAccount(String),
+    DeletePlaytime,
+    DeleteCache,
+    DeleteEverything,
+}
+
 /// Shared app state. Guarded by mutexes because background tasks touch it too.
 pub(crate) struct App {
     client: Client,
@@ -118,6 +131,8 @@ pub(crate) struct App {
     avatar_busy: std::sync::atomic::AtomicBool,
     /// Guards the About me save against a double click.
     bio_busy: std::sync::atomic::AtomicBool,
+    /// The destructive action the confirmation dialog is asking about.
+    pending: Mutex<Option<Pending>>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -189,6 +204,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         worn_write: Mutex::new(None),
         avatar_busy: std::sync::atomic::AtomicBool::new(false),
         bio_busy: std::sync::atomic::AtomicBool::new(false),
+        pending: Mutex::new(None),
     });
     *app.bridge.lock().unwrap() = Some(bridge.clone());
     *app.imgs.lock().unwrap() = Some(imgs.clone());
@@ -3245,14 +3261,25 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
         let weak = ui.as_weak();
         ui.on_remove_account(move |id| {
             let ui = weak.unwrap();
-            secrets::delete(id.as_str());
-            {
-                let mut cfg = app.config.lock().unwrap();
-                cfg.remove_account(id.as_str());
-                let _ = cfg.save();
-            }
-            render_settings(&ui, &app);
-            ui.set_accounts_count(app.config.lock().unwrap().accounts.len() as i32);
+            let name = app
+                .config
+                .lock()
+                .unwrap()
+                .account(id.as_str())
+                .map(|a| a.display_name.clone())
+                .unwrap_or_else(|| "this account".into());
+
+            ask(
+                &ui,
+                &app,
+                Pending::RemoveAccount(id.to_string()),
+                "Remove account?",
+                &format!(
+                    "{name} will be signed out of RoJoin and its saved login \
+                     deleted. Nothing changes on Roblox itself."
+                ),
+                "Remove",
+            );
         });
     }
     {
@@ -3333,6 +3360,148 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
                     }
                 },
             );
+        });
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_hide_recent(move |universe| {
+            let ui = weak.unwrap();
+            let Ok(universe_id) = universe.parse::<i64>() else { return };
+
+            // The tile carries the universe; the place and name come from the
+            // row so Settings can list it by name later.
+            let (place, name) = {
+                use slint::Model;
+                ui.get_recent()
+                    .iter()
+                    .find(|t| t.universe_id == universe)
+                    .map(|t| (t.id.parse::<i64>().unwrap_or(0), t.name.to_string()))
+                    .unwrap_or((0, String::new()))
+            };
+
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.hide_recent(place, universe_id, &name);
+                let _ = cfg.save();
+            }
+            render_settings(&ui, &app);
+            load_home(&ui, &app, &bridge2, &imgs2);
+
+            ui.set_toast_text(
+                if name.is_empty() {
+                    "Removed from Recently played — restore it in Settings".into()
+                } else {
+                    format!("{name} removed — restore it in Settings")
+                }
+                .into(),
+            );
+            ui.set_toast_nonce(ui.get_toast_nonce() + 1);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_confirm_cancel(move || {
+            let ui = weak.unwrap();
+            *app.pending.lock().unwrap() = None;
+            ui.set_confirm_open(false);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_confirm_accept(move || {
+            let ui = weak.unwrap();
+            ui.set_confirm_open(false);
+            let Some(what) = app.pending.lock().unwrap().take() else { return };
+            run_pending(&ui, &app, what);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_delete_playtime(move || {
+            let ui = weak.unwrap();
+            ask(
+                &ui,
+                &app,
+                Pending::DeletePlaytime,
+                "Delete playtime history?",
+                "Every recorded session is removed, for you and for your friends, \
+                 and the graph starts from nothing. Roblox does not keep this \
+                 history, so it cannot be recovered.",
+                "Delete",
+            );
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_delete_cache(move || {
+            let ui = weak.unwrap();
+            ask(
+                &ui,
+                &app,
+                Pending::DeleteCache,
+                "Clear cached data?",
+                "Thumbnails, resolved usernames and the FastFlag list are \
+                 discarded. They rebuild as you browse, so the app may feel \
+                 slower for a minute.",
+                "Clear",
+            );
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_delete_everything(move || {
+            let ui = weak.unwrap();
+            ask(
+                &ui,
+                &app,
+                Pending::DeleteEverything,
+                "Delete all data?",
+                "Every account and saved login, all history and playtime, your \
+                 macros and every setting. RoJoin returns to a fresh install and \
+                 you will need to sign in again. This cannot be undone.",
+                "Delete everything",
+            );
+        });
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_unhide_recent(move |id| {
+            let ui = weak.unwrap();
+            if let Ok(universe) = id.parse::<i64>() {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.unhide_recent(universe);
+                let _ = cfg.save();
+                drop(cfg);
+                render_settings(&ui, &app);
+                load_home(&ui, &app, &bridge2, &imgs2);
+            }
+        });
+    }
+    {
+        let app = app.clone();
+        let bridge2 = bridge.clone();
+        let imgs2 = imgs.clone();
+        let weak = ui.as_weak();
+        ui.on_clear_hidden_recent(move || {
+            let ui = weak.unwrap();
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.clear_hidden_recent();
+                let _ = cfg.save();
+            }
+            render_settings(&ui, &app);
+            load_home(&ui, &app, &bridge2, &imgs2);
         });
     }
     {
@@ -3517,6 +3686,23 @@ fn render_settings(ui: &MainWindow, app: &Arc<App>) {
     // Read straight off the guard this function already holds — calling
     // render_graph from here would deadlock on the same mutex.
     ui.set_show_graph(cfg.settings.show_playtime_graph);
+
+    ui.set_hidden_recent(ad::model(
+        cfg.hidden_recent()
+            .iter()
+            .map(|h| DetailItem {
+                id: h.universe_id.to_string().into(),
+                name: if h.name.trim().is_empty() {
+                    "Unknown game".into()
+                } else {
+                    h.name.clone().into()
+                },
+                subtitle: Default::default(),
+                thumb: slint::Image::default(),
+                kind: 0,
+            })
+            .collect(),
+    ));
     ui.set_track_friend_playtime(cfg.settings.track_friend_playtime);
     ui.set_retention_choice(match cfg.settings.playtime_retention_days {
         30 => 0,
@@ -3831,6 +4017,103 @@ fn render_profile_stats(ui: &MainWindow, app: &Arc<App>, user_id: i64) {
         })
         .collect();
     ui.set_profile_recent_sessions(ad::model(recent));
+}
+
+/// Raise the confirmation dialog for a destructive action.
+///
+/// Honours the `confirm_destructive` setting: with it off the action runs
+/// straight away, which is what that toggle was always supposed to mean.
+fn ask(ui: &MainWindow, app: &Arc<App>, what: Pending, title: &str, body: &str, action: &str) {
+    if !app.config.lock().unwrap().settings.confirm_destructive {
+        run_pending(ui, app, what);
+        return;
+    }
+
+    *app.pending.lock().unwrap() = Some(what);
+    ui.set_confirm_title(title.into());
+    ui.set_confirm_body(body.into());
+    ui.set_confirm_action(action.into());
+    ui.set_confirm_danger(true);
+    ui.set_confirm_open(true);
+}
+
+/// Carry out a confirmed action.
+fn run_pending(ui: &MainWindow, app: &Arc<App>, what: Pending) {
+    match what {
+        Pending::RemoveAccount(id) => {
+            secrets::delete(&id);
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.remove_account(&id);
+                let _ = cfg.save();
+            }
+            render_settings(ui, app);
+            ui.set_accounts_count(app.config.lock().unwrap().accounts.len() as i32);
+            ui.set_toast_text("Account removed".into());
+            ui.set_toast_nonce(ui.get_toast_nonce() + 1);
+        }
+
+        Pending::DeletePlaytime => {
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.delete_all_playtime();
+                let _ = cfg.save();
+            }
+            render_graph(ui, app);
+            render_library(ui, app);
+            ui.set_toast_text("Playtime history deleted".into());
+            ui.set_toast_nonce(ui.get_toast_nonce() + 1);
+        }
+
+        Pending::DeleteCache => {
+            // The thumbnail cache is memory-only, so "clearing the cache" means
+            // the in-memory images plus the two caches that do sit on disk: the
+            // resolved-username table and the FastFlag catalogue. Both rebuild
+            // themselves on demand.
+            if let Some(imgs) = app.imgs.lock().unwrap().clone() {
+                imgs.clear();
+            }
+            app.names.lock().unwrap().users.clear();
+            let _ = std::fs::remove_file(rojoin_store::config_dir().join("names.json"));
+            let _ = std::fs::remove_file(rojoin_store::config_dir().join("fflag-catalog.json"));
+            app.flag_catalog.lock().unwrap().clear();
+            let _ = std::fs::remove_dir_all(rojoin_store::cache_dir());
+
+            ui.set_toast_text("Cached data cleared".into());
+            ui.set_toast_nonce(ui.get_toast_nonce() + 1);
+        }
+
+        Pending::DeleteEverything => {
+            // Cookies live in the keyring, not in config.json, so they have to
+            // be revoked one by one before the account list is thrown away.
+            let ids: Vec<String> = {
+                let cfg = app.config.lock().unwrap();
+                cfg.accounts.iter().map(|a| a.id.clone()).collect()
+            };
+            for id in ids {
+                secrets::delete(&id);
+            }
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.delete_everything();
+                let _ = cfg.save();
+            }
+            let _ = std::fs::remove_dir_all(rojoin_store::cache_dir());
+            let _ = std::fs::remove_file(rojoin_store::config_dir().join("names.json"));
+            let _ = std::fs::remove_file(rojoin_store::config_dir().join("fflag-catalog.json"));
+            if let Some(imgs) = app.imgs.lock().unwrap().clone() {
+                imgs.clear();
+            }
+
+            // Back to the sign-in screen: there is no session left to show.
+            clear_account_view(ui);
+            ui.set_signed_in(false);
+            ui.set_signin_phase(SignInPhase::Idle);
+            ui.set_account_name(Default::default());
+            render_settings(ui, app);
+            render_graph(ui, app);
+        }
+    }
 }
 
 fn render_graph(ui: &MainWindow, app: &Arc<App>) {

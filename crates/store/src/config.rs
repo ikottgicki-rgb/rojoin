@@ -76,6 +76,13 @@ pub struct AccountData {
     /// Sober's config derived state rather than the source of truth.
     #[serde(default)]
     pub fflags: HashMap<String, String>,
+    /// Games removed from the recently-played row by hand.
+    ///
+    /// Needed because that row is half ours and half Roblox's: deleting our own
+    /// history entry is not enough, since the platform's "Continue" list would
+    /// put the game straight back. Keyed by universe id.
+    #[serde(default)]
+    pub hidden_recent: Vec<HiddenGame>,
     /// Observed play sessions for this account, oldest first.
     ///
     /// Kept as individual sessions rather than a running total so the graph can
@@ -89,6 +96,18 @@ pub struct AccountData {
     /// minute is what got the account throttled in v2.
     #[serde(default)]
     pub friend_sessions: HashMap<String, Vec<crate::playtime::PlaySession>>,
+}
+
+/// A game the user removed from the recently-played row.
+///
+/// The name is stored beside the id so Settings can list what was hidden
+/// without a network round trip per row.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HiddenGame {
+    pub universe_id: i64,
+    pub root_place_id: i64,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -292,6 +311,61 @@ impl Config {
         entry.launches += 1;
     }
 
+    /// Drop a game from the recently-played row for good.
+    ///
+    /// Removes our own history entry *and* remembers the universe, so the half
+    /// of the row that comes from Roblox cannot reinstate it.
+    pub fn hide_recent(&mut self, place_id: i64, universe_id: i64, name: &str) {
+        let data = self.data_mut();
+        data.history.remove(&place_id.to_string());
+        if universe_id == 0 {
+            return;
+        }
+        if data.hidden_recent.iter().any(|h| h.universe_id == universe_id) {
+            return;
+        }
+        data.hidden_recent.push(HiddenGame {
+            universe_id,
+            root_place_id: place_id,
+            name: name.to_string(),
+        });
+    }
+
+    pub fn is_recent_hidden(&self, universe_id: i64) -> bool {
+        self.data()
+            .map(|d| d.hidden_recent.iter().any(|h| h.universe_id == universe_id))
+            .unwrap_or(false)
+    }
+
+    pub fn hidden_recent(&self) -> &[HiddenGame] {
+        self.data().map(|d| d.hidden_recent.as_slice()).unwrap_or(&[])
+    }
+
+    /// Let one hidden game back into the row.
+    pub fn unhide_recent(&mut self, universe_id: i64) {
+        self.data_mut().hidden_recent.retain(|h| h.universe_id != universe_id);
+    }
+
+    /// Let hidden games come back.
+    pub fn clear_hidden_recent(&mut self) {
+        self.data_mut().hidden_recent.clear();
+    }
+
+    /// Forget all play sessions, for this account and every other.
+    pub fn delete_all_playtime(&mut self) {
+        for data in self.account_data.values_mut() {
+            data.sessions.clear();
+            data.friend_sessions.clear();
+        }
+    }
+
+    /// Forget everything: accounts, history, settings. Cookies are not in this
+    /// file, so the caller has to clear those separately.
+    pub fn delete_everything(&mut self) {
+        let version = self.version;
+        *self = Config { version, ..Config::default() };
+    }
+
     /// History newest-first: `(place_id, universe_id)`.
     ///
     /// This is the only *accurate* recency we have. Roblox's own "Continue" row
@@ -306,6 +380,7 @@ impl Config {
         items
             .iter()
             .filter(|h| h.last_played > 0)
+            .filter(|h| !data.hidden_recent.iter().any(|x| x.universe_id == h.universe_id))
             .filter_map(|h| h.place_id.parse::<i64>().ok().map(|p| (p, h.universe_id)))
             .take(limit)
             .collect()
@@ -979,5 +1054,110 @@ mod recency_tests {
         let mut c = cfg();
         c.observe_session(7, 70, "Watched", 5_000, 180);
         assert!(c.recent_launches(10).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod hidden_recent_tests {
+    use super::*;
+
+    fn cfg() -> Config {
+        let mut c = Config::default();
+        c.active_account = Some("1".into());
+        c
+    }
+
+    #[test]
+    fn hiding_drops_our_history_and_blocks_the_platform_half() {
+        let mut c = cfg();
+        c.record_launch("100", 10, "Game", 1_000);
+        assert_eq!(c.recent_launches(10).len(), 1);
+
+        c.hide_recent(100, 10, "Game");
+        assert!(c.recent_launches(10).is_empty(), "our own entry is gone");
+        assert!(c.is_recent_hidden(10), "and Roblox cannot put it back");
+    }
+
+    #[test]
+    fn a_hidden_game_stays_hidden_after_being_played_again() {
+        // The whole point: removal is permanent until undone in Settings, so a
+        // later launch must not quietly reinstate it.
+        let mut c = cfg();
+        c.hide_recent(100, 10, "Game");
+        c.record_launch("100", 10, "Game", 2_000);
+        assert!(c.recent_launches(10).is_empty());
+    }
+
+    #[test]
+    fn unhiding_brings_it_back() {
+        let mut c = cfg();
+        c.record_launch("100", 10, "Game", 1_000);
+        c.hide_recent(100, 10, "Game");
+        c.unhide_recent(10);
+        assert!(!c.is_recent_hidden(10));
+
+        c.record_launch("100", 10, "Game", 2_000);
+        assert_eq!(c.recent_launches(10).len(), 1);
+    }
+
+    #[test]
+    fn settings_can_list_what_was_hidden() {
+        let mut c = cfg();
+        c.hide_recent(100, 10, "Jailbreak");
+        c.hide_recent(200, 20, "Doors");
+        let names: Vec<&str> = c.hidden_recent().iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(names, vec!["Jailbreak", "Doors"]);
+    }
+
+    #[test]
+    fn hiding_twice_does_not_duplicate_the_row() {
+        let mut c = cfg();
+        c.hide_recent(100, 10, "Game");
+        c.hide_recent(100, 10, "Game");
+        assert_eq!(c.hidden_recent().len(), 1);
+    }
+
+    #[test]
+    fn a_game_with_no_known_universe_is_removed_but_cannot_be_blocked() {
+        let mut c = cfg();
+        c.record_launch("100", 0, "Legacy", 1_000);
+        c.hide_recent(100, 0, "Legacy");
+        assert!(c.recent_launches(10).is_empty());
+        assert!(c.hidden_recent().is_empty(), "nothing to key a block on");
+    }
+
+    #[test]
+    fn clearing_releases_everything() {
+        let mut c = cfg();
+        c.hide_recent(100, 10, "A");
+        c.hide_recent(200, 20, "B");
+        c.clear_hidden_recent();
+        assert!(c.hidden_recent().is_empty());
+    }
+
+    #[test]
+    fn deleting_playtime_leaves_accounts_alone() {
+        let mut c = cfg();
+        c.observe_session(7, 70, "Game", 1_000, 180);
+        c.observe_friend_session("42", 7, 70, "Game", 1_000, 180);
+        c.upsert_account(Account { id: "1".into(), ..Default::default() });
+
+        c.delete_all_playtime();
+        assert!(c.sessions().is_empty());
+        assert!(c.friend_sessions("42").is_empty());
+        assert_eq!(c.accounts.len(), 1, "accounts survive");
+    }
+
+    #[test]
+    fn deleting_everything_keeps_the_schema_version() {
+        let mut c = cfg();
+        c.upsert_account(Account { id: "1".into(), ..Default::default() });
+        c.record_launch("100", 10, "Game", 1_000);
+
+        c.delete_everything();
+        assert!(c.accounts.is_empty());
+        assert!(c.account_data.is_empty());
+        assert!(c.active_account.is_none());
+        assert_eq!(c.version, SCHEMA_VERSION, "not reset to 0");
     }
 }

@@ -3,6 +3,10 @@ import { Thumb, Avatar, MetaStat, Skeleton, EmptyState } from "components.slint"
 import { GameTile, DetailItem } from "types.slint";
 
 export component GameCard inherits Rectangle {
+    /// Show the remove-from-recent button. Only the recently-played row does:
+    /// nowhere else has anything to remove the tile *from*.
+    in property <bool> removable: false;
+    callback remove_clicked();
     in property <GameTile> game;
     in property <bool> show_play: true;
     callback clicked();
@@ -85,6 +89,31 @@ export component GameCard inherits Rectangle {
                     clicked => { root.fav_clicked(); }
                 }
             }
+
+            // Sits left of the star, and only appears on hover: a permanent
+            // delete button on every tile invites the mis-click it is hardest to
+            // undo.
+            if root.removable: Rectangle {
+                x: parent.width - self.width - Space.xs - 26px - Space.xxs;
+                y: Space.xs;
+                width: 26px;
+                height: 26px;
+                background: cardrm.has-hover ? Theme.danger : #00000099;
+                border-radius: Theme.radius;
+                opacity: ta.has-hover || cardrm.has-hover ? 1.0 : 0.0;
+                animate opacity, background { duration: Motion.fast; easing: Motion.ease; }
+                Text {
+                    text: "🗑";
+                    color: #FFFFFF;
+                    font-size: Type.small;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+                cardrm := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.remove_clicked(); }
+                }
+            }
         }
 
         VerticalLayout {
@@ -130,6 +159,8 @@ export component GameGrid inherits Rectangle {
     callback play(string);
     callback favorite(string);
     callback context_menu(string, length, length);
+    in property <bool> removable: false;
+    callback remove(string);
 
     property <int> cols: Math.max(1, Math.floor((self.width + Layout.tile_gap) / (root.tile_min + Layout.tile_gap)));
     property <length> cell_w: (self.width - (root.cols - 1) * Layout.tile_gap) / root.cols;
@@ -164,6 +195,8 @@ export component GameGrid inherits Rectangle {
             play => { root.play(g.id); }
             fav_clicked => { root.favorite(g.universe_id); }
             context_menu(mx, my) => { root.context_menu(g.id, mx, my); }
+            removable: root.removable;
+            remove_clicked => { root.remove(g.universe_id); }
         }
     }
 }

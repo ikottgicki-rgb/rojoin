@@ -201,6 +201,13 @@ export component SettingsScreen inherits Rectangle {
     callback set_show_playtime_graph(bool);
     callback set_track_friend_playtime(bool);
     callback set_retention_choice(int);
+    /// Games removed from the recently-played row: id, then name.
+    in property <[DetailItem]> hidden_recent;
+    callback unhide_recent(string);
+    callback clear_hidden_recent();
+    callback delete_playtime();
+    callback delete_cache();
+    callback delete_everything();
     callback clear_caches();
     callback toggle_home_section(int);
 
@@ -286,15 +293,19 @@ export component SettingsScreen inherits Rectangle {
                             }
                             if !a.active: VerticalLayout {
                                 alignment: center;
+                                // Remove first, Switch last, so Switch sits in
+                                // the same right-hand column as Add below it
+                                // rather than being pushed left of a smaller
+                                // button.
                                 HorizontalLayout {
                                     spacing: Space.xs;
-                                    Btn {
-                                        label: "Switch";
-                                        clicked => { root.switch_account(a.id); }
-                                    }
                                     IconBtn {
                                         glyph: "×";
                                         clicked => { root.remove_account(a.id); }
+                                    }
+                                    Btn {
+                                        label: "Switch";
+                                        clicked => { root.switch_account(a.id); }
                                     }
                                 }
                             }
@@ -343,6 +354,52 @@ export component SettingsScreen inherits Rectangle {
                                 options: ["30 days", "90 days", "1 year", "Unlimited"];
                                 current: root.retention_choice;
                                 changed(i) => { root.set_retention_choice(i); }
+                            }
+                        }
+                    }
+                }
+
+                // Deliberately high in the page: something removed from Home is
+                // only recoverable here, so it should not be a hunt.
+                if root.hidden_recent.length > 0: Card {
+                    title: "HIDDEN FROM RECENT";
+                    Row {
+                        title: "Removed games";
+                        hint: "These stay off Home until you put them back.";
+                        VerticalLayout {
+                            alignment: center;
+                            Btn {
+                                label: "Show all again";
+                                clicked => { root.clear_hidden_recent(); }
+                            }
+                        }
+                    }
+                    for h in root.hidden_recent: Rectangle {
+                        height: 40px;
+                        background: hta.has-hover ? Theme.bg_2 : transparent;
+                        animate background { duration: Motion.instant; easing: Motion.ease; }
+                        hta := TouchArea { }
+
+                        HorizontalLayout {
+                            padding-left: Space.lg;
+                            padding-right: Space.lg;
+                            spacing: Space.sm;
+                            Text {
+                                text: h.name;
+                                color: Theme.text_dim;
+                                font-size: Type.small;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                wrap: no-wrap;
+                                horizontal-stretch: 1;
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Btn {
+                                    label: "Restore";
+                                    pad_h: Space.md;
+                                    clicked => { root.unhide_recent(h.id); }
+                                }
                             }
                         }
                     }
@@ -767,6 +824,70 @@ export component SettingsScreen inherits Rectangle {
                                 if !root.checking_update: Btn {
                                     label: "Check for updates";
                                     clicked => { root.check_update(); }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Last on the page on purpose. Everything here is irreversible,
+                // so it should take a deliberate scroll to reach rather than
+                // sitting next to a toggle someone is idly flipping.
+                Rectangle {
+                    background: Theme.bg_1;
+                    border-radius: Theme.radius;
+                    border-width: Theme.hairline;
+                    border-color: Theme.danger.with-alpha(0.45);
+                    height: dz.preferred-height;
+
+                    dz := VerticalLayout {
+                        Rectangle {
+                            height: 38px;
+                            Text {
+                                x: Space.lg;
+                                text: "DANGER ZONE";
+                                color: Theme.danger;
+                                font-size: Type.micro;
+                                font-weight: Type.w_bold;
+                                letter-spacing: 0.8px;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Rectangle { height: Theme.hairline; background: Theme.danger.with-alpha(0.3); }
+
+                        Row {
+                            title: "Delete playtime history";
+                            hint: "Every recorded session, yours and your friends'. The graph starts over.";
+                            VerticalLayout {
+                                alignment: center;
+                                Btn {
+                                    label: "Delete";
+                                    danger: true;
+                                    clicked => { root.delete_playtime(); }
+                                }
+                            }
+                        }
+                        Row {
+                            title: "Clear cached data";
+                            hint: "Thumbnails, resolved usernames and the FastFlag list. All rebuild as you browse.";
+                            VerticalLayout {
+                                alignment: center;
+                                Btn {
+                                    label: "Clear";
+                                    danger: true;
+                                    clicked => { root.delete_cache(); }
+                                }
+                            }
+                        }
+                        Row {
+                            title: "Delete all data";
+                            hint: "Accounts, sign-ins, history, macros and every setting. RoJoin returns to a fresh install.";
+                            VerticalLayout {
+                                alignment: center;
+                                Btn {
+                                    label: "Delete everything";
+                                    danger: true;
+                                    clicked => { root.delete_everything(); }
                                 }
                             }
                         }
