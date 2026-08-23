@@ -200,6 +200,20 @@ pub struct Settings {
     /// Sample pinned friends' playtime alongside your own. On by default.
     #[serde(default = "yes")]
     pub track_friend_playtime: bool,
+    /// Closing the window hides to the tray instead of quitting, so playtime
+    /// tracking survives. On by default.
+    #[serde(default = "yes")]
+    pub close_to_tray: bool,
+    /// Start with the session. On by default.
+    #[serde(default = "yes")]
+    pub autostart: bool,
+    /// Has the autostart default been acted on yet?
+    ///
+    /// "On by default" has to mean the entry gets written once, without also
+    /// meaning it gets rewritten every launch — otherwise deleting it by hand
+    /// would be undone on the next start.
+    #[serde(default)]
+    pub autostart_applied: bool,
 }
 
 /// serde needs a function, not a literal, for a defaulted `true`.
@@ -236,6 +250,9 @@ impl Default for Settings {
             playtime_retention_days: 0,
             show_playtime_graph: true,
             track_friend_playtime: true,
+            close_to_tray: true,
+            autostart: true,
+            autostart_applied: false,
         }
     }
 }

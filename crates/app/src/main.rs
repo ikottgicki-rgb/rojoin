@@ -10,6 +10,8 @@ use slint::ComponentHandle;
 
 slint::include_modules!();
 
+mod autostart;
+mod tray;
 mod adapters;
 mod bridge;
 #[cfg(debug_assertions)]
@@ -289,7 +291,75 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    ui.run()?;
+    // Honour the autostart default exactly once. Doing it every launch would
+    // resurrect an entry the user deleted on purpose.
+    {
+        let mut cfg = app.config.lock().unwrap();
+        if !cfg.settings.autostart_applied {
+            let want = cfg.settings.autostart;
+            match autostart::set(want) {
+                Ok(()) => tracing::info!(enabled = want, "applied the autostart default"),
+                Err(e) => tracing::warn!(error = %e, "could not apply the autostart default"),
+            }
+            cfg.settings.autostart_applied = true;
+            let _ = cfg.save();
+        }
+    }
+
+    // The tray, and with it close-to-tray. Attempted regardless of the setting
+    // so Settings can tell the user whether it is even possible here.
+    let tray = {
+        let weak = ui.as_weak();
+        tray::spawn(move |action| {
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    match action {
+                        tray::Action::Show => {
+                            let _ = ui.show();
+                            ui.window().set_minimized(false);
+                        }
+                        tray::Action::Quit => {
+                            let _ = slint::quit_event_loop();
+                        }
+                    }
+                }
+            });
+        })
+    };
+    ui.set_tray_available(tray.is_some());
+
+    {
+        let app2 = app.clone();
+        let has_tray = tray.is_some();
+        let weak = ui.as_weak();
+        ui.window().on_close_requested(move || {
+            let keep = has_tray
+                && app2.config.lock().unwrap().settings.close_to_tray;
+            if !keep {
+                return slint::CloseRequestResponse::HideWindow;
+            }
+            // Hide rather than quit, and leave the event loop running so the
+            // playtime poll survives — that is the whole point of the setting.
+            if let Some(ui) = weak.upgrade() {
+                let _ = ui.hide();
+            }
+            slint::CloseRequestResponse::KeepWindowShown
+        });
+    }
+
+    // Autostart launches with --hidden: the point is to keep tracking, not to
+    // put a window in front of somebody who just logged in. Only honoured when
+    // there is a tray to get back from.
+    if autostart::started_hidden() && tray.is_some() {
+        tracing::info!("started hidden; running in the tray");
+        let _ = ui.hide();
+    }
+
+    // Hiding the last window would end `run()`, so the loop is driven directly.
+    ui.show()?;
+    slint::run_event_loop_until_quit()?;
+    drop(tray);
     Ok(())
 }
 
@@ -3409,6 +3479,30 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
     {
         let app = app.clone();
         let weak = ui.as_weak();
+        ui.on_set_autostart(move |v| {
+            let ui = weak.unwrap();
+            // The entry on disk is the truth here, so a failure to write it must
+            // not leave the toggle claiming otherwise.
+            match autostart::set(v) {
+                Ok(()) => {
+                    let mut cfg = app.config.lock().unwrap();
+                    cfg.settings.autostart = v;
+                    let _ = cfg.save();
+                    drop(cfg);
+                    render_settings(&ui, &app);
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "could not change autostart");
+                    ui.set_toast_text(format!("Could not change autostart: {e}").into());
+                    ui.set_toast_nonce(ui.get_toast_nonce() + 1);
+                    render_settings(&ui, &app);
+                }
+            }
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
         ui.on_sort_group_members(move || {
             render_group_members(&weak.unwrap(), &app);
         });
@@ -3570,6 +3664,9 @@ fn wire_more_settings(ui: &MainWindow, app: &Arc<App>) {
     });
     setting!(on_set_verbose_logging, bool, |cfg, v| { cfg.settings.verbose_logging = v; });
     setting!(on_set_auto_update, bool, |cfg, v| { cfg.settings.auto_update = v; });
+    setting!(on_set_close_to_tray, bool, |cfg, v| {
+        cfg.settings.close_to_tray = v;
+    });
     setting!(on_set_track_friend_playtime, bool, |cfg, v| {
         cfg.settings.track_friend_playtime = v;
     });
@@ -3716,6 +3813,10 @@ fn render_settings(ui: &MainWindow, app: &Arc<App>) {
             .collect(),
     ));
     ui.set_track_friend_playtime(cfg.settings.track_friend_playtime);
+    ui.set_close_to_tray(cfg.settings.close_to_tray);
+    // Read from the system rather than the config: an entry deleted by hand, or
+    // a failed write, should show as off instead of the app insisting it is on.
+    ui.set_autostart(autostart::is_enabled());
     ui.set_retention_choice(match cfg.settings.playtime_retention_days {
         30 => 0,
         365 => 2,

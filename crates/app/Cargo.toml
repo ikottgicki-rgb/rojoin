@@ -27,12 +27,19 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 webbrowser = "1"
+# The tray icon itself is cross-platform: Shell_NotifyIcon on Windows, the
+# StatusNotifierItem protocol on Linux.
+tray-icon = "0.19"
 
 # Cookies live in the OS keyring, never in config.json. The backend is
 # cfg-gated so the Windows cross-build never tries to link secret-service.
 [target.'cfg(unix)'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }
-notify-rust = "4" 
+notify-rust = "4"
+# tray-icon needs a GTK main loop on Linux, and the gtk crate version has to
+# match the one it was built against. Unix-only, so the Windows cross-build
+# never sees it.
+gtk = "0.18"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }

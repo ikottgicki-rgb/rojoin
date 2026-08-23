@@ -104,6 +104,11 @@ export component MainWindow inherits Window {
     in property <string> group_member_total;
     in-out property <int> group_member_sort: 0;
     callback sort_group_members();
+    in property <bool> close_to_tray: true;
+    in property <bool> autostart: true;
+    in property <bool> tray_available: true;
+    callback set_close_to_tray(bool);
+    callback set_autostart(bool);
     in property <bool> profile_is_me: false;
     in property <bool> saving_bio: false;
     in property <string> bio_status;
@@ -728,6 +733,11 @@ export component MainWindow inherits Window {
                             set_show_playtime_graph(v) => { root.set_show_playtime_graph(v); }
                             set_track_friend_playtime(v) => { root.set_track_friend_playtime(v); }
                             set_retention_choice(i) => { root.set_retention_choice(i); }
+                            close_to_tray: root.close_to_tray;
+                            autostart: root.autostart;
+                            tray_available: root.tray_available;
+                            set_close_to_tray(v) => { root.set_close_to_tray(v); }
+                            set_autostart(v) => { root.set_autostart(v); }
                             hidden_recent: root.hidden_recent;
                             unhide_recent(id) => { root.unhide_recent(id); }
                             clear_hidden_recent => { root.clear_hidden_recent(); }

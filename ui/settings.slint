@@ -201,6 +201,13 @@ export component SettingsScreen inherits Rectangle {
     callback set_show_playtime_graph(bool);
     callback set_track_friend_playtime(bool);
     callback set_retention_choice(int);
+    in property <bool> close_to_tray: true;
+    in property <bool> autostart: true;
+    /// False when no system tray exists, which disables close-to-tray rather
+    /// than letting the window vanish with no way back.
+    in property <bool> tray_available: true;
+    callback set_close_to_tray(bool);
+    callback set_autostart(bool);
     /// Games removed from the recently-played row: id, then name.
     in property <[DetailItem]> hidden_recent;
     callback unhide_recent(string);
@@ -342,6 +349,29 @@ export component SettingsScreen inherits Rectangle {
                             Toggle {
                                 on: root.track_friend_playtime;
                                 toggled => { root.set_track_friend_playtime(!root.track_friend_playtime); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Keep running when closed";
+                        hint: "Hides to the tray instead of quitting, so playtime keeps being recorded.";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.close_to_tray;
+                                enabled: root.tray_available;
+                                toggled => { root.set_close_to_tray(!root.close_to_tray); }
+                            }
+                        }
+                    }
+                    Row {
+                        title: "Start with my session";
+                        hint: "Launches hidden when you log in, so a session is never missed.";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: root.autostart;
+                                toggled => { root.set_autostart(!root.autostart); }
                             }
                         }
                     }
