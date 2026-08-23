@@ -2,5 +2,8 @@
 /dist/AppDir
 /dist/*.AppImage
 /dist/windows
+# The bare exe is a release asset, not source — 38 MB of it does not belong
+# in a public repo's history.
+/dist/*.exe
 *.zip
 .DS_Store
