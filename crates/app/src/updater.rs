@@ -48,12 +48,6 @@ impl Status {
             }
         }
     }
-
-    /// Is there something here to install? Only an available update qualifies —
-    /// "up to date" and "not configured" are both dead ends.
-    pub fn can_install(&self) -> bool {
-        matches!(self, Status::Available { .. })
-    }
 }
 
 /// The asset this platform should download.
@@ -276,17 +270,18 @@ mod tests {
     fn an_unconfigured_build_says_so_instead_of_failing() {
         let s = Status::NotConfigured;
         assert!(s.message().contains("not set up"));
-        assert!(!s.can_install());
+        assert!(!matches!(s, Status::Available { .. }));
     }
 
     #[test]
-    fn only_an_available_update_can_be_installed() {
-        assert!(!Status::UpToDate.can_install());
-        assert!(Status::Available {
+    fn only_an_available_update_carries_somewhere_to_download_from() {
+        assert!(!matches!(Status::UpToDate, Status::Available { .. }));
+        let s = Status::Available {
             version: "9.9.9".into(),
-            url: "https://example/x".into()
-        }
-        .can_install());
+            url: "https://example/x".into(),
+        };
+        let Status::Available { url, .. } = &s else { panic!("expected Available") };
+        assert!(url.starts_with("https://"));
     }
 
     #[test]

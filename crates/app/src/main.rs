@@ -402,6 +402,12 @@ fn restore_session(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: 
     let imgs = imgs.clone();
     let weak = ui.as_weak();
 
+    // The retries below can span twenty seconds, which is long enough for the
+    // user to have signed in or switched account by hand. Without this guard a
+    // late success would drop the *previous* account's session on top of the
+    // one they chose.
+    let gen = SESSION_GEN.load(Ordering::SeqCst);
+
     bridge.spawn(async move {
         client.set_cookie(Some(cookie)).await;
 
@@ -415,9 +421,16 @@ fn restore_session(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: 
             if *wait > 0 {
                 tokio::time::sleep(std::time::Duration::from_secs(*wait)).await;
             }
+            if gen != SESSION_GEN.load(Ordering::SeqCst) {
+                tracing::debug!("session changed while restoring; dropping this attempt");
+                return;
+            }
 
             match users::authenticated(&client).await {
                 Ok(me) => {
+                    if gen != SESSION_GEN.load(Ordering::SeqCst) {
+                        return;
+                    }
                     let app = app.clone();
                     let bridge2 = bridge2.clone();
                     let imgs = imgs.clone();
@@ -431,6 +444,9 @@ fn restore_session(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: 
 
                 // The one failure that really is a signed-out account.
                 Err(rojoin_roblox::Error::Expired) => {
+                    if gen != SESSION_GEN.load(Ordering::SeqCst) {
+                        return;
+                    }
                     tracing::info!("stored session is no longer valid");
                     let _ = weak.upgrade_in_event_loop(|ui| {
                         ui.set_signed_in(false);
@@ -454,6 +470,9 @@ fn restore_session(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: 
 
         // Out of retries. The cookie is untouched and still stored, so say so —
         // this is a connection problem, not a lost login.
+        if gen != SESSION_GEN.load(Ordering::SeqCst) {
+            return;
+        }
         let detail = last.map(|e| e.to_string()).unwrap_or_default();
         let _ = weak.upgrade_in_event_loop(move |ui| {
             ui.set_signed_in(false);
@@ -3302,7 +3321,14 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
         ui.on_switch_account(move |id| {
             let ui = weak.unwrap();
             let Some(cookie) = secrets::load(id.as_str()) else {
+                // Returning quietly here is why Switch could look dead: the
+                // click was handled, found no saved login, and said nothing.
                 tracing::warn!(%id, "no stored cookie for that account");
+                ui.set_toast_text(
+                    "That account has no saved login any more. Remove it and add it again."
+                        .into(),
+                );
+                ui.set_toast_nonce(ui.get_toast_nonce() + 1);
                 return;
             };
 
@@ -4771,7 +4797,7 @@ fn favorited_ids(ui: &MainWindow) -> std::collections::HashSet<i64> {
 ///
 /// Nothing else fills that model, so without this both surfaces sit empty and
 /// the star on a tile has nothing to toggle against.
-fn load_favorites(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
+fn load_favorites(_ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Images) {
     let me = *app.me.lock().unwrap();
     if me == 0 {
         return;
@@ -5025,7 +5051,7 @@ fn run_search(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
 /// that rate-limits on its own schedule, and a throttle there should not cost
 /// the game results that already came back.
 fn search_people(
-    ui: &MainWindow,
+    _ui: &MainWindow,
     app: &Arc<App>,
     bridge: &Arc<Bridge>,
     imgs: &Images,

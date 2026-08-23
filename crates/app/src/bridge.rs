@@ -40,24 +40,6 @@ impl Bridge {
         &self.rt
     }
 
-    /// Run `op`, then `on_ok` on the UI thread. Errors are reported centrally.
-    pub fn call<T, F, Fut, G>(&self, op: F, on_ok: G)
-    where
-        T: Send + 'static,
-        F: FnOnce() -> Fut + Send + 'static,
-        Fut: Future<Output = rojoin_roblox::Result<T>> + Send,
-        G: FnOnce(MainWindow, T) + Send + 'static,
-    {
-        let ui = self.ui.clone();
-        self.rt.spawn(async move {
-            let result = op().await;
-            let _ = ui.upgrade_in_event_loop(move |handle| match result {
-                Ok(value) => on_ok(handle, value),
-                Err(e) => report(&handle, e),
-            });
-        });
-    }
-
     /// Run `op` and hand the whole `Result` to `on_done` on the UI thread.
     pub fn call_res<T, F, Fut, G>(&self, op: F, on_done: G)
     where

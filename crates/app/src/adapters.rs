@@ -320,7 +320,7 @@ pub fn friend_rows(
         .filter(|f| !pinned.contains(&f.id.to_string()))
         .collect();
 
-    let mut push_group = |rows: &mut Vec<crate::FriendRow>,
+    let push_group = |rows: &mut Vec<crate::FriendRow>,
                           label: &str,
                           keep: &dyn Fn(i32) -> bool,
                           collapsible: bool,

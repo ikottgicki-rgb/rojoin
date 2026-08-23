@@ -66,11 +66,7 @@ pub fn spawn(on_action: impl Fn(Action) + Send + 'static) -> Option<Tray> {
             gtk::main();
 
             #[cfg(windows)]
-            loop {
-                // No GTK on Windows; the icon is serviced by the process message
-                // pump, so this thread only has to not exit.
-                std::thread::sleep(std::time::Duration::from_secs(3600));
-            }
+            pump_win32_messages();
         })
         .ok()?;
 
@@ -135,6 +131,30 @@ fn build_icon(tx: mpsc::Sender<Action>) -> Option<Box<dyn std::any::Any>> {
     }));
 
     Some(Box::new(icon))
+}
+
+/// Service the tray icon's hidden window.
+///
+/// `tray-icon` creates its own window to receive shell notifications, and its
+/// messages have to be pumped on the thread that created it — the crate's own
+/// README is explicit that a win32 event loop is required. Sleeping here
+/// instead, which is what this did first, leaves the icon visible and completely
+/// inert: no clicks, no menu.
+#[cfg(windows)]
+fn pump_win32_messages() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, GetMessageW, TranslateMessage, MSG,
+    };
+
+    let mut msg: MSG = unsafe { std::mem::zeroed() };
+    // GetMessageW blocks until there is something to do and returns 0 on
+    // WM_QUIT, so this costs nothing while idle.
+    while unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) } > 0 {
+        unsafe {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
 }
 
 /// The icon, drawn rather than shipped as a file.

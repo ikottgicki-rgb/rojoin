@@ -4792,6 +4792,7 @@ dependencies = [
 name = "rojoin-launcher"
 version = "0.1.7"
 dependencies = [
+ "rojoin-macro",
  "rojoin-roblox",
  "serde_json",
  "thiserror 2.0.20",
@@ -4863,6 +4864,7 @@ dependencies = [
  "tracing-subscriber",
  "tray-icon",
  "webbrowser",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

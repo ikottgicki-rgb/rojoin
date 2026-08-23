@@ -129,10 +129,16 @@ pub fn launch_windows(req: &JoinRequest, ticket: &str, launch_time_ms: i64) -> R
 
 /// Is a game currently running? Drives the "close Roblox first" prompt before
 /// an account switch, and playtime tracking.
+///
+/// The Windows arm returned a flat `false`, which quietly made every caller
+/// behave as though no game could ever be running — no switch warning, and no
+/// way to tell a session had ended. The macro engine already had to find the
+/// Roblox process on both platforms to scope its hotkeys, so that is reused
+/// rather than written twice.
 pub fn game_running() -> bool {
     match detect() {
         Backend::Sober => sober::is_running(),
-        Backend::WindowsClient => false,
+        Backend::WindowsClient => !rojoin_macro::process::find_game_pids().is_empty(),
     }
 }
 
