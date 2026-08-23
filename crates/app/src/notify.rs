@@ -140,6 +140,13 @@ impl Watcher {
 
                 if p.user_id == me {
                     cfg.observe_session(universe, root, &p.location, now, gap);
+                    // Logged at info, not debug: without this there is no way to
+                    // tell whether tracking is working short of waiting for a bar
+                    // to appear on the graph.
+                    tracing::info!(
+                        game = if p.location.is_empty() { "hidden" } else { p.location.as_str() },
+                        "playtime: recorded you in a game"
+                    );
                 } else {
                     cfg.observe_friend_session(
                         &p.user_id.to_string(),
@@ -148,6 +155,11 @@ impl Watcher {
                         &p.location,
                         now,
                         gap,
+                    );
+                    tracing::info!(
+                        friend = p.user_id,
+                        game = if p.location.is_empty() { "hidden" } else { p.location.as_str() },
+                        "playtime: recorded a pinned friend in a game"
                     );
                 }
                 touched = true;
@@ -160,8 +172,8 @@ impl Watcher {
             }
         }
 
-        if touched {
-            tracing::debug!("recorded a playtime sample");
+        if !touched {
+            tracing::debug!("playtime: nobody tracked is in a game");
         }
     }
 

@@ -22,7 +22,7 @@ const BATCH: usize = 100;
 
 #[derive(Debug, Deserialize)]
 struct ThumbList {
-    #[serde(default = "Vec::new")]
+    #[serde(default, deserialize_with = "crate::null_vec")]
     data: Vec<Thumbnail>,
 }
 
@@ -30,13 +30,13 @@ struct ThumbList {
 #[serde(rename_all = "camelCase")]
 struct GameThumbGroup {
     universe_id: i64,
-    #[serde(default = "Vec::new")]
+    #[serde(default, deserialize_with = "crate::null_vec")]
     thumbnails: Vec<Thumbnail>,
 }
 
 #[derive(Debug, Deserialize)]
 struct GameThumbList {
-    #[serde(default = "Vec::new")]
+    #[serde(default, deserialize_with = "crate::null_vec")]
     data: Vec<GameThumbGroup>,
 }
 
@@ -162,7 +162,7 @@ pub async fn by_tokens(client: &Client, tokens: &[String]) -> Vec<Option<String>
     }
     #[derive(Deserialize)]
     struct Resp {
-        #[serde(default = "Vec::new")]
+        #[serde(default, deserialize_with = "crate::null_vec")]
         data: Vec<Item>,
     }
 

@@ -41,6 +41,26 @@ pub const USER_AGENT: &str = concat!("RoJoin/", env!("CARGO_PKG_VERSION"));
 /// (`Allowed values: 10, 25, 50, 100`), not a clamp. Asking for 12 therefore
 /// returns nothing at all, which from the caller's side is indistinguishable
 /// from "there are none". Every paged call goes through this.
+/// Deserialize a list that Roblox sometimes sends as `null` rather than `[]`.
+///
+/// `#[serde(default)]` does **not** cover this: it fills in a *missing* field,
+/// while an explicitly null one is still handed to `Vec` and rejected with
+/// "invalid type: null, expected a sequence". Roblox does send null for empty
+/// collections — an exhausted `recommendationList` on the home feed is one, and
+/// it took out the entire feed — so every list decodes through here.
+///
+/// Vec-specific on purpose: a fully generic version would need `T: Default`,
+/// which not every response type wants to implement just to be parsed.
+use serde::Deserialize as _;
+
+pub(crate) fn null_vec<'de, D, T>(d: D) -> std::result::Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(d)?.unwrap_or_default())
+}
+
 pub(crate) fn page_limit(requested: u32) -> u32 {
     match requested {
         0..=10 => 10,

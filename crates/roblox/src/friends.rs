@@ -22,7 +22,7 @@ const PRESENCE: &str = "https://presence.roblox.com/v1";
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct FindPage {
-    #[serde(default = "Vec::new")]
+    #[serde(default, deserialize_with = "crate::null_vec")]
     page_items: Vec<FindItem>,
     #[serde(default)]
     next_cursor: Option<String>,
@@ -149,7 +149,7 @@ pub struct Presence {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PresenceResponse {
-    #[serde(default = "Vec::new")]
+    #[serde(default, deserialize_with = "crate::null_vec")]
     user_presences: Vec<RawPresence>,
 }
 

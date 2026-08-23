@@ -169,7 +169,7 @@ pub async fn inventory_for_category(
 pub async fn outfits(client: &Client, user_id: i64, per_page: u32) -> Result<Vec<Outfit>> {
     #[derive(Deserialize)]
     struct Resp {
-        #[serde(default = "Vec::new")]
+        #[serde(default, deserialize_with = "crate::null_vec")]
         data: Vec<Outfit>,
     }
     let url = format!("{AVATAR}/v1/users/{user_id}/outfits?page=1&itemsPerPage={per_page}");
@@ -211,7 +211,7 @@ pub async fn set_wearing(client: &Client, asset_ids: &[i64]) -> Result<()> {
     #[derive(Deserialize, Default)]
     #[serde(rename_all = "camelCase", default)]
     struct WearResponse {
-        #[serde(default)]
+        #[serde(default, deserialize_with = "crate::null_vec")]
         invalid_asset_ids: Vec<i64>,
         success: bool,
     }

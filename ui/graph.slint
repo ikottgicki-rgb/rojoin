@@ -103,22 +103,33 @@ export component PlaytimeGraph inherits Rectangle {
             }
         }
 
+        // Worth being precise here rather than just saying "nothing played".
+        // Roblox does not hand out play history to a client — every endpoint
+        // for it is a 404 — so this chart can only ever show what RoJoin itself
+        // watched. Somebody with years of play will still see this on day one,
+        // and "no playtime recorded" on its own reads like lost data.
         if root.empty: Rectangle {
             vertical-stretch: 1;
             min-height: 120px;
             VerticalLayout {
                 alignment: center;
+                spacing: Space.xxs;
                 Text {
-                    text: "No playtime recorded yet";
+                    text: "Tracking starts now";
                     color: Theme.text_dim;
                     font-size: Type.body;
+                    font-weight: Type.w_medium;
                     horizontal-alignment: center;
                 }
                 Text {
-                    text: "RoJoin notes what you play while it is open. Come back after a session.";
+                    text: "Roblox does not share past play history, so this only counts "
+                          + "sessions RoJoin sees. Leave it running while you play and the "
+                          + "first bars appear within a minute or two.";
                     color: Theme.text_mute;
                     font-size: Type.caption;
                     horizontal-alignment: center;
+                    wrap: word-wrap;
+                    max-width: 460px;
                 }
             }
         }

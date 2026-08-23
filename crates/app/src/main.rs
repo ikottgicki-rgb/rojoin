@@ -4298,8 +4298,10 @@ fn load_home(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
     let imgs = imgs.clone();
     let gen = SESSION_GEN.load(Ordering::SeqCst);
 
+    let launched = app.config.lock().unwrap().recent_launches(12);
+
     bridge.call_res(
-        move || async move { fetch_home(&client).await },
+        move || async move { fetch_home(&client, launched).await },
         move |ui, result| {
             if gen != SESSION_GEN.load(Ordering::SeqCst) {
                 return;
@@ -4941,7 +4943,8 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
     {
         let mut cfg = app.config.lock().unwrap();
         let key = if req.root_place_id != 0 { req.root_place_id } else { req.place_id };
-        cfg.record_launch(&key.to_string(), &name, chrono::Utc::now().timestamp());
+        let universe = *app.current_universe.lock().unwrap();
+        cfg.record_launch(&key.to_string(), universe, &name, chrono::Utc::now().timestamp());
         let _ = cfg.save();
     }
     render_library(ui, app);
@@ -5063,14 +5066,61 @@ async fn fetch_by_places(client: &Client, place_ids: &[i64]) -> rojoin_roblox::R
     })
 }
 
-/// Recency comes from Roblox's own Continue sort rather than from anything
-/// RoJoin recorded, so a game played on a phone, from the website or through
-/// the official client shows up here too.
+/// Recently played, ordered by what we actually know.
 ///
-/// It also hands back universe ids directly, which retires the twelve
-/// sequential place-to-universe lookups the local history needed.
-async fn fetch_home(client: &Client) -> rojoin_roblox::Result<HomeLoad> {
-    let universes = discovery::recently_played(client, 12).await?;
+/// Two sources, and the order between them is the whole point:
+///
+///  * **What we launched.** Real timestamps, so this is the only *accurate*
+///    recency available, and it goes first.
+///  * **Roblox's "Continue" row.** Fills in sessions that never went through
+///    RoJoin — a phone, the website, the official client. It is emphatically
+///    *not* a recency list: it is ranked by Roblox's recommendation engine and
+///    happily surfaces something last played months ago, which is exactly what
+///    it does on their own home page. Using it for order was wrong; using it for
+///    coverage is right.
+///
+/// Anything already known locally is dropped from the platform's half, so a
+/// game does not appear twice with the wrong position.
+async fn fetch_home(
+    client: &Client,
+    launched: Vec<(i64, i64)>,
+) -> rojoin_roblox::Result<HomeLoad> {
+    let mut universes: Vec<i64> = Vec::new();
+
+    for (place, universe) in &launched {
+        // Entries recorded before the universe was stored need one lookup each.
+        // Only ever a handful, and each launch backfills its own.
+        let resolved = if *universe != 0 {
+            *universe
+        } else {
+            match games::universe_of(client, *place).await {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::debug!(place, error = %e, "could not resolve a history entry");
+                    continue;
+                }
+            }
+        };
+        if !universes.contains(&resolved) {
+            universes.push(resolved);
+        }
+    }
+
+    let ours = universes.len();
+    match discovery::recently_played(client, 12).await {
+        Ok(theirs) => {
+            for u in theirs {
+                if !universes.contains(&u) {
+                    universes.push(u);
+                }
+            }
+        }
+        // Our own history is still worth showing on its own.
+        Err(e) => tracing::warn!(error = %e, "could not read Roblox's continue row"),
+    }
+    universes.truncate(12);
+    tracing::debug!(ours, total = universes.len(), "home recency sources");
+
     if universes.is_empty() {
         return Ok(HomeLoad::default());
     }

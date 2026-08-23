@@ -28,6 +28,7 @@ const CONTINUE_TOPIC_ID: i64 = 100_000_003;
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 struct Feed {
+    #[serde(deserialize_with = "crate::null_vec")]
     sorts: Vec<Sort>,
 }
 
@@ -35,6 +36,9 @@ struct Feed {
 #[serde(rename_all = "camelCase", default)]
 struct Sort {
     topic_id: i64,
+    /// Null, not `[]`, when Roblox has nothing for a sort — which it does send,
+    /// and which took out the whole feed before this was tolerated.
+    #[serde(deserialize_with = "crate::null_vec")]
     recommendation_list: Vec<Recommendation>,
 }
 
@@ -153,6 +157,25 @@ mod tests {
     fn the_limit_is_respected() {
         let feed: Feed = serde_json::from_str(REAL).unwrap();
         assert_eq!(continue_universes(&feed, 2), vec![1359573625, 6371484684]);
+    }
+
+    /// The real shape that broke this: a trailing sort whose list is null.
+    #[test]
+    fn a_null_recommendation_list_does_not_take_out_the_feed() {
+        let body = r#"{"sorts":[
+            {"topic":"Continue","topicId":100000003,
+             "recommendationList":[{"contentType":"Game","contentId":42}]},
+            {"topic":"Recommended For You","topicId":100000000,
+             "recommendationList":null}
+        ]}"#;
+        let feed: Feed = serde_json::from_str(body).expect("null list must parse");
+        assert_eq!(continue_universes(&feed, 12), vec![42]);
+    }
+
+    #[test]
+    fn a_null_sorts_array_is_empty_not_an_error() {
+        let feed: Feed = serde_json::from_str(r#"{"sorts":null}"#).unwrap();
+        assert!(continue_universes(&feed, 12).is_empty());
     }
 
     #[test]

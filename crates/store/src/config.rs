@@ -95,6 +95,13 @@ pub struct AccountData {
 #[serde(default)]
 pub struct GameHistory {
     pub place_id: String,
+    /// Universe this place belongs to, captured at launch.
+    ///
+    /// Stored so the Home list never has to resolve place ids one request at a
+    /// time. `0` on entries recorded before this existed, which the caller
+    /// resolves lazily.
+    #[serde(default)]
+    pub universe_id: i64,
     pub name: String,
     /// Unix seconds.
     pub last_played: i64,
@@ -268,18 +275,40 @@ impl Config {
         self.active_account.clone()
     }
 
-    pub fn record_launch(&mut self, place_id: &str, name: &str, now: i64) {
+    pub fn record_launch(&mut self, place_id: &str, universe_id: i64, name: &str, now: i64) {
         let entry = self
             .data_mut()
             .history
             .entry(place_id.to_string())
             .or_default();
         entry.place_id = place_id.to_string();
+        if universe_id != 0 {
+            entry.universe_id = universe_id;
+        }
         if !name.is_empty() {
             entry.name = name.to_string();
         }
         entry.last_played = now;
         entry.launches += 1;
+    }
+
+    /// History newest-first: `(place_id, universe_id)`.
+    ///
+    /// This is the only *accurate* recency we have. Roblox's own "Continue" row
+    /// is ranked by their recommendation engine rather than by when you last
+    /// played — it surfaces games from months ago, exactly as it does on their
+    /// website — so anything we launched ourselves is ordered from here and the
+    /// platform's list only fills in what we never saw.
+    pub fn recent_launches(&self, limit: usize) -> Vec<(i64, i64)> {
+        let Some(data) = self.data() else { return Vec::new() };
+        let mut items: Vec<&GameHistory> = data.history.values().collect();
+        items.sort_by_key(|h| std::cmp::Reverse(h.last_played));
+        items
+            .iter()
+            .filter(|h| h.last_played > 0)
+            .filter_map(|h| h.place_id.parse::<i64>().ok().map(|p| (p, h.universe_id)))
+            .take(limit)
+            .collect()
     }
 
     /// Credited to a named account rather than "whoever is active", so a
@@ -592,7 +621,7 @@ mod tests {
         c.upsert_account(acct("1"));
         c.upsert_account(acct("2"));
 
-        c.record_launch("606849621", "Jailbreak", 100);
+        c.record_launch("606849621", 245662005, "Jailbreak", 100);
         c.toggle_pin("606849621");
 
         c.active_account = Some("2".into());
@@ -622,7 +651,7 @@ mod tests {
         let mut c = Config::default();
         c.upsert_account(acct("1"));
         c.upsert_account(acct("2"));
-        c.record_launch("123", "Game", 1);
+        c.record_launch("123", 9, "Game", 1);
 
         let next = c.remove_account("1");
         assert_eq!(next.as_deref(), Some("2"));
@@ -888,4 +917,67 @@ mod retention_tests {
         assert_eq!(c.sessions()[0].secs(), 59 * 60);
     }
 }
+}
+
+#[cfg(test)]
+mod recency_tests {
+    use super::*;
+
+    fn cfg() -> Config {
+        let mut c = Config::default();
+        c.active_account = Some("1".into());
+        c
+    }
+
+    #[test]
+    fn recent_launches_are_newest_first() {
+        let mut c = cfg();
+        c.record_launch("100", 10, "Old", 1_000);
+        c.record_launch("200", 20, "New", 3_000);
+        c.record_launch("300", 30, "Middle", 2_000);
+        assert_eq!(c.recent_launches(10), vec![(200, 20), (300, 30), (100, 10)]);
+    }
+
+    #[test]
+    fn relaunching_moves_a_game_back_to_the_front() {
+        let mut c = cfg();
+        c.record_launch("100", 10, "A", 1_000);
+        c.record_launch("200", 20, "B", 2_000);
+        c.record_launch("100", 10, "A", 3_000);
+        assert_eq!(c.recent_launches(10)[0], (100, 10));
+        assert_eq!(c.recent_launches(10).len(), 2, "no duplicate row");
+    }
+
+    #[test]
+    fn the_limit_is_respected() {
+        let mut c = cfg();
+        for i in 1..=20 {
+            c.record_launch(&(i * 100).to_string(), i, "G", i as i64);
+        }
+        assert_eq!(c.recent_launches(5).len(), 5);
+    }
+
+    #[test]
+    fn an_entry_from_before_universes_were_stored_reports_zero() {
+        let mut c = cfg();
+        c.record_launch("100", 0, "Legacy", 1_000);
+        assert_eq!(c.recent_launches(10), vec![(100, 0)]);
+    }
+
+    #[test]
+    fn a_relaunch_backfills_a_missing_universe() {
+        let mut c = cfg();
+        c.record_launch("100", 0, "Legacy", 1_000);
+        c.record_launch("100", 55, "Legacy", 2_000);
+        assert_eq!(c.recent_launches(10), vec![(100, 55)]);
+    }
+
+    #[test]
+    fn favourites_and_pins_are_not_mistaken_for_history() {
+        // A never-launched entry can exist from a playtime observation; it has
+        // no last_played and must not appear in a recency list.
+        let mut c = cfg();
+        c.observe_session(7, 70, "Watched", 5_000, 180);
+        assert!(c.recent_launches(10).is_empty());
+    }
 }

@@ -164,6 +164,7 @@ pub async fn game_passes(client: &Client, universe_id: i64) -> Result<Vec<GamePa
     #[derive(serde::Deserialize, Default)]
     #[serde(rename_all = "camelCase", default)]
     struct Resp {
+        #[serde(default, deserialize_with = "crate::null_vec")]
         game_passes: Vec<GamePass>,
     }
 

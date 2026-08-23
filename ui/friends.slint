@@ -374,7 +374,7 @@ export component FriendsScreen inherits Rectangle {
             Rectangle {
                 x: parent.width - self.width - Space.lg;
                 y: Space.lg;
-                width: min(420px, parent.width - Space.lg * 2);
+                width: min(500px, parent.width - Space.lg * 2);
                 // Sized from the row count, not from the ListView: a ListView is
                 // a scrolling viewport and reports no useful preferred height,
                 // so asking it collapsed the panel to a single row.
@@ -491,6 +491,26 @@ export component FriendsScreen inherits Rectangle {
                                         font-size: Type.caption;
                                         overflow: elide;
                                         wrap: no-wrap;
+                                    }
+                                }
+
+                                // Answer without leaving. The chevron still
+                                // opens the profile for anyone who wants a
+                                // proper look first.
+                                VerticalLayout {
+                                    alignment: center;
+                                    HorizontalLayout {
+                                        spacing: Space.xxs;
+                                        Btn {
+                                            label: "Accept";
+                                            primary: true;
+                                            clicked => { root.accept(r.id); }
+                                        }
+                                        IconBtn {
+                                            glyph: "×";
+                                            size_px: 28px;
+                                            clicked => { root.decline(r.id); }
+                                        }
                                     }
                                 }
 

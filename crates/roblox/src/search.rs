@@ -19,7 +19,7 @@ const GROUPS: &str = "https://groups.roblox.com/v1";
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OmniResponse {
-    #[serde(default = "Vec::new")]
+    #[serde(default, deserialize_with = "crate::null_vec")]
     search_results: Vec<OmniGroup>,
     #[serde(default)]
     next_page_token: Option<String>,
@@ -30,7 +30,7 @@ struct OmniResponse {
 struct OmniGroup {
     #[serde(default)]
     content_group_type: String,
-    #[serde(default = "Vec::new")]
+    #[serde(default, deserialize_with = "crate::null_vec")]
     contents: Vec<OmniGame>,
 }
 

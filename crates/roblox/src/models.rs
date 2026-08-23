@@ -49,8 +49,9 @@ where
 
 /// Wrapper for Roblox's ubiquitous `{ "data": [...] }` envelope.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(bound(deserialize = "T: serde::Deserialize<'de>"))]
 pub struct DataList<T> {
-    #[serde(default = "Vec::new")]
+    #[serde(default, deserialize_with = "crate::null_vec")]
     pub data: Vec<T>,
 }
 
@@ -63,8 +64,12 @@ impl<T> Default for DataList<T> {
 /// Paginated envelope: `{ data, nextPageCursor }`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(bound(deserialize = "T: serde::Deserialize<'de>"))]
 pub struct Page<T> {
-    #[serde(default = "Vec::new")]
+    // `default` alone is not enough: it covers a *missing* `data`, while an
+    // explicitly null one still reaches Vec and is rejected. Roblox sends null
+    // for empty collections, so every list decodes through null_default.
+    #[serde(default, deserialize_with = "crate::null_vec")]
     pub data: Vec<T>,
     #[serde(default)]
     pub next_page_cursor: Option<String>,
@@ -278,5 +283,43 @@ mod tests {
             image_url: Some("https://example/real.png".into()),
         };
         assert_eq!(t.ready_url(), Some("https://example/real.png"));
+    }
+}
+
+#[cfg(test)]
+mod null_list_tests {
+    use super::*;
+
+    #[derive(Debug, serde::Deserialize, PartialEq)]
+    struct Row {
+        id: i64,
+    }
+
+    /// Roblox sends `null` instead of `[]` for empty collections. Every paged
+    /// endpoint in the app goes through `Page`, so a regression here would break
+    /// most of the UI at once rather than one screen.
+    #[test]
+    fn a_page_with_a_null_data_array_parses_as_empty() {
+        let p: Page<Row> = serde_json::from_str(r#"{"data":null}"#).unwrap();
+        assert!(p.data.is_empty());
+    }
+
+    #[test]
+    fn a_page_with_no_data_key_parses_as_empty() {
+        let p: Page<Row> = serde_json::from_str(r#"{"nextPageCursor":"x"}"#).unwrap();
+        assert!(p.data.is_empty());
+        assert_eq!(p.next_page_cursor.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn a_real_page_still_parses() {
+        let p: Page<Row> = serde_json::from_str(r#"{"data":[{"id":7}]}"#).unwrap();
+        assert_eq!(p.data, vec![Row { id: 7 }]);
+    }
+
+    #[test]
+    fn a_data_list_with_null_parses_as_empty() {
+        let d: DataList<Row> = serde_json::from_str(r#"{"data":null}"#).unwrap();
+        assert!(d.data.is_empty());
     }
 }
