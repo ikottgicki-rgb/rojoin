@@ -28,6 +28,12 @@ pub struct Config {
     pub active_account: Option<String>,
     pub accounts: Vec<Account>,
     pub account_data: HashMap<String, AccountData>,
+    /// Observed public statistics per game, keyed by root place id.
+    ///
+    /// Top level rather than inside `account_data`: how busy a game is is a fact
+    /// about the game, not about whichever account happened to be looking.
+    #[serde(default)]
+    pub game_stats: crate::gamestats::Store,
     pub settings: Settings,
 }
 
@@ -38,6 +44,7 @@ impl Default for Config {
             active_account: None,
             accounts: Vec::new(),
             account_data: HashMap::new(),
+            game_stats: Default::default(),
             settings: Settings::default(),
         }
     }
@@ -368,12 +375,38 @@ impl Config {
         self.data_mut().hidden_recent.clear();
     }
 
+    /// Note what a game looked like just now.
+    ///
+    /// Returns whether it was actually stored — observations are throttled, so
+    /// opening a page repeatedly does not distort the series.
+    pub fn record_game_stats(&mut self, root_place_id: i64, sample: crate::gamestats::Sample) -> bool {
+        if root_place_id == 0 {
+            return false;
+        }
+        let keep = self.prune_window_days();
+        let series = self.game_stats.entry(root_place_id.to_string()).or_default();
+        crate::gamestats::record(series, sample, keep)
+    }
+
+    pub fn game_stats(&self, root_place_id: i64) -> &[crate::gamestats::Sample] {
+        self.game_stats
+            .get(&root_place_id.to_string())
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Forget every game observation.
+    pub fn delete_game_stats(&mut self) {
+        self.game_stats.clear();
+    }
+
     /// Forget all play sessions, for this account and every other.
     pub fn delete_all_playtime(&mut self) {
         for data in self.account_data.values_mut() {
             data.sessions.clear();
             data.friend_sessions.clear();
         }
+        self.game_stats.clear();
     }
 
     /// Forget everything: accounts, history, settings. Cookies are not in this
@@ -585,6 +618,10 @@ impl Config {
     /// after the window changes.
     pub fn prune_all_playtime(&mut self, now: i64) {
         let keep = self.prune_window_days();
+        for series in self.game_stats.values_mut() {
+            crate::gamestats::prune(series, keep, now);
+        }
+        self.game_stats.retain(|_, v| !v.is_empty());
         for data in self.account_data.values_mut() {
             crate::playtime::prune(&mut data.sessions, keep, now);
             for list in data.friend_sessions.values_mut() {

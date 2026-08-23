@@ -16,7 +16,7 @@ pub fn enabled() -> bool {
     std::env::var("ROJOIN_DEMO").is_ok_and(|v| v == "1")
 }
 
-pub fn seed(ui: &MainWindow) {
+pub fn seed(ui: &MainWindow, app: &std::sync::Arc<crate::App>) {
     ui.set_signed_in(true);
     ui.set_account_name("adam".into());
     ui.set_account_avatar(swatch(7, 64, 64));
@@ -138,7 +138,7 @@ pub fn seed(ui: &MainWindow) {
     seed_profile(ui);
     seed_graph(ui);
     seed_group(ui);
-    seed_history(ui);
+    seed_history(ui, app);
 
     // ROJOIN_SETTINGS_SEARCH=<query> renders the settings search results.
     if let Ok(q) = std::env::var("ROJOIN_SETTINGS_SEARCH") {
@@ -427,32 +427,41 @@ fn seed_group(ui: &MainWindow) {
     ));
 }
 
-/// A plausible player-history series, so the Rolimons chart can be rendered
-/// headless. Shaped like a real game: a daily rhythm plus a weekly one.
-fn seed_history(ui: &MainWindow) {
-    use rojoin_roblox::rolimons::History;
+/// A plausible observed series, so the history chart can be rendered headless.
+/// Shaped like a real game: a daily rhythm plus a slower weekly one.
+fn seed_history(ui: &MainWindow, app: &std::sync::Arc<crate::App>) {
+    use rojoin_store::gamestats::Sample;
 
     let now = chrono::Utc::now().timestamp();
     let n = 1_200i64;
-    let mut h = History::default();
+    let samples: Vec<Sample> = (0..n)
+        .map(|i| {
+            // Frequencies kept low on purpose: real data arrives bucketed, so a
+            // high-frequency wave would flatter the chart with detail it will
+            // never actually have.
+            let day = ((i as f64 * 0.035).sin() * 0.30 + 1.0).max(0.2);
+            let week = ((i as f64 * 0.006).cos() * 0.22 + 1.0).max(0.2);
+            Sample {
+                at: now - (n - i) * 1800,
+                playing: (9_000.0 * day * week) as i64,
+                visits: 8_013_287_123,
+                upvotes: 5_791_138,
+                downvotes: 810_349,
+            }
+        })
+        .collect();
 
-    for i in 0..n {
-        let t = now - (n - i) * 1800;
-        // A daily rhythm plus a slower weekly one. Frequencies kept low on
-        // purpose: real data arrives bucketed, so a high-frequency wave here
-        // would flatter the chart with detail it will never actually get.
-        let day = ((i as f64 * 0.035).sin() * 0.30 + 1.0).max(0.2);
-        let week = ((i as f64 * 0.006).cos() * 0.22 + 1.0).max(0.2);
-        h.timestamps.push(t);
-        h.players.push(Some((9_000.0 * day * week) as i64));
+    // Into the store, not straight onto the UI: the History tab renders from
+    // the store, so seeding the properties directly would be wiped the moment
+    // the tab opened — and would not exercise the real path.
+    {
+        let mut cfg = app.config.lock().unwrap();
+        let series = cfg.game_stats.entry("606849621".to_string()).or_default();
+        *series = samples.clone();
     }
-    h.avg_playtime = vec![Some(14.2)];
-    h.visits = vec![Some(8_013_287_123)];
-    h.upvotes = vec![Some(5_791_138)];
-    h.downvotes = vec![Some(810_349)];
-    h.favorites = vec![Some(18_635_759)];
+    *app.current_place.lock().unwrap() = 606849621;
 
-    let m = ad::build_history(&h, 1, now);
+    let m = ad::build_history(&samples, 1, now);
     ui.set_history_points(ad::model(m.points));
     ui.set_history_stats(ad::model(m.stats));
     ui.set_history_peak(m.peak.into());

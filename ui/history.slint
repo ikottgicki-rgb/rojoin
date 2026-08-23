@@ -17,7 +17,7 @@ export struct HistoryStat {
     value: string,
 }
 
-/// Concurrent players over time, from Rolimons.
+/// Concurrent players over time, from what RoJoin has observed itself.
 ///
 /// Drawn as a dense column chart rather than a stroked line: it reads the same
 /// at this size, needs no path geometry, and every column is its own hover
@@ -34,6 +34,10 @@ export component PlayerHistory inherits Rectangle {
     in-out property <int> range: 1;
     callback range_changed(int);
     callback retry();
+    /// Opens the game's Rolimons page in a browser. A link, not a fetch —
+    /// their terms forbid automated access to their data, but pointing someone
+    /// at their site is just a link, and it sends them the visit.
+    callback open_rolimons();
 
     property <float> grow: 0.0;
     animate grow { duration: 600ms; easing: ease-out-quad; }
@@ -104,10 +108,28 @@ export component PlayerHistory inherits Rectangle {
             }
         }
 
-        if !root.loading && root.error == "" && root.points.length == 0: EmptyState {
+        if !root.loading && root.error == "" && root.points.length == 0: Rectangle {
             height: 150px;
-            title: "No history for this game";
-            hint: "Rolimons has not tracked this one.";
+            VerticalLayout {
+                alignment: center;
+                spacing: Space.xxs;
+                Text {
+                    text: "Nothing recorded yet";
+                    color: Theme.text_dim;
+                    font-size: Type.body;
+                    font-weight: Type.w_medium;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "Roblox does not share a game's past, so RoJoin notes what it "
+                          + "sees each time you open a game. Come back after a few visits.";
+                    color: Theme.text_mute;
+                    font-size: Type.caption;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                    max-width: 420px;
+                }
+            }
         }
 
         if !root.loading && root.error == "" && root.points.length > 0: VerticalLayout {
@@ -195,10 +217,22 @@ export component PlayerHistory inherits Rectangle {
             }
         }
 
-        Text {
-            text: "Historical data from rolimons.com";
-            color: Theme.text_mute;
-            font-size: Type.micro;
+        HorizontalLayout {
+            spacing: Space.sm;
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: "Recorded by RoJoin as you browse";
+                    color: Theme.text_mute;
+                    font-size: Type.micro;
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Btn {
+                label: "Full history on Rolimons ↗";
+                pad_h: Space.md;
+                clicked => { root.open_rolimons(); }
+            }
         }
     }
 }

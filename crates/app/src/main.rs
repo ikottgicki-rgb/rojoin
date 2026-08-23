@@ -135,15 +135,6 @@ pub(crate) struct App {
     bio_busy: std::sync::atomic::AtomicBool,
     /// The destructive action the confirmation dialog is asking about.
     pending: Mutex<Option<Pending>>,
-    /// Parsed Rolimons history, keyed by root place id.
-    ///
-    /// Cached for the session because the page it comes from is around 850 KB.
-    /// Switching range re-slices what is already here rather than refetching,
-    /// and returning to a game is free.
-    history: Mutex<std::collections::HashMap<i64, rojoin_roblox::rolimons::History>>,
-    /// Place whose history is on screen, so a late arrival for a different game
-    /// cannot paint over the one being looked at.
-    history_place: Mutex<i64>,
     /// Members of the group on screen, so the sort toggle needs no refetch.
     group_members: Mutex<Vec<(rojoin_roblox::models::UserSearchResult, String, i32)>>,
     group_member_avatars: Mutex<std::collections::HashMap<i64, String>>,
@@ -219,8 +210,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         avatar_busy: std::sync::atomic::AtomicBool::new(false),
         bio_busy: std::sync::atomic::AtomicBool::new(false),
         pending: Mutex::new(None),
-        history: Mutex::new(Default::default()),
-        history_place: Mutex::new(0),
         group_members: Mutex::new(Vec::new()),
         group_member_avatars: Mutex::new(Default::default()),
     });
@@ -263,7 +252,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if demo_mode {
         #[cfg(debug_assertions)]
-        demo::seed(&ui);
+        demo::seed(&ui, &app);
     } else {
         restore_session(&ui, &app, &bridge, &imgs);
         maybe_auto_update(&ui, &app, &bridge);
@@ -3539,10 +3528,25 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
     }
     {
         let app = app.clone();
-        let bridge2 = bridge.clone();
+        ui.on_open_rolimons(move || {
+            let place = *app.current_place.lock().unwrap();
+            if place == 0 {
+                return;
+            }
+            // A link, deliberately. Their terms forbid automated access to their
+            // data, so RoJoin records its own and sends anyone who wants the
+            // full picture to them — which is the visit they would want anyway.
+            let url = format!("https://www.rolimons.com/game/{place}");
+            if let Err(e) = webbrowser::open(&url) {
+                tracing::warn!(error = %e, "could not open a browser");
+            }
+        });
+    }
+    {
+        let app = app.clone();
         let weak = ui.as_weak();
         ui.on_load_history(move || {
-            load_history(&weak.unwrap(), &app, &bridge2);
+            render_history(&weak.unwrap(), &app);
         });
     }
     {
@@ -4349,74 +4353,43 @@ fn set_member_thumb(
     model.set_row_data(index, row);
 }
 
-/// Draw whatever history is cached for the game on screen.
+/// Draw the game's observed history.
+///
+/// Entirely local — the samples come from what the app has already seen while
+/// rendering game pages — so this is synchronous and needs no loading state.
 fn render_history(ui: &MainWindow, app: &Arc<App>) {
     let place = *app.current_place.lock().unwrap();
-    let cached = app.history.lock().unwrap().get(&place).cloned();
+    let cfg = app.config.lock().unwrap();
+    let samples = cfg.game_stats(place).to_vec();
+    drop(cfg);
 
-    let Some(h) = cached else {
-        ui.set_history_points(ad::model(Vec::new()));
-        ui.set_history_stats(ad::model(Vec::new()));
-        ui.set_history_peak(Default::default());
-        return;
-    };
-
-    let m = ad::build_history(&h, ui.get_history_window(), chrono::Utc::now().timestamp());
+    let m = ad::build_history(&samples, ui.get_history_window(), chrono::Utc::now().timestamp());
     ui.set_history_points(ad::model(m.points));
     ui.set_history_stats(ad::model(m.stats));
     ui.set_history_peak(m.peak.into());
     ui.set_history_range(m.range.into());
+    ui.set_history_loading(false);
     ui.set_history_error(Default::default());
 }
 
-/// Fetch the history for the game on screen, unless it is already cached.
-fn load_history(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
-    let place = *app.current_place.lock().unwrap();
-    if place == 0 {
-        return;
+/// Note what this game looks like right now.
+///
+/// Called when a game page finishes loading, from figures already fetched to
+/// render it — so a trend accumulates as a side effect of browsing, at no extra
+/// request. Throttled in the store, so opening a page repeatedly is one point.
+fn record_game_stats(app: &Arc<App>, place: i64, detail: &rojoin_roblox::models::GameDetail, votes: Option<&rojoin_roblox::models::Votes>) {
+    let sample = rojoin_store::gamestats::Sample {
+        at: chrono::Utc::now().timestamp(),
+        playing: detail.playing,
+        visits: detail.visits,
+        upvotes: votes.map(|v| v.up_votes).unwrap_or(0),
+        downvotes: votes.map(|v| v.down_votes).unwrap_or(0),
+    };
+
+    let mut cfg = app.config.lock().unwrap();
+    if cfg.record_game_stats(place, sample) {
+        let _ = cfg.save();
     }
-
-    *app.history_place.lock().unwrap() = place;
-
-    if app.history.lock().unwrap().contains_key(&place) {
-        render_history(ui, app);
-        return;
-    }
-
-    ui.set_history_loading(true);
-    ui.set_history_error(Default::default());
-
-    let app2 = app.clone();
-    bridge.call_res(
-        move || async move { rojoin_roblox::rolimons::history(place).await },
-        move |ui, result| {
-            ui.set_history_loading(false);
-
-            // The user may have moved to another game while this was in flight.
-            if *app2.history_place.lock().unwrap() != place {
-                return;
-            }
-
-            match result {
-                Ok(h) => {
-                    app2.history.lock().unwrap().insert(place, h);
-                    render_history(&ui, &app2);
-                }
-                Err(e) => {
-                    // Scraped data, so a failure here is expected occasionally
-                    // and must not read like the app is broken.
-                    tracing::info!(place, error = %e, "no Rolimons history");
-                    ui.set_history_points(ad::model(Vec::new()));
-                    ui.set_history_stats(ad::model(Vec::new()));
-                    ui.set_history_error(
-                        "Could not load history from Rolimons. They may be down, or they \
-                         may not track this game."
-                            .into(),
-                    );
-                }
-            }
-        },
-    );
 }
 
 fn render_graph(ui: &MainWindow, app: &Arc<App>) {
@@ -5422,6 +5395,17 @@ fn open_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
             match result {
                 Ok(load) => {
                     *app2.current_universe.lock().unwrap() = load.universe_id;
+
+                    // Note what the game looks like now, from figures already
+                    // fetched to draw this page. A trend accumulates as a side
+                    // effect of browsing, at no extra request.
+                    record_game_stats(
+                        &app2,
+                        load.detail.root_place_id,
+                        &load.detail,
+                        load.votes.as_ref(),
+                    );
+
                     ui.set_game(ad::detail_data(&load.detail, load.votes.as_ref(), false));
                     ui.set_sub_places(ad::model(ad::sub_places(&load.subs)));
                     ui.set_passes(ad::model(ad::passes(&load.passes)));

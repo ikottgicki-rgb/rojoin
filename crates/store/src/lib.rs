@@ -15,6 +15,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub mod gamestats;
 pub mod playtime;
 pub mod config;
 

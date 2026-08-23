@@ -123,6 +123,7 @@ export component MainWindow inherits Window {
     in-out property <int> history_window: 1;
     callback history_range_changed(int);
     callback load_history();
+    callback open_rolimons();
 
     // Only when the tab is actually shown: the Rolimons page is ~850 KB, so
     // fetching it for every game someone glances at would be slow and rude.
@@ -489,6 +490,7 @@ export component MainWindow inherits Window {
                             history_window <=> root.history_window;
                             history_range_changed(i) => { root.history_range_changed(i); }
                             history_retry => { root.load_history(); }
+                            open_rolimons => { root.open_rolimons(); }
                             width: 100%;
                             height: 100%;
                             game: root.game;

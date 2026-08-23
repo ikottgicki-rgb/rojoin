@@ -971,61 +971,70 @@ pub fn history_window_days(choice: i32) -> i64 {
 ///
 /// Heights are normalised against the window's own peak rather than an absolute
 /// scale: a game with 300 players and one with 300,000 should both fill the plot,
-/// because the question being asked is "what is the shape of this game's day",
-/// not "how does it compare to Jailbreak".
+/// because the question is the shape of this game's week, not how it compares to
+/// the biggest game on the platform.
 pub fn build_history(
-    h: &rojoin_roblox::rolimons::History,
+    samples: &[rojoin_store::gamestats::Sample],
     choice: i32,
     now: i64,
 ) -> HistoryModel {
-    use rojoin_roblox::rolimons;
+    use rojoin_store::gamestats;
 
     let days = history_window_days(choice);
-    let window = if days == 0 { h.covered_days().max(1) } else { days };
-    let series = h.recent_players(window, now);
-    let buckets = rolimons::bucket_players(&series, HISTORY_COLUMNS);
+    let covered = gamestats::covered_days(samples);
+    let window = if days == 0 { covered.max(1) } else { days };
+    let series = gamestats::recent(samples, window, now);
+    let buckets = gamestats::bucket(&series, HISTORY_COLUMNS);
 
-    let peak = buckets.iter().map(|b| b.players).max().unwrap_or(0);
+    let peak = buckets.iter().map(|b| b.playing).max().unwrap_or(0);
     let ceiling = peak.max(1) as f32;
 
     let points: Vec<crate::HistoryPoint> = buckets
         .iter()
         .enumerate()
         .map(|(i, b)| crate::HistoryPoint {
-            // Position by index: the buckets are already evenly spaced in time,
+            // Position by index: the buckets are already evenly spaced in time
             // and empty ones were dropped, so spacing by timestamp would leave
-            // ragged gaps that read as missing columns rather than quiet periods.
+            // ragged holes that read as missing columns rather than quiet spells.
             x: if buckets.len() > 1 {
                 i as f32 / (buckets.len() - 1) as f32
             } else {
                 0.0
             },
-            height: b.players as f32 / ceiling,
-            label: format!("{} · {} players", day_stamp(b.at), compact(b.players)).into(),
+            height: b.playing as f32 / ceiling,
+            label: format!("{} · {} playing", day_stamp(b.at), compact(b.playing)).into(),
         })
         .collect();
 
+    let latest = series.last().or_else(|| samples.last());
     let mut stats = Vec::new();
-    if let Some(p) = h.latest_players() {
-        stats.push(crate::HistoryStat { label: "Playing now".into(), value: compact(p).into() });
-    }
-    if let Some((_, p)) = h.peak(window, now) {
-        stats.push(crate::HistoryStat { label: "Peak".into(), value: compact(p).into() });
-    }
-    if let Some(m) = h.latest_avg_playtime() {
+    if let Some(s) = latest {
         stats.push(crate::HistoryStat {
-            label: "Avg session".into(),
-            value: format!("{m:.0}m").into(),
+            label: "Playing".into(),
+            value: compact(s.playing).into(),
         });
     }
-    if let Some(v) = h.latest_visits() {
-        stats.push(crate::HistoryStat { label: "Visits".into(), value: compact(v).into() });
+    if peak > 0 {
+        stats.push(crate::HistoryStat { label: "Peak seen".into(), value: compact(peak).into() });
     }
-    if let Some(r) = h.latest_rating() {
-        stats.push(crate::HistoryStat { label: "Rating".into(), value: format!("{r}%").into() });
+    if let Some(s) = latest {
+        if s.visits > 0 {
+            stats.push(crate::HistoryStat {
+                label: "Visits".into(),
+                value: compact(s.visits).into(),
+            });
+        }
+        if let Some(r) = s.rating() {
+            stats.push(crate::HistoryStat { label: "Rating".into(), value: format!("{r}%").into() });
+        }
+    }
+    if !samples.is_empty() {
+        stats.push(crate::HistoryStat {
+            label: "Observations".into(),
+            value: samples.len().to_string().into(),
+        });
     }
 
-    let covered = h.covered_days();
     HistoryModel {
         points,
         stats,
@@ -1035,7 +1044,8 @@ pub fn build_history(
             String::new()
         },
         range: match days {
-            0 => format!("all {} days on record", covered),
+            0 if covered > 0 => format!("everything we have seen · {covered} days"),
+            0 => "everything we have seen".into(),
             7 => "last 7 days".into(),
             365 => "last year".into(),
             n => format!("last {n} days"),
@@ -1060,18 +1070,18 @@ fn day_stamp(unix: i64) -> String {
 #[cfg(test)]
 mod history_tests {
     use super::*;
-    use rojoin_roblox::rolimons::History;
+    use rojoin_store::gamestats::Sample;
 
-    fn series(n: i64, now: i64) -> History {
-        History {
-            timestamps: (0..n).map(|i| now - (n - i) * 3600).collect(),
-            players: (0..n).map(|i| Some(1000 + i * 10)).collect(),
-            visits: vec![Some(5_000_000)],
-            upvotes: vec![Some(900)],
-            downvotes: vec![Some(100)],
-            avg_playtime: vec![Some(12.4)],
-            favorites: vec![Some(1234)],
-        }
+    fn series(n: i64, now: i64) -> Vec<Sample> {
+        (0..n)
+            .map(|i| Sample {
+                at: now - (n - i) * 3600,
+                playing: 1000 + i * 10,
+                visits: 5_000_000,
+                upvotes: 900,
+                downvotes: 100,
+            })
+            .collect()
     }
 
     #[test]
@@ -1118,20 +1128,19 @@ mod history_tests {
 
     #[test]
     fn an_empty_history_yields_an_empty_chart_not_a_panic() {
-        let m = build_history(&History::default(), 1, 1_700_000_000);
+        let m = build_history(&[], 1, 1_700_000_000);
         assert!(m.points.is_empty());
         assert!(m.peak.is_empty());
     }
 
     #[test]
-    fn the_stat_tiles_carry_what_the_page_provides() {
+    fn the_stat_tiles_carry_what_we_have_observed() {
         let now = 1_700_000_000;
         let m = build_history(&series(100, now), 1, now);
         let labels: Vec<String> = m.stats.iter().map(|s| s.label.to_string()).collect();
-        assert!(labels.contains(&"Playing now".to_string()));
-        assert!(labels.contains(&"Peak".to_string()));
-        assert!(labels.contains(&"Rating".to_string()));
-        // 900 up of 1000 total.
+        assert!(labels.contains(&"Playing".to_string()));
+        assert!(labels.contains(&"Peak seen".to_string()));
+        assert!(labels.contains(&"Observations".to_string()));
         let rating = m.stats.iter().find(|s| s.label == "Rating").unwrap();
         assert_eq!(rating.value.to_string(), "90%");
     }
@@ -1139,11 +1148,13 @@ mod history_tests {
     #[test]
     fn a_game_with_no_votes_simply_has_no_rating_tile() {
         let now = 1_700_000_000;
-        let mut h = series(50, now);
-        h.upvotes.clear();
-        h.downvotes.clear();
-        let m = build_history(&h, 1, now);
-        assert!(m.stats.iter().all(|s| s.label != "Rating"));
+        let mut s = series(50, now);
+        for x in &mut s {
+            x.upvotes = 0;
+            x.downvotes = 0;
+        }
+        let m = build_history(&s, 1, now);
+        assert!(m.stats.iter().all(|st| st.label != "Rating"));
     }
 }
 
