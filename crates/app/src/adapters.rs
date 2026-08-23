@@ -1146,3 +1146,165 @@ mod history_tests {
         assert!(m.stats.iter().all(|s| s.label != "Rating"));
     }
 }
+
+// ------------------------------------------------------ settings search ---
+
+/// Every setting, as `(category index, name, what it does)`.
+///
+/// A hand-kept index rather than something derived from the UI: Slint has no
+/// string search worth using, and the alternative — a `visible:` expression on
+/// every row — cannot say *which* category a match belongs to, which is the only
+/// thing that makes a hit actionable.
+///
+/// Adding a setting means adding a line here. The test below is the reminder.
+const SETTINGS_INDEX: &[(i32, &str, &str)] = &[
+    (0, "Accounts", "switch account, remove account, add another account, sign in"),
+    (1, "Graph on Home", "playtime chart, day by day, show hide"),
+    (1, "Track pinned friends", "friend playtime, record what friends play"),
+    (1, "Keep history for", "playtime retention, 30 days, 90 days, year, unlimited"),
+    (1, "Keep running when closed", "tray, background, minimise to tray, keep tracking"),
+    (1, "Start with my session", "autostart, launch at login, startup, boot"),
+    (2, "Home sections", "friends, jump back in, pinned, recently played, favourites"),
+    (2, "Hidden from recent", "restore removed games, unhide, show again"),
+    (3, "Friend requests", "notify me about friend requests"),
+    (3, "Watched friends", "notification subscriptions, bell, per friend"),
+    (3, "Watched games", "notify when a friend plays this game"),
+    (4, "Dark theme", "light theme, appearance, colours, palette"),
+    (4, "Interface size", "scale, zoom, bigger text, smaller, ui scale"),
+    (4, "Startup section", "which page opens first, landing page"),
+    (5, "Macros enabled", "master switch for macros, hotkeys"),
+    (5, "Only when Roblox is focused", "macro safety, focus gate, background"),
+    (5, "Panic key", "stop all macros, emergency stop, release freeze"),
+    (6, "Desktop shortcuts", "launch a game directly, icons, remove shortcut"),
+    (7, "Confirm destructive actions", "ask before deleting, confirmation dialog"),
+    (7, "Open Roblox links", "roblox:// handler, protocol, default app"),
+    (8, "Server list size", "how many servers to fetch, page size"),
+    (8, "Request timeout", "how long before giving up, network timeout"),
+    (8, "Presence refresh", "how often friends update, polling interval"),
+    (9, "FastFlags", "engine flags, fflags, presets, graphics tweaks"),
+    (9, "Graphics mode", "renderer, vulkan, opengl, optimisation"),
+    (10, "Thumbnail cache", "image memory, cache size"),
+    (10, "Verbose logging", "debug log, log file, diagnostics"),
+    (10, "Automatic updates", "check for updates, auto update, new version"),
+    (11, "Version", "about, build, release notes"),
+    (11, "Data folder", "where settings are stored, config location, log file"),
+    (12, "Delete playtime history", "erase sessions, reset graph, danger"),
+    (12, "Clear cached data", "thumbnails, usernames, flag list, danger"),
+    (12, "Delete all data", "factory reset, wipe everything, start over, danger"),
+];
+
+/// Human names for the sidebar categories, indexed to match `SETTINGS_INDEX`.
+const SETTINGS_CATEGORIES: &[&str] = &[
+    "Accounts", "Playtime", "Home", "Notifications", "Interface", "Macros",
+    "Shortcuts", "System", "Network", "Roblox client", "Advanced", "About",
+    "Danger zone",
+];
+
+/// Settings matching `query`.
+///
+/// Matches the name and the keyword list, so "boot" finds "Start with my
+/// session" and "wipe" finds "Delete all data" — the words people actually
+/// reach for rather than the label someone chose.
+pub fn search_settings(query: &str) -> Vec<crate::DetailItem> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Vec::new();
+    }
+
+    SETTINGS_INDEX
+        .iter()
+        .filter(|(_, name, keywords)| {
+            let name = name.to_lowercase();
+            let keywords = keywords.to_lowercase();
+            // Every word has to appear somewhere, so "dark theme" narrows rather
+            // than widening the way any-word matching would.
+            q.split_whitespace().all(|w| name.contains(w) || keywords.contains(w))
+        })
+        .map(|(cat, name, _)| crate::DetailItem {
+            id: cat.to_string().into(),
+            name: (*name).into(),
+            subtitle: SETTINGS_CATEGORIES
+                .get(*cat as usize)
+                .copied()
+                .unwrap_or("Settings")
+                .into(),
+            thumb: slint::Image::default(),
+            // Carries the category to jump to.
+            kind: *cat,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod settings_search_tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_query_matches_nothing() {
+        assert!(search_settings("").is_empty());
+        assert!(search_settings("   ").is_empty());
+    }
+
+    #[test]
+    fn a_label_is_found_by_its_own_words() {
+        let hits = search_settings("dark theme");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name.to_string(), "Dark theme");
+        assert_eq!(hits[0].subtitle.to_string(), "Interface");
+    }
+
+    #[test]
+    fn keywords_find_settings_whose_label_does_not_contain_them() {
+        // The point of the keyword column: nobody looking for this types
+        // "Start with my session".
+        let hits = search_settings("boot");
+        assert!(hits.iter().any(|h| h.name.to_string() == "Start with my session"));
+
+        let hits = search_settings("tray");
+        assert!(hits.iter().any(|h| h.name.to_string() == "Keep running when closed"));
+
+        let hits = search_settings("wipe");
+        assert!(hits.iter().any(|h| h.name.to_string() == "Delete all data"));
+    }
+
+    #[test]
+    fn search_is_case_insensitive() {
+        assert!(!search_settings("FFLAGS").is_empty());
+        assert!(!search_settings("fflags").is_empty());
+    }
+
+    #[test]
+    fn every_word_must_match_so_extra_words_narrow() {
+        let broad = search_settings("delete").len();
+        let narrow = search_settings("delete playtime").len();
+        assert!(broad > narrow, "{broad} vs {narrow}");
+        assert_eq!(narrow, 1);
+    }
+
+    #[test]
+    fn nonsense_matches_nothing() {
+        assert!(search_settings("xyzzy").is_empty());
+    }
+
+    #[test]
+    fn every_hit_carries_a_category_that_exists() {
+        for entry in SETTINGS_INDEX {
+            let idx = entry.0 as usize;
+            assert!(
+                idx < SETTINGS_CATEGORIES.len(),
+                "{} points at category {idx}, which has no name",
+                entry.1
+            );
+        }
+    }
+
+    #[test]
+    fn the_jump_target_matches_the_category_shown() {
+        // `kind` drives the jump and `subtitle` is what the user reads; if they
+        // disagree the row sends you somewhere other than where it says.
+        for hit in search_settings("delete") {
+            let named = SETTINGS_CATEGORIES[hit.kind as usize];
+            assert_eq!(hit.subtitle.to_string(), named);
+        }
+    }
+}

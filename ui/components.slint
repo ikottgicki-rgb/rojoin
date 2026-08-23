@@ -474,3 +474,64 @@ export component ConfirmDialog inherits Rectangle {
         }
     }
 }
+
+/// A "?" that explains something on hover.
+///
+/// The explanation is drawn as an **overlay**, positioned outside this element's
+/// own 15x15 box and therefore invisible to the surrounding layout. The first
+/// version put the text into the layout instead, which grew the row, shifted the
+/// dot out from under the pointer, and so dismissed the very tooltip the user was
+/// trying to read.
+export component HelpDot inherits Rectangle {
+    in property <string> text;
+    /// Anchor the panel's right edge to the dot instead of its left, for dots
+    /// near the right edge of the window.
+    in property <bool> align_right: false;
+
+    width: 15px;
+    height: 15px;
+    border-radius: 8px;
+    border-width: Theme.hairline;
+    border-color: hta.has-hover ? Theme.accent : Theme.line_strong;
+    animate border-color { duration: Motion.fast; easing: Motion.ease; }
+
+    Text {
+        text: "?";
+        color: hta.has-hover ? Theme.accent : Theme.text_mute;
+        font-size: Type.micro;
+        font-weight: Type.w_bold;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+        animate color { duration: Motion.fast; easing: Motion.ease; }
+    }
+
+    hta := TouchArea { mouse-cursor: pointer; }
+
+    // Declared after the dot so it paints over its neighbours, and given an
+    // explicit position so it contributes nothing to layout.
+    if hta.has-hover && root.text != "": Rectangle {
+        x: root.align_right ? root.width - self.width : 0px;
+        y: root.height + 4px;
+        width: 268px;
+        height: tip.preferred-height + Space.sm * 2;
+
+        background: Theme.bg_4;
+        border-radius: Theme.radius;
+        border-width: Theme.hairline;
+        border-color: Theme.line_strong;
+
+        opacity: 0;
+        animate opacity { duration: Motion.fast; easing: Motion.ease; }
+        init => { self.opacity = 1.0; }
+
+        tip := Text {
+            x: Space.sm;
+            y: Space.sm;
+            width: parent.width - Space.sm * 2;
+            text: root.text;
+            color: Theme.text;
+            font-size: Type.caption;
+            wrap: word-wrap;
+        }
+    }
+}

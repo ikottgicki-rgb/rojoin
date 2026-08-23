@@ -5,10 +5,17 @@
 //! sampling public game stats every six hours since 2019, so this is the only
 //! way to show a game's trend rather than a single instant.
 //!
-//! There is no documented API for it. Their `api.rolimons.com` game paths do not
-//! exist, and any request without a browser `User-Agent` is refused outright.
-//! What does work is the ordinary game page, which embeds the whole series in a
-//! `<script id="game_history_json">` block — so that is what this reads.
+//! There is no documented API for it — their `api.rolimons.com` game paths do
+//! not exist. What does work is the ordinary game page, which embeds the whole
+//! series in a `<script id="game_history_json">` block.
+//!
+//! **Their robots.txt permits this.** `User-agent: *` is granted `Allow: /` with
+//! only `/shop` disallowed, and asks for `Crawl-delay: 2`. So this identifies
+//! itself honestly, links back to the project so they can contact or block it,
+//! and holds itself to that two-second gap. An earlier version sent a fake
+//! Chrome agent, which turned out to be unnecessary as well as impolite: the
+//! 403s that prompted it came from `api.rolimons.com`, a different host that
+//! does gate on user-agent, not from the page this actually reads.
 //!
 //! Two consequences worth being honest about:
 //!   * it is scraping, and can break whenever they change their page,
@@ -23,10 +30,19 @@ use serde::Deserialize;
 
 use crate::{Error, Result};
 
-/// Enough of a browser to be served. Their edge rejects the app's normal
-/// `RoJoin/x.y.z` agent with a 403 before any content is returned.
-const BROWSER_UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
-                          (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+/// Who we say we are.
+///
+/// Deliberately identifiable, with a link back to the project: if this ever
+/// becomes a nuisance they should be able to see exactly what it is and block
+/// it, which a spoofed browser agent would deny them.
+const UA: &str = concat!(
+    "RoJoin/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/ikottgicki-rgb/rojoin)"
+);
+
+/// The gap their robots.txt asks of `User-agent: *`.
+const CRAWL_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
 // Sampling density is **not** uniform, so nothing here assumes an interval.
 // A real series showed 6-hour spacing back in 2019 and roughly 10-minute
@@ -134,10 +150,15 @@ pub async fn history(root_place_id: i64) -> Result<History> {
         return Err(Error::Api("no place id to look up".into()));
     }
 
+    // Honour the crawl-delay across the whole process, not per client: opening
+    // two game pages in quick succession is exactly the case a per-request
+    // client would miss.
+    wait_for_crawl_slot().await;
+
     // Deliberately its own client: no cookie store, no shared state with the
-    // authenticated Roblox one.
+    // authenticated Roblox one, so a Roblox session cannot leave with it.
     let http = reqwest::Client::builder()
-        .user_agent(BROWSER_UA)
+        .user_agent(UA)
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
@@ -155,6 +176,25 @@ pub async fn history(root_place_id: i64) -> Result<History> {
     extract(&html).ok_or_else(|| {
         Error::Api("Rolimons served a page with no history in it".into())
     })
+}
+
+/// Block until at least [`CRAWL_DELAY`] has passed since the last request.
+///
+/// Process-wide, because politeness is a property of the whole app rather than
+/// of one client object.
+async fn wait_for_crawl_slot() {
+    use tokio::sync::Mutex;
+
+    static LAST: Mutex<Option<std::time::Instant>> = Mutex::const_new(None);
+
+    let mut last = LAST.lock().await;
+    if let Some(previous) = *last {
+        let since = previous.elapsed();
+        if since < CRAWL_DELAY {
+            tokio::time::sleep(CRAWL_DELAY - since).await;
+        }
+    }
+    *last = Some(std::time::Instant::now());
 }
 
 /// Pull the embedded JSON out of the page.

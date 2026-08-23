@@ -3554,6 +3554,13 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
         });
     }
     {
+        let weak = ui.as_weak();
+        ui.on_settings_search_changed(move |q| {
+            let ui = weak.unwrap();
+            ui.set_settings_hits(ad::model(ad::search_settings(q.as_str())));
+        });
+    }
+    {
         let app = app.clone();
         let weak = ui.as_weak();
         ui.on_sort_group_members(move || {
@@ -4947,10 +4954,16 @@ fn load_home(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
     let imgs = imgs.clone();
     let gen = SESSION_GEN.load(Ordering::SeqCst);
 
-    let launched = app.config.lock().unwrap().recent_launches(12);
+    let (launched, hidden) = {
+        let cfg = app.config.lock().unwrap();
+        (
+            cfg.recent_launches(12),
+            cfg.hidden_recent().iter().map(|h| h.universe_id).collect::<Vec<i64>>(),
+        )
+    };
 
     bridge.call_res(
-        move || async move { fetch_home(&client, launched).await },
+        move || async move { fetch_home(&client, launched, hidden).await },
         move |ui, result| {
             if gen != SESSION_GEN.load(Ordering::SeqCst) {
                 return;
@@ -5780,9 +5793,32 @@ async fn fetch_by_places(client: &Client, place_ids: &[i64]) -> rojoin_roblox::R
 ///
 /// Anything already known locally is dropped from the platform's half, so a
 /// game does not appear twice with the wrong position.
+/// Combine our own recency with Roblox's, dropping anything the user removed.
+///
+/// Split out and given tests because this is exactly where removing a game from
+/// Recently played silently stopped working: our history entry was deleted, and
+/// then Roblox's "Continue" row — which is not filtered by anything we store —
+/// put the game straight back on the next load. The store knew the game was
+/// hidden; nothing asked it.
+fn merge_recent(ours: &[i64], theirs: &[i64], hidden: &[i64], limit: usize) -> Vec<i64> {
+    let mut out: Vec<i64> = Vec::new();
+
+    for u in ours.iter().chain(theirs.iter()) {
+        if *u == 0 || hidden.contains(u) || out.contains(u) {
+            continue;
+        }
+        out.push(*u);
+        if out.len() == limit {
+            break;
+        }
+    }
+    out
+}
+
 async fn fetch_home(
     client: &Client,
     launched: Vec<(i64, i64)>,
+    hidden: Vec<i64>,
 ) -> rojoin_roblox::Result<HomeLoad> {
     let mut universes: Vec<i64> = Vec::new();
 
@@ -5806,18 +5842,16 @@ async fn fetch_home(
     }
 
     let ours = universes.len();
-    match discovery::recently_played(client, 12).await {
-        Ok(theirs) => {
-            for u in theirs {
-                if !universes.contains(&u) {
-                    universes.push(u);
-                }
-            }
-        }
+    let theirs = match discovery::recently_played(client, 12).await {
+        Ok(theirs) => theirs,
         // Our own history is still worth showing on its own.
-        Err(e) => tracing::warn!(error = %e, "could not read Roblox's continue row"),
-    }
-    universes.truncate(12);
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read Roblox's continue row");
+            Vec::new()
+        }
+    };
+
+    let universes = merge_recent(&universes, &theirs, &hidden, 12);
     tracing::debug!(ours, total = universes.len(), "home recency sources");
 
     if universes.is_empty() {
@@ -5947,4 +5981,54 @@ fn new_session_id() -> String {
             .map(|d| d.as_millis())
             .unwrap_or(0)
     )
+}
+
+#[cfg(test)]
+mod merge_recent_tests {
+    use super::merge_recent;
+
+    #[test]
+    fn our_own_recency_comes_first() {
+        // Ours has real timestamps; Roblox's row is recommendation-ranked, so it
+        // must never reorder what we know.
+        assert_eq!(merge_recent(&[1, 2], &[9, 8], &[], 12), vec![1, 2, 9, 8]);
+    }
+
+    #[test]
+    fn the_platform_half_fills_in_games_we_never_saw() {
+        assert_eq!(merge_recent(&[1], &[2, 3], &[], 12), vec![1, 2, 3]);
+    }
+
+    /// The bug this exists for: removing a game deleted our history entry, and
+    /// Roblox's row then put it straight back.
+    #[test]
+    fn a_hidden_game_cannot_come_back_from_the_platform_half() {
+        assert_eq!(merge_recent(&[], &[7, 8], &[7], 12), vec![8]);
+    }
+
+    #[test]
+    fn a_hidden_game_is_dropped_from_our_half_too() {
+        assert_eq!(merge_recent(&[7, 8], &[], &[7], 12), vec![8]);
+    }
+
+    #[test]
+    fn hiding_every_candidate_leaves_an_empty_row() {
+        assert!(merge_recent(&[1], &[1, 2], &[1, 2], 12).is_empty());
+    }
+
+    #[test]
+    fn a_game_in_both_halves_appears_once_at_our_position() {
+        assert_eq!(merge_recent(&[5, 6], &[6, 7], &[], 12), vec![5, 6, 7]);
+    }
+
+    #[test]
+    fn the_limit_is_respected_and_prefers_our_own() {
+        assert_eq!(merge_recent(&[1, 2, 3], &[4, 5, 6], &[], 4), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn a_zero_universe_is_never_shown() {
+        // Unresolved history entries carry 0, which is not a real game.
+        assert_eq!(merge_recent(&[0, 1], &[0], &[], 12), vec![1]);
+    }
 }

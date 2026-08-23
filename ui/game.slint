@@ -1,6 +1,6 @@
 import { PlayerHistory, HistoryPoint, HistoryStat } from "history.slint";
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, MetaStat, Skeleton, EmptyState, Spinner, BusySlot, Texture } from "components.slint";
+import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, MetaStat, Skeleton, EmptyState, Spinner, BusySlot, Texture, HelpDot } from "components.slint";
 import { GameGrid, ItemGrid } from "cards.slint";
 import { GameTile, GameDetailData, SubPlace, ServerRow, DetailItem } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -409,20 +409,88 @@ export component GameScreen inherits Rectangle {
                             }
                         }
 
-                        Btn {
-                            label: root.game.favorited ? "★ Favourited" : "☆ Favourite";
-                            height: 36px;
-                            clicked => { root.toggle_favorite(); }
+                        // Each of these gets a "?" because none of them says
+                        // what it actually does: favouriting writes to your
+                        // Roblox account, notifying does not, and four bare
+                        // glyphs are anyone's guess.
+                        HorizontalLayout {
+                            spacing: 3px;
+                            Btn {
+                                label: root.game.favorited ? "★ Favourited" : "☆ Favourite";
+                                height: 36px;
+                                clicked => { root.toggle_favorite(); }
+                            }
+                            VerticalLayout {
+                                alignment: start;
+                                padding-top: 2px;
+                                HelpDot {
+                                    text: "Favourites this game on your Roblox account, "
+                                          + "exactly as the website would. It shows up "
+                                          + "everywhere you are signed in.";
+                                }
+                            }
                         }
-                        Btn {
-                            label: root.game.notify ? "◉ Notifying" : "○ Notify";
-                            height: 36px;
-                            clicked => { root.toggle_notify(); }
+
+                        HorizontalLayout {
+                            spacing: 3px;
+                            Btn {
+                                label: root.game.notify ? "◉ Notifying" : "○ Notify";
+                                height: 36px;
+                                clicked => { root.toggle_notify(); }
+                            }
+                            VerticalLayout {
+                                alignment: start;
+                                padding-top: 2px;
+                                HelpDot {
+                                    text: "Tells RoJoin to notify you when a friend "
+                                          + "starts playing this. Only while RoJoin is "
+                                          + "running, and nothing is sent to Roblox.";
+                                }
+                            }
                         }
-                        IconBtn { glyph: "⧉"; size_px: 36px; clicked => { root.copy_link(); } }
-                        IconBtn { glyph: "#"; size_px: 36px; clicked => { root.copy_id(); } }
-                        IconBtn { glyph: "⊞"; size_px: 36px; clicked => { root.make_shortcut(); } }
-                        IconBtn { glyph: "↗"; size_px: 36px; clicked => { root.open_browser(); } }
+
+                        HorizontalLayout {
+                            spacing: 3px;
+                            IconBtn { glyph: "⧉"; size_px: 36px; clicked => { root.copy_link(); } }
+                            VerticalLayout {
+                                alignment: start;
+                                padding-top: 2px;
+                                HelpDot { text: "Copies a roblox.com link to this game."; }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 3px;
+                            IconBtn { glyph: "#"; size_px: 36px; clicked => { root.copy_id(); } }
+                            VerticalLayout {
+                                alignment: start;
+                                padding-top: 2px;
+                                HelpDot { text: "Copies this game's place id."; }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 3px;
+                            IconBtn { glyph: "⊞"; size_px: 36px; clicked => { root.make_shortcut(); } }
+                            VerticalLayout {
+                                alignment: start;
+                                padding-top: 2px;
+                                HelpDot {
+                                    text: "Puts a shortcut on your desktop that launches "
+                                          + "straight into this game.";
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 3px;
+                            IconBtn { glyph: "↗"; size_px: 36px; clicked => { root.open_browser(); } }
+                            VerticalLayout {
+                                alignment: start;
+                                padding-top: 2px;
+                                HelpDot {
+                                    text: "Opens this game's page on roblox.com in your browser.";
+                                    align_right: true;
+                                }
+                            }
+                        }
                     }
 
                     if root.launch_error != "": Rectangle {

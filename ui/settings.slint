@@ -1,5 +1,5 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Avatar, Btn, IconBtn, Chip, Segmented, Badge, EmptyState, Spinner, BusySlot, Texture } from "components.slint";
+import { Avatar, Btn, IconBtn, Chip, Segmented, Badge, EmptyState, Spinner, BusySlot, Texture, HelpDot } from "components.slint";
 import { DetailItem } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
 
@@ -63,37 +63,10 @@ component Row inherits Rectangle {
                     color: Theme.text;
                     font-size: Type.body;
                 }
-                // Mounted even with no help text: an id declared inside an
-                // `if` cannot be read from a sibling, and the hint below needs
-                // this TouchArea's hover state.
-                VerticalLayout {
+                if root.help != "": VerticalLayout {
                     alignment: center;
-                    Rectangle {
-                        visible: root.help != "";
-                        width: root.help != "" ? 15px : 0px;
-                        height: 15px;
-                        border-radius: 8px;
-                        border-width: Theme.hairline;
-                        border-color: hta.has-hover ? Theme.accent : Theme.line_strong;
-                        animate border-color { duration: Motion.fast; easing: Motion.ease; }
-                        Text {
-                            text: "?";
-                            color: hta.has-hover ? Theme.accent : Theme.text_mute;
-                            font-size: Type.micro;
-                            font-weight: Type.w_bold;
-                            vertical-alignment: center;
-                            horizontal-alignment: center;
-                            animate color { duration: Motion.fast; easing: Motion.ease; }
-                        }
-                        hta := TouchArea { mouse-cursor: pointer; }
-                    }
+                    HelpDot { text: root.help; }
                 }
-            }
-            if hta.has-hover: Text {
-                text: root.help;
-                color: Theme.text_dim;
-                font-size: Type.caption;
-                wrap: word-wrap;
             }
             if root.hint != "": Text {
                 text: root.hint;
@@ -109,11 +82,17 @@ component Row inherits Rectangle {
 
 component Card inherits Rectangle {
     in property <string> title;
+    /// Whether the selected category includes this card. Collapsed to zero
+    /// height rather than merely hidden, so the surrounding layout does not
+    /// leave a gap where it was.
+    in property <bool> shown: true;
+
+    visible: root.shown;
     background: Theme.bg_1;
     border-radius: Theme.radius;
     border-width: Theme.hairline;
     border-color: Theme.line;
-    height: clay.preferred-height;
+    height: root.shown ? clay.preferred-height : 0px;
 
     clay := VerticalLayout {
         padding-top: Space.md;
@@ -133,6 +112,15 @@ component Card inherits Rectangle {
 }
 
 export component SettingsScreen inherits Rectangle {
+    /// Which category the content pane is showing.
+    in-out property <int> category: 0;
+    in-out property <string> search;
+    /// Matches for the current query: `name` is the setting, `subtitle` its
+    /// category, `kind` the category index to jump to.
+    in property <[DetailItem]> search_hits;
+    callback search_changed(string);
+    callback jump_to(int);
+
     in property <[AccountRow]> accounts;
     in property <[DetailItem]> shortcuts;
     in property <int> server_page;      // index into 10/25/50/100
@@ -243,15 +231,180 @@ export component SettingsScreen inherits Rectangle {
         }
         Rectangle { height: Theme.hairline; background: Theme.line; }
 
-        ScrollView {
+        HorizontalLayout {
             vertical-stretch: 1;
-            VerticalLayout {
-                padding: Space.xl;
-                spacing: Space.lg;
-                alignment: start;
+            spacing: 0;
+
+            // Sidebar: search on top, categories under it. Fixed width so the
+            // content pane does not reflow as the selection changes.
+            Rectangle {
+                width: 186px;
+                background: Theme.bg_1;
+
+                VerticalLayout {
+                    padding: Space.md;
+                    spacing: Space.xs;
+                    alignment: start;
+
+                    Rectangle {
+                        height: 30px;
+                        background: Theme.bg_2;
+                        border-radius: Theme.radius;
+                        border-width: Theme.hairline;
+                        border-color: sf.has-focus ? Theme.accent : Theme.line;
+                        animate border-color { duration: Motion.fast; easing: Motion.ease; }
+
+                        HorizontalLayout {
+                            padding-left: Space.sm;
+                            padding-right: Space.xs;
+                            spacing: Space.xs;
+
+                            VerticalLayout {
+                                alignment: center;
+                                Text { text: "⌕"; color: Theme.text_mute; font-size: Type.small; }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                sf := TextInput {
+                                    width: 100%;
+                                    height: 100%;
+                                    text <=> root.search;
+                                    color: Theme.text;
+                                    font-size: Type.small;
+                                    vertical-alignment: center;
+                                    single-line: true;
+                                    edited => { root.search_changed(self.text); }
+                                }
+                                if root.search == "": Text {
+                                    x: 0;
+                                    width: 100%;
+                                    height: 100%;
+                                    text: "Search";
+                                    color: Theme.text_mute;
+                                    font-size: Type.small;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            if root.search != "": VerticalLayout {
+                                alignment: center;
+                                IconBtn {
+                                    glyph: "×";
+                                    size_px: 22px;
+                                    clicked => { root.search = ""; root.search_changed(""); }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle { height: Space.xs; }
+
+                    for name[i] in [
+                        "Accounts", "Playtime", "Home", "Notifications",
+                        "Interface", "Macros", "Shortcuts", "System",
+                        "Network", "Roblox client", "Advanced", "About",
+                        "Danger zone",
+                    ]: Rectangle {
+                        height: 29px;
+                        border-radius: Theme.radius;
+                        background: root.category == i && root.search == ""
+                            ? Theme.bg_3
+                            : cta.has-hover ? Theme.bg_2 : transparent;
+                        animate background { duration: Motion.instant; easing: Motion.ease; }
+
+                        cta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.search = "";
+                                root.search_changed("");
+                                root.category = i;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            padding-left: Space.sm;
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: name;
+                                    // Named in red so it is not wandered into.
+                                    color: i == 12 ? Theme.danger
+                                           : root.category == i && root.search == ""
+                                             ? Theme.text : Theme.text_dim;
+                                    font-size: Type.small;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle { width: Theme.hairline; background: Theme.line; }
+
+            ScrollView {
+                horizontal-stretch: 1;
+                VerticalLayout {
+                    padding: Space.xl;
+                    spacing: Space.lg;
+                    alignment: start;
+
+                // Search replaces the category view rather than filtering it in
+                // place: a match is only useful if it says which category it
+                // lives in, and jumping there beats reading a half-empty page.
+                if root.search != "": VerticalLayout {
+                    spacing: Space.sm;
+                    Text {
+                        text: root.search_hits.length > 0
+                            ? root.search_hits.length + " matching settings"
+                            : "Nothing matches that";
+                        color: Theme.text_mute;
+                        font-size: Type.caption;
+                    }
+                    for hit in root.search_hits: Rectangle {
+                        height: 46px;
+                        background: hitta.has-hover ? Theme.bg_2 : Theme.bg_1;
+                        border-radius: Theme.radius;
+                        border-width: Theme.hairline;
+                        border-color: Theme.line;
+                        animate background { duration: Motion.instant; easing: Motion.ease; }
+
+                        hitta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.jump_to(hit.kind); }
+                        }
+
+                        HorizontalLayout {
+                            padding-left: Space.lg;
+                            padding-right: Space.lg;
+                            spacing: Space.sm;
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 1px;
+                                horizontal-stretch: 1;
+                                Text {
+                                    text: hit.name;
+                                    color: Theme.text;
+                                    font-size: Type.body;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                }
+                                Text {
+                                    text: hit.subtitle;
+                                    color: Theme.text_mute;
+                                    font-size: Type.caption;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Text { text: "›"; color: Theme.text_mute; font-size: Type.body; }
+                            }
+                        }
+                    }
+                }
 
                 Card {
                     title: "ACCOUNTS";
+                    shown: root.search == "" && root.category == 0;
                     for a in root.accounts: Rectangle {
                         height: 52px;
                         background: ata.has-hover ? Theme.bg_2 : transparent;
@@ -330,6 +483,7 @@ export component SettingsScreen inherits Rectangle {
 
                 Card {
                     title: "PLAYTIME";
+                    shown: root.search == "" && root.category == 1;
                     Row {
                         title: "Graph on Home";
                         hint: "A day-by-day chart of what you have been playing.";
@@ -393,6 +547,7 @@ export component SettingsScreen inherits Rectangle {
                 // only recoverable here, so it should not be a hunt.
                 if root.hidden_recent.length > 0: Card {
                     title: "HIDDEN FROM RECENT";
+                    shown: root.search == "" && root.category == 2;
                     Row {
                         title: "Removed games";
                         hint: "These stay off Home until you put them back.";
@@ -437,6 +592,7 @@ export component SettingsScreen inherits Rectangle {
 
                 Card {
                     title: "HOME";
+                    shown: root.search == "" && root.category == 2;
                     Row {
                         title: "Friends";
                         VerticalLayout {
@@ -490,18 +646,8 @@ export component SettingsScreen inherits Rectangle {
                 }
 
                 Card {
-                    title: "APPEARANCE";
-                    Row {
-                        title: "Dark theme";
-                        VerticalLayout {
-                            alignment: center;
-                            Toggle { on: root.dark; toggled => { root.set_dark(!root.dark); } }
-                        }
-                    }
-                }
-
-                Card {
                     title: "NOTIFICATIONS";
+                    shown: root.search == "" && root.category == 3;
                     Row {
                         title: "Friend requests";
                         VerticalLayout {
@@ -574,6 +720,7 @@ export component SettingsScreen inherits Rectangle {
 
                 Card {
                     title: "SYSTEM";
+                    shown: root.search == "" && root.category == 7;
                     Row {
                         title: "Open roblox:// links with RoJoin";
                         VerticalLayout {
@@ -595,6 +742,7 @@ export component SettingsScreen inherits Rectangle {
 
                 Card {
                     title: "MACROS";
+                    shown: root.search == "" && root.category == 5;
                     Row {
                         title: "Macros enabled";
                         VerticalLayout {
@@ -650,6 +798,15 @@ export component SettingsScreen inherits Rectangle {
 
                 Card {
                     title: "INTERFACE";
+                    shown: root.search == "" && root.category == 4;
+                    Row {
+                        title: "Dark theme";
+                        hint: "Light theme uses the same layout with an inverted palette.";
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle { on: root.dark; toggled => { root.set_dark(!root.dark); } }
+                        }
+                    }
                     Row {
                         title: "Interface size";
                         VerticalLayout {
@@ -694,6 +851,7 @@ export component SettingsScreen inherits Rectangle {
 
                 Card {
                     title: "DESKTOP SHORTCUTS";
+                    shown: root.search == "" && root.category == 6;
                     Row {
                         title: "Shortcuts on your desktop";
                         help: "Made from a game's page with the shortcut button. Clicking one launches Roblox straight into that game.";
@@ -727,6 +885,7 @@ export component SettingsScreen inherits Rectangle {
 
                 Card {
                     title: "NETWORK";
+                    shown: root.search == "" && root.category == 8;
                     Row {
                         title: "Friend refresh";
                         VerticalLayout {
@@ -757,6 +916,7 @@ export component SettingsScreen inherits Rectangle {
 
                 if root.has_client: Card {
                     title: "ROBLOX CLIENT";
+                    shown: root.search == "" && root.category == 9;
                     Row {
                         title: "Client settings and FastFlags";
                         help: "Renderer, Discord activity and engine flags. These belong to the Roblox client, not to RoJoin.";
@@ -769,6 +929,7 @@ export component SettingsScreen inherits Rectangle {
 
                 Card {
                     title: "ADVANCED";
+                    shown: root.search == "" && root.category == 10;
                     Row {
                         title: "Servers per page";
                         help: "How many servers to request for a game's server list. Roblox only accepts these four sizes.";
@@ -838,6 +999,7 @@ export component SettingsScreen inherits Rectangle {
 
                 Card {
                     title: "ABOUT";
+                    shown: root.search == "" && root.category == 11;
                     Row {
                         title: "RoJoin " + root.app_version;
                         hint: root.update_status;
@@ -860,15 +1022,17 @@ export component SettingsScreen inherits Rectangle {
                     }
                 }
 
-                // Last on the page on purpose. Everything here is irreversible,
-                // so it should take a deliberate scroll to reach rather than
-                // sitting next to a toggle someone is idly flipping.
+                // Its own category now. Burying it at the foot of a long scroll
+                // was the old protection; with the page split up, reaching it
+                // takes a deliberate click either way.
                 Rectangle {
+                    visible: root.search == "" && root.category == 12;
                     background: Theme.bg_1;
                     border-radius: Theme.radius;
                     border-width: Theme.hairline;
                     border-color: Theme.danger.with-alpha(0.45);
-                    height: dz.preferred-height;
+                    height: root.search == "" && root.category == 12
+                        ? dz.preferred-height : 0px;
 
                     dz := VerticalLayout {
                         Rectangle {
@@ -924,6 +1088,7 @@ export component SettingsScreen inherits Rectangle {
                     }
                 }
             }
+        }
         }
     }
 }

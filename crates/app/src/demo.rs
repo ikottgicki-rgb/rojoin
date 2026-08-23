@@ -140,6 +140,12 @@ pub fn seed(ui: &MainWindow) {
     seed_group(ui);
     seed_history(ui);
 
+    // ROJOIN_SETTINGS_SEARCH=<query> renders the settings search results.
+    if let Ok(q) = std::env::var("ROJOIN_SETTINGS_SEARCH") {
+        ui.set_settings_search(q.clone().into());
+        ui.set_settings_hits(ad::model(ad::search_settings(&q)));
+    }
+
     // ROJOIN_REQUESTS=1 opens the requests panel so it can be rendered.
     if std::env::var("ROJOIN_REQUESTS").is_ok_and(|v| v == "1") {
         ui.set_requests_open(true);

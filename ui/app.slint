@@ -110,6 +110,10 @@ export component MainWindow inherits Window {
     in property <bool> tray_available: true;
     callback set_close_to_tray(bool);
     callback set_autostart(bool);
+    in-out property <int> settings_category: 0;
+    in-out property <string> settings_search;
+    in property <[DetailItem]> settings_hits;
+    callback settings_search_changed(string);
     in property <[HistoryPoint]> history_points;
     in property <[HistoryStat]> history_stats;
     in property <string> history_peak;
@@ -742,6 +746,15 @@ export component MainWindow inherits Window {
                         }
 
                         if root.view_kind == 0 && root.section == 6: SettingsScreen {
+                            category <=> root.settings_category;
+                            search <=> root.settings_search;
+                            search_hits: root.settings_hits;
+                            search_changed(q) => { root.settings_search_changed(q); }
+                            jump_to(c) => {
+                                root.settings_search = "";
+                                root.settings_search_changed("");
+                                root.settings_category = c;
+                            }
                             width: 100%;
                             height: 100%;
                             accounts: root.accounts;
