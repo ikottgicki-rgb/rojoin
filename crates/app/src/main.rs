@@ -4131,6 +4131,13 @@ fn open_group(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
             let mine = or_default("the user's groups", groups::of_user(&client, me).await);
             let membership = mine.into_iter().find(|m| m.group.id == group_id);
             let games_list = or_default("the group's games", games::group_games(&client, group_id, 12).await);
+            // Without these every group game renders "0% rating".
+            let game_universes: Vec<i64> = games_list.iter().map(|g| g.id).collect();
+            let votes = if game_universes.is_empty() {
+                Vec::new()
+            } else {
+                or_default("ratings", games::votes(&client, &game_universes).await)
+            };
 
             let icon = thumbnails::group_icons(&client, &[group_id])
                 .await
@@ -4146,7 +4153,7 @@ fn open_group(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
             let universe_ids: Vec<i64> = games_list.iter().map(|d| d.id).collect();
             let art = or_default("game art", thumbnails::game_art(&client, &universe_ids).await);
 
-            Ok(GroupLoad { group, membership, games: games_list, icon, owner_avatar, art })
+            Ok(GroupLoad { group, membership, games: games_list, votes, icon, owner_avatar, art })
         },
         move |ui, result| {
             if gen != SESSION_GEN.load(Ordering::SeqCst) {
@@ -4206,7 +4213,10 @@ fn open_group(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
             let tiles: Vec<GameTile> = load
                 .games
                 .iter()
-                .map(|d| ad::tile_from_detail(d, None, false))
+                .map(|d| {
+                    let v = load.votes.iter().find(|v| v.id == d.id);
+                    ad::tile_from_detail(d, v, false)
+                })
                 .collect();
             ui.set_group_games(ad::model(tiles));
 
@@ -4226,6 +4236,7 @@ struct GroupLoad {
     group: groups::Group,
     membership: Option<groups::Membership>,
     games: Vec<rojoin_roblox::models::GameDetail>,
+    votes: Vec<rojoin_roblox::models::Votes>,
     icon: Option<String>,
     owner_avatar: Option<String>,
     art: std::collections::HashMap<i64, String>,
@@ -4940,17 +4951,32 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
     ui.set_launching(true);
 
     let name = ui.get_game().name.to_string();
-    {
-        let mut cfg = app.config.lock().unwrap();
-        let key = if req.root_place_id != 0 { req.root_place_id } else { req.place_id };
-        let universe = *app.current_universe.lock().unwrap();
-        cfg.record_launch(&key.to_string(), universe, &name, chrono::Utc::now().timestamp());
-        let _ = cfg.save();
+
+    /// Attribute this launch to the signed-in account.
+    ///
+    /// Called only once it is known *which* account will actually be playing.
+    /// Recording first and launching afterwards was wrong: when the active
+    /// account's cookie could not be placed, the game ran as whoever the client
+    /// already held while the launch was still filed under the active account —
+    /// so a session showed up in the wrong account's history and, now, on the
+    /// wrong playtime graph.
+    fn attribute(ui: &MainWindow, app: &Arc<App>, req: &JoinRequest, name: &str) {
+        {
+            let mut cfg = app.config.lock().unwrap();
+            let key = if req.root_place_id != 0 { req.root_place_id } else { req.place_id };
+            let universe = *app.current_universe.lock().unwrap();
+            cfg.record_launch(&key.to_string(), universe, name, chrono::Utc::now().timestamp());
+            let _ = cfg.save();
+        }
+        render_library(ui, app);
+        render_graph(ui, app);
     }
-    render_library(ui, app);
 
     match rojoin_launcher::detect() {
         rojoin_launcher::Backend::Sober => {
+            // Cleared only if the active account's cookie cannot be placed.
+            let mut attributable = true;
+
             if let Some(id) = app.config.lock().unwrap().active_account.clone() {
                 match secrets::load(&id) {
                     Some(cookie) => match rojoin_launcher::sober::set_cookie(&cookie) {
@@ -4971,7 +4997,22 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
                             return;
                         }
                     },
-                    None => tracing::warn!(account = %id, "no stored cookie; launching as whoever Sober has"),
+                    None => {
+                        // No cookie for this account, so the client keeps
+                        // whoever it already had. Say so rather than filing the
+                        // session under an account that is not playing it.
+                        tracing::warn!(
+                            account = %id,
+                            "no stored cookie; launching as whoever Sober has"
+                        );
+                        ui.set_launch_error(
+                            "Signed-in account could not be applied, so this \
+                             launched as whoever Roblox already had. Sign in \
+                             again to fix it — the session was not recorded."
+                                .into(),
+                        );
+                        attributable = false;
+                    }
                 }
             }
 
@@ -4985,11 +5026,16 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
             }
 
             match rojoin_launcher::launch_sober(&req) {
-                Ok(()) => tracing::info!(
-                    place = req.place_id,
-                    sub_place = req.is_sub_place(),
-                    "launched"
-                ),
+                Ok(()) => {
+                    tracing::info!(
+                        place = req.place_id,
+                        sub_place = req.is_sub_place(),
+                        "launched"
+                    );
+                    if attributable {
+                        attribute(ui, app, &req, &name);
+                    }
+                }
                 Err(e) => {
                     tracing::error!(error = %e, "launch failed");
                     ui.set_launch_error(format!("{e}").into());
@@ -5007,6 +5053,8 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
 
             let client = app.client.clone();
             let req2 = req.clone();
+            let app2 = app.clone();
+            let name2 = name.clone();
 
             bridge.call_res(
                 move || async move { auth::authentication_ticket(&client).await },
@@ -5016,11 +5064,16 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
                         Ok(ticket) => {
                             let now = chrono::Utc::now().timestamp_millis();
                             match rojoin_launcher::launch_windows(&req2, &ticket, now) {
-                                Ok(()) => tracing::info!(
-                                    place = req2.place_id,
-                                    sub_place = req2.is_sub_place(),
-                                    "launched"
-                                ),
+                                Ok(()) => {
+                                    tracing::info!(
+                                        place = req2.place_id,
+                                        sub_place = req2.is_sub_place(),
+                                        "launched"
+                                    );
+                                    // The ticket was minted from this account's
+                                    // own cookie, so it cannot be anyone else.
+                                    attribute(&ui, &app2, &req2, &name2);
+                                }
                                 Err(e) => tracing::error!(error = %e, "launch failed"),
                             }
                         }

@@ -183,11 +183,34 @@ pub async fn user_favorites(client: &Client, user_id: i64, limit: u32) -> Result
 }
 
 /// Games published by a group.
+/// Games published by a group.
+///
+/// This endpoint answers a **different shape** from every other game listing,
+/// and decoding it as a `GameDetail` looked like it worked while quietly
+/// producing rubbish:
+///   * `rootPlace` is an object (`{id, type}`), not a `rootPlaceId` scalar — so
+///     every row got root place **0**, and clicking one opened a blank game
+///     page for place 0,
+///   * visits arrive as `placeVisits`, not `visits`,
+///   * there is no `playing`, no rating, and `creator` carries no name.
+///
+/// So take only what it genuinely provides — the universe ids — and load real
+/// details for them through the endpoint that has all of it.
 pub async fn group_games(client: &Client, group_id: i64, limit: u32) -> Result<Vec<GameDetail>> {
+    #[derive(serde::Deserialize)]
+    struct Row {
+        id: i64,
+    }
+
     let limit = crate::page_limit(limit);
     let url = format!("{GAMES_V2}/groups/{group_id}/games?limit={limit}&sortOrder=Asc");
-    let page: Page<GameDetail> = client.get_json(&url).await?;
-    Ok(page.data)
+    let page: Page<Row> = client.get_json(&url).await?;
+
+    let universes: Vec<i64> = page.data.iter().map(|r| r.id).filter(|id| *id != 0).collect();
+    if universes.is_empty() {
+        return Ok(Vec::new());
+    }
+    details(client, &universes).await
 }
 
 pub async fn is_favorited(client: &Client, universe_id: i64) -> Result<bool> {
@@ -308,5 +331,43 @@ mod tests {
     fn id_joining_matches_roblox_query_format() {
         assert_eq!(join_ids(&[1, 2, 3]), "1,2,3");
         assert_eq!(join_ids(&[]), "");
+    }
+}
+
+#[cfg(test)]
+mod group_games_tests {
+    use super::*;
+
+    /// Verbatim from `games.roblox.com/v2/groups/1200769/games`. The point is
+    /// that it looks nothing like a GameDetail, which is why decoding it as one
+    /// produced rows with root place 0 and no players.
+    const REAL: &str = r#"{"data":[{
+        "id":109391632,"name":"Seranok Was Here","description":null,
+        "creator":{"id":1200769,"type":"Group"},
+        "rootPlace":{"id":273768824,"type":"Place"},
+        "created":"2015-07-23T16:51:41.063Z",
+        "updated":"2019-04-05T15:41:32.553Z","placeVisits":0}]}"#;
+
+    #[test]
+    fn the_group_shape_yields_a_universe_id() {
+        #[derive(serde::Deserialize)]
+        struct Row {
+            id: i64,
+        }
+        let page: Page<Row> = serde_json::from_str(REAL).unwrap();
+        assert_eq!(page.data.len(), 1);
+        assert_eq!(page.data[0].id, 109391632, "that is the universe id");
+    }
+
+    #[test]
+    fn decoding_it_as_a_game_detail_loses_the_root_place() {
+        // Pinned deliberately: this is the old behaviour, and it is why the
+        // rows have to be re-fetched instead of used directly.
+        let page: Page<GameDetail> = serde_json::from_str(REAL).unwrap();
+        assert_eq!(
+            page.data[0].root_place_id, 0,
+            "rootPlace is an object here, so rootPlaceId never populates"
+        );
+        assert_eq!(page.data[0].playing, 0, "and there is no player count at all");
     }
 }
