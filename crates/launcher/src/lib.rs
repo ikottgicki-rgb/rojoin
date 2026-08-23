@@ -11,6 +11,7 @@
 //! stay keyed to the game rather than to each individual place.
 
 pub mod sober;
+pub mod winflags;
 pub mod windows;
 
 #[derive(Debug, thiserror::Error)]
@@ -185,5 +186,28 @@ mod tests {
     fn missing_root_is_not_mistaken_for_a_sub_place() {
         let r = JoinRequest { place_id: 5, root_place_id: 0, ..Default::default() };
         assert!(!r.is_sub_place());
+    }
+}
+
+/// Apply the active account's FastFlags to whichever client will run.
+///
+/// Callers used `sober::write_fflags` directly, which made the whole FastFlag
+/// feature Linux-only without anything saying so: on Windows the editor saved
+/// flags that were never handed to the engine.
+pub fn write_fflags(flags: &[(String, String)]) -> Result<()> {
+    match detect() {
+        Backend::Sober => sober::write_fflags(flags),
+        Backend::WindowsClient => winflags::write_fflags(flags),
+    }
+}
+
+/// Can FastFlags be applied here at all?
+///
+/// Lets the UI say "no client installed" instead of accepting edits that go
+/// nowhere.
+pub fn fflags_supported() -> bool {
+    match detect() {
+        Backend::Sober => sober::is_installed(),
+        Backend::WindowsClient => !winflags::version_dirs().is_empty(),
     }
 }

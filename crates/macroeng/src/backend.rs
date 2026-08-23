@@ -12,7 +12,9 @@
 //! membership of the `input` group plus a udev rule. `permission_hint`
 //! produces the exact setup instructions rather than failing opaquely.
 
-use crate::{Error, Key, MouseButton, Result};
+#[cfg(unix)]
+use crate::Error;
+use crate::{Key, MouseButton, Result};
 
 pub trait InputBackend: Send {
     fn key_down(&mut self, key: Key) -> Result<()>;

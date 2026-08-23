@@ -1746,7 +1746,7 @@ fn render_flag_rows(ui: &MainWindow, app: &Arc<App>) {
 /// is running, so a failure here is reported rather than hidden.
 fn sync_fflags_to_client(ui: &MainWindow, app: &Arc<App>) {
     let flags: Vec<(String, String)> = app.config.lock().unwrap().fflags().into_iter().collect();
-    match rojoin_launcher::sober::write_fflags(&flags) {
+    match rojoin_launcher::write_fflags(&flags) {
         Ok(()) => ui.set_client_status("".into()),
         Err(e) => ui.set_client_status(format!("{e}").into()),
     }
@@ -5562,7 +5562,7 @@ fn launch(ui: &MainWindow, app: &Arc<App>, req: JoinRequest) {
             // account's flags would be used.
             let flags: Vec<(String, String)> =
                 app.config.lock().unwrap().fflags().into_iter().collect();
-            if let Err(e) = rojoin_launcher::sober::write_fflags(&flags) {
+            if let Err(e) = rojoin_launcher::write_fflags(&flags) {
                 tracing::warn!(error = %e, "could not apply this account's flags");
             }
 

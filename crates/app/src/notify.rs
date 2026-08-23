@@ -279,7 +279,85 @@ fn show(summary: &str, body: &str) {
     });
 }
 
-#[cfg(not(unix))]
+/// Windows toast, through the WinRT notification API.
+///
+/// `notify-rust` is linux/bsd/mac only, so there is nothing to reuse. The
+/// alternatives were each worse: a WinRT crate does not cross-compile cleanly to
+/// the mingw target this ships from, and a `Shell_NotifyIcon` balloon needs its
+/// own tray icon, which would mean either a second icon in the tray or
+/// hand-rolling the tray that already works.
+///
+/// So this drives the same WinRT types through PowerShell, which is present on
+/// every supported Windows and needs no registration. It costs a few hundred
+/// milliseconds per notification — irrelevant for something that fires when a
+/// friend starts a game — and runs with no window, since this build goes to
+/// lengths not to show a console.
+#[cfg(windows)]
 fn show(summary: &str, body: &str) {
-    tracing::info!(summary, body, "notification (no Windows backend yet)");
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    // Toast content is XML, and a game called "Bob's & Friends <3" would
+    // otherwise produce a document that does not parse.
+    fn xml_escape(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&apos;")
+    }
+
+    let script = format!(
+        "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, \
+         ContentType = WindowsRuntime] > $null; \
+         $x = New-Object Windows.Data.Xml.Dom.XmlDocument; \
+         $x.LoadXml('<toast><visual><binding template=\"ToastText02\">\
+         <text id=\"1\">{}</text><text id=\"2\">{}</text></binding></visual></toast>'); \
+         $t = New-Object Windows.UI.Notifications.ToastNotification $x; \
+         [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('RoJoin').Show($t)",
+        xml_escape(summary),
+        xml_escape(body),
+    );
+
+    std::thread::spawn(move || {
+        let result = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        match result {
+            Ok(s) if s.success() => {}
+            Ok(s) => tracing::debug!(code = ?s.code(), "toast command failed"),
+            Err(e) => tracing::debug!(error = %e, "could not run the toast command"),
+        }
+    });
+}
+
+#[cfg(not(any(unix, windows)))]
+fn show(summary: &str, body: &str) {
+    tracing::info!(summary, body, "notification (no backend on this platform)");
+}
+
+#[cfg(test)]
+mod tests {
+    /// The Windows path builds XML by hand, so a name with an ampersand or a
+    /// quote in it must not produce a document that fails to parse. Roblox game
+    /// names contain both routinely.
+    #[cfg(windows)]
+    #[test]
+    fn toast_text_is_xml_escaped() {
+        fn xml_escape(s: &str) -> String {
+            s.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;")
+                .replace('\'', "&apos;")
+        }
+
+        assert_eq!(xml_escape("Bob's & Friends <3"), "Bob&apos;s &amp; Friends &lt;3");
+        assert_eq!(xml_escape(r#"say "hi""#), "say &quot;hi&quot;");
+        assert_eq!(xml_escape("plain"), "plain");
+    }
 }

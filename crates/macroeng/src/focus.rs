@@ -15,6 +15,8 @@
 //! occasionally lets a keystroke through — the user would just conclude the
 //! whole feature is broken.
 
+// Only the unix detectors shell out; Windows asks the API directly.
+#[cfg(unix)]
 use std::process::{Command, Stdio};
 
 /// Window classes and process names that mean "the game".
@@ -42,6 +44,7 @@ impl Focus {
     }
 }
 
+#[cfg(unix)]
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
     let out = Command::new(cmd)
         .args(args)

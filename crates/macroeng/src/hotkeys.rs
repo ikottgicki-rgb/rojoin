@@ -8,8 +8,9 @@
 //! output side needs — so if macros can send input, they can usually listen
 //! too.
 //!
-//! Windows needs a low-level keyboard hook and a message pump; that is not
-//! implemented yet and `spawn` says so rather than silently doing nothing.
+//! Windows uses a `WH_KEYBOARD_LL` hook, which reports every key system-wide
+//! without needing a DLL, and pumps its own message queue on the listener
+//! thread — the hook is only invoked while that thread is pumping.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -46,10 +47,21 @@ impl Listener {
             Some(Self { stop })
         }
 
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            let started = windows_impl::spawn(tx, stop.clone());
+            if started == 0 {
+                tracing::warn!("could not install the keyboard hook; hotkeys are unavailable");
+                return None;
+            }
+            tracing::info!("hotkey listener running (low-level keyboard hook)");
+            Some(Self { stop })
+        }
+
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = tx;
-            tracing::warn!("global hotkeys are not implemented on this platform yet");
+            tracing::warn!("global hotkeys are not implemented on this platform");
             None
         }
     }
@@ -69,6 +81,12 @@ impl Drop for Listener {
 #[cfg(unix)]
 pub fn key_from_evdev(code: u16) -> Option<Key> {
     Key::ALL.iter().copied().find(|k| k.evdev_code() == code)
+}
+
+/// Reverse of `Key::vk_code`.
+#[cfg(windows)]
+pub fn key_from_vk(code: u16) -> Option<Key> {
+    Key::ALL.iter().copied().find(|k| k.vk_code() == code)
 }
 
 #[cfg(unix)]
@@ -142,6 +160,107 @@ mod linux {
     }
 }
 
+#[cfg(windows)]
+mod windows_impl {
+    use super::*;
+    use std::cell::RefCell;
+    use std::sync::mpsc::Sender;
+
+    use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, DispatchMessageW, PeekMessageW, SetWindowsHookExW, TranslateMessage,
+        UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, MSG, PM_REMOVE, WH_KEYBOARD_LL,
+        WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    };
+
+    // The hook callback gets no user pointer, so the sender has to be reachable
+    // from it. Thread-local rather than global: the hook only ever fires on the
+    // thread that installed it, which is also the thread that set this.
+    thread_local! {
+        static SENDER: RefCell<Option<Sender<HotkeyEvent>>> = const { RefCell::new(None) };
+    }
+
+    unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if code == HC_ACTION as i32 {
+            let info = &*(lparam as *const KBDLLHOOKSTRUCT);
+
+            let event = match wparam as u32 {
+                WM_KEYDOWN | WM_SYSKEYDOWN => Some(true),
+                WM_KEYUP | WM_SYSKEYUP => Some(false),
+                _ => None,
+            };
+
+            if let (Some(down), Some(key)) = (event, super::key_from_vk(info.vkCode as u16)) {
+                SENDER.with(|s| {
+                    if let Some(tx) = s.borrow().as_ref() {
+                        let _ = tx.send(if down {
+                            HotkeyEvent::Pressed(key)
+                        } else {
+                            HotkeyEvent::Released(key)
+                        });
+                    }
+                });
+            }
+        }
+
+        // Always chain. Swallowing the key here would stop it reaching the game,
+        // which is the opposite of what a macro trigger should do.
+        CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+    }
+
+    /// Install the hook on its own thread. Returns 1 on success, 0 on failure,
+    /// mirroring the Linux "how many devices started" contract.
+    pub fn spawn(tx: Sender<HotkeyEvent>, stop: Arc<AtomicBool>) -> usize {
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<bool>();
+
+        let spawned = std::thread::Builder::new()
+            .name("hotkeys".into())
+            .spawn(move || {
+                SENDER.with(|s| *s.borrow_mut() = Some(tx));
+
+                // WH_KEYBOARD_LL is the one keyboard hook that does not have to
+                // live in a DLL, which is what makes this possible in-process.
+                let hook = unsafe {
+                    SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), std::ptr::null_mut(), 0)
+                };
+                if hook.is_null() {
+                    let _ = ready_tx.send(false);
+                    return;
+                }
+                let _ = ready_tx.send(true);
+
+                // The hook is only called while this thread pumps messages.
+                // Peek rather than Get so the stop flag is honoured promptly —
+                // GetMessageW would block until the next key, leaving the thread
+                // alive long after shutdown.
+                let mut msg: MSG = unsafe { std::mem::zeroed() };
+                while !stop.load(Ordering::SeqCst) {
+                    unsafe {
+                        while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                            let _ = TranslateMessage(&msg);
+                            DispatchMessageW(&msg);
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+
+                unsafe {
+                    let _ = UnhookWindowsHookEx(hook);
+                }
+            })
+            .is_ok();
+
+        if !spawned {
+            return 0;
+        }
+        if ready_rx.recv().unwrap_or(false) {
+            1
+        } else {
+            0
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,5 +278,20 @@ mod tests {
     fn unknown_codes_map_to_nothing() {
         assert_eq!(key_from_evdev(0), None);
         assert_eq!(key_from_evdev(700), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn vk_codes_map_back_to_their_keys() {
+        for k in Key::ALL {
+            assert_eq!(key_from_vk(k.vk_code()), Some(*k), "{k:?} did not round-trip");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unknown_vk_codes_map_to_nothing() {
+        assert_eq!(key_from_vk(0), None);
+        assert_eq!(key_from_vk(0xFFFF), None);
     }
 }

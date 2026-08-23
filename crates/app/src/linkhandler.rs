@@ -1,12 +1,18 @@
 //! Registering RoJoin as the handler for `roblox://` links.
 //!
-//! Linux: writes a `.desktop` file and points `xdg-mime` at it. Windows: needs
-//! registry writes, which are deliberately not done yet — the toggle reports
-//! its real state rather than claiming success.
+//! Linux writes a `.desktop` file and points `xdg-mime` at it. Windows writes
+//! the protocol under `HKCU\Software\Classes`, which needs no elevation —
+//! per-user classes take precedence over the machine-wide ones for the logged-in
+//! user, so this can claim `roblox://` without touching the Roblox install.
 
+// All three are the Linux registration's business; Windows registers through
+// the registry and touches none of it.
+#[cfg(unix)]
 use std::path::PathBuf;
 
+#[cfg(unix)]
 const DESKTOP_NAME: &str = "rojoin-v4-roblox.desktop";
+#[cfg(unix)]
 const MIME: &str = "x-scheme-handler/roblox";
 
 #[cfg(unix)]
@@ -24,7 +30,11 @@ pub fn is_registered() -> bool {
     {
         desktop_path().map(|p| p.exists()).unwrap_or(false)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows_impl::is_registered()
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         false
     }
@@ -74,12 +84,83 @@ pub fn set_registered(on: bool) -> std::io::Result<()> {
 
         Ok(())
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows_impl::set_registered(on)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = on;
         Err(std::io::Error::other(
             "link-handler registration is not implemented on this platform",
         ))
+    }
+}
+
+#[cfg(windows)]
+mod windows_impl {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    /// Per-user, so nothing here needs administrator rights. `HKCU\Software\
+    /// Classes` shadows `HKLM` for this user, which is exactly the behaviour
+    /// wanted: claim the scheme for whoever is signed in and leave the machine
+    /// alone.
+    const KEY: &str = r"HKCU\Software\Classes\roblox";
+    const CMD_KEY: &str = r"HKCU\Software\Classes\roblox\shell\open\command";
+
+    /// Same no-console treatment as everywhere else that shells out.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    fn reg(args: &[&str]) -> std::io::Result<std::process::Output> {
+        Command::new("reg")
+            .args(args)
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdin(Stdio::null())
+            .output()
+    }
+
+    pub fn is_registered() -> bool {
+        // Checking the command key, not the parent: a half-written registration
+        // with no command would report as registered and then do nothing.
+        reg(&["query", CMD_KEY])
+            .map(|o| {
+                o.status.success()
+                    && String::from_utf8_lossy(&o.stdout).to_lowercase().contains("rojoin")
+            })
+            .unwrap_or(false)
+    }
+
+    pub fn set_registered(on: bool) -> std::io::Result<()> {
+        if !on {
+            // Not being there is a successful removal.
+            let _ = reg(&["delete", KEY, "/f"]);
+            return Ok(());
+        }
+
+        let exe = std::env::current_exe()?;
+        // Quoted, because Program Files has a space in it, and `%1` unquoted
+        // would split a URI on one too.
+        let command = format!("\"{}\" \"%1\"", exe.display());
+
+        let steps: [&[&str]; 4] = [
+            &["add", KEY, "/ve", "/t", "REG_SZ", "/d", "URL:Roblox Protocol", "/f"],
+            &["add", KEY, "/v", "URL Protocol", "/t", "REG_SZ", "/d", "", "/f"],
+            &["add", KEY, "/v", "FriendlyTypeName", "/t", "REG_SZ", "/d", "RoJoin", "/f"],
+            &["add", CMD_KEY, "/ve", "/t", "REG_SZ", "/d", &command, "/f"],
+        ];
+
+        for args in steps {
+            let out = reg(args)?;
+            if !out.status.success() {
+                return Err(std::io::Error::other(format!(
+                    "reg {} failed: {}",
+                    args.first().copied().unwrap_or("?"),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
