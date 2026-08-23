@@ -13,3 +13,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 chrono.workspace = true
+
+[dev-dependencies]
+# The scrape-check example needs an async main.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -1,3 +1,4 @@
+import { PlayerHistory, HistoryPoint, HistoryStat } from "history.slint";
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, MetaStat, Skeleton, EmptyState, Spinner, BusySlot, Texture } from "components.slint";
 import { GameGrid, ItemGrid } from "cards.slint";
@@ -214,6 +215,19 @@ export component GameScreen inherits Rectangle {
     callback toggle_notify();
     callback copy_link();
     callback copy_id();
+
+    // Rolimons history. Fetched only when this tab is opened — the page it comes
+    // from is about 850 KB, so loading it for every game anyone glances at would
+    // be both slow and rude.
+    in property <[HistoryPoint]> history_points;
+    in property <[HistoryStat]> history_stats;
+    in property <string> history_peak;
+    in property <string> history_range;
+    in property <bool> history_loading: false;
+    in property <string> history_error;
+    in-out property <int> history_window: 1;
+    callback history_range_changed(int);
+    callback history_retry();
     callback inspect_badge(string);
     callback make_shortcut();
     callback open_browser();
@@ -492,7 +506,7 @@ export component GameScreen inherits Rectangle {
                 HorizontalLayout {
                     alignment: start;
                     Segmented {
-                        options: ["About", "Servers"];
+                        options: ["About", "Servers", "History"];
                         current <=> root.tab;
                     }
                 }
@@ -620,6 +634,18 @@ export component GameScreen inherits Rectangle {
                             join => { root.join_server(s.id); }
                         }
                     }
+                }
+
+                if root.tab == 2: PlayerHistory {
+                    points: root.history_points;
+                    stats: root.history_stats;
+                    peak_label: root.history_peak;
+                    range_label: root.history_range;
+                    loading: root.history_loading;
+                    error: root.history_error;
+                    range <=> root.history_window;
+                    range_changed(i) => { root.history_range_changed(i); }
+                    retry => { root.history_retry(); }
                 }
             }
         }

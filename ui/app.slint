@@ -1,3 +1,4 @@
+import { HistoryPoint, HistoryStat } from "history.slint";
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Btn, IconBtn, Segmented, Spinner, EmptyState, Toast, ConfirmDialog } from "components.slint";
 import { GameTile, WearItem, SubPlace, ServerRow, DetailItem, GameDetailData, FriendRow, GroupRow, MacroRow, MacroStepRow, RequestRow, MemberRow } from "types.slint";
@@ -15,7 +16,7 @@ import { LibraryScreen, PlayStat } from "library.slint";
 import { GraphSegment, GraphDay, GraphLegend } from "graph.slint";
 import { SettingsScreen, AccountRow } from "settings.slint";
 
-export { Theme, SignInPhase, ProfileData, GroupData, PlayStat, AccountRow, GraphSegment, GraphDay, GraphLegend }
+export { Theme, SignInPhase, ProfileData, GroupData, PlayStat, AccountRow, GraphSegment, GraphDay, GraphLegend, HistoryPoint, HistoryStat }
 
 export component MainWindow inherits Window {
     title: "RoJoin";
@@ -109,6 +110,23 @@ export component MainWindow inherits Window {
     in property <bool> tray_available: true;
     callback set_close_to_tray(bool);
     callback set_autostart(bool);
+    in property <[HistoryPoint]> history_points;
+    in property <[HistoryStat]> history_stats;
+    in property <string> history_peak;
+    in property <string> history_range;
+    in property <bool> history_loading: false;
+    in property <string> history_error;
+    in-out property <int> history_window: 1;
+    callback history_range_changed(int);
+    callback load_history();
+
+    // Only when the tab is actually shown: the Rolimons page is ~850 KB, so
+    // fetching it for every game someone glances at would be slow and rude.
+    changed game_tab => {
+        if (self.game_tab == 2) {
+            self.load_history();
+        }
+    }
     in property <bool> profile_is_me: false;
     in property <bool> saving_bio: false;
     in property <string> bio_status;
@@ -458,6 +476,15 @@ export component MainWindow inherits Window {
                         clip: true;
 
                         if root.view_kind == 1: GameScreen {
+                            history_points: root.history_points;
+                            history_stats: root.history_stats;
+                            history_peak: root.history_peak;
+                            history_range: root.history_range;
+                            history_loading: root.history_loading;
+                            history_error: root.history_error;
+                            history_window <=> root.history_window;
+                            history_range_changed(i) => { root.history_range_changed(i); }
+                            history_retry => { root.load_history(); }
                             width: 100%;
                             height: 100%;
                             game: root.game;

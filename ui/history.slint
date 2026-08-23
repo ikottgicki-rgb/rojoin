@@ -1,0 +1,204 @@
+import { Theme, Space, Type, Motion } from "theme.slint";
+import { Btn, Segmented, Spinner, EmptyState } from "components.slint";
+
+/// One column of the player-history chart.
+///
+/// Positions are pre-normalised to 0..1 by the Rust side: Slint has no business
+/// knowing about unix timestamps or peak player counts, and doing the maths
+/// once is cheaper than doing it per column on every repaint.
+export struct HistoryPoint {
+    x: float,
+    height: float,
+    label: string,      // "Fri 14 Aug · 12.4K players"
+}
+
+export struct HistoryStat {
+    label: string,
+    value: string,
+}
+
+/// Concurrent players over time, from Rolimons.
+///
+/// Drawn as a dense column chart rather than a stroked line: it reads the same
+/// at this size, needs no path geometry, and every column is its own hover
+/// target — which is how the readout works without a floating tooltip that
+/// would need positioning and clipping.
+export component PlayerHistory inherits Rectangle {
+    in property <[HistoryPoint]> points;
+    in property <[HistoryStat]> stats;
+    in property <string> peak_label;
+    in property <string> range_label;
+    in property <bool> loading: false;
+    in property <string> error;
+    /// 0 = 7d · 1 = 30d · 2 = 1y · 3 = all
+    in-out property <int> range: 1;
+    callback range_changed(int);
+    callback retry();
+
+    property <float> grow: 0.0;
+    animate grow { duration: 600ms; easing: ease-out-quad; }
+    init => { self.grow = 1.0; }
+
+    /// What the pointer is over, shown in the header so nothing floats.
+    property <string> hover;
+
+    VerticalLayout {
+        spacing: Space.md;
+
+        HorizontalLayout {
+            spacing: Space.sm;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 1px;
+                Text {
+                    text: "Players over time";
+                    color: Theme.text;
+                    font-size: Type.small;
+                    font-weight: Type.w_bold;
+                }
+                Text {
+                    text: root.hover != "" ? root.hover : root.range_label;
+                    color: root.hover != "" ? Theme.accent : Theme.text_mute;
+                    font-size: Type.caption;
+                }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            VerticalLayout {
+                alignment: center;
+                Segmented {
+                    options: ["7d", "30d", "1y", "All"];
+                    current <=> root.range;
+                    changed(i) => { root.range_changed(i); }
+                }
+            }
+        }
+
+        if root.loading: Rectangle {
+            height: 150px;
+            Spinner {
+                size_px: 22px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+
+        if !root.loading && root.error != "": Rectangle {
+            height: 150px;
+            VerticalLayout {
+                alignment: center;
+                spacing: Space.sm;
+                Text {
+                    text: root.error;
+                    color: Theme.text_mute;
+                    font-size: Type.caption;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    Btn { label: "Try again"; clicked => { root.retry(); } }
+                }
+            }
+        }
+
+        if !root.loading && root.error == "" && root.points.length == 0: EmptyState {
+            height: 150px;
+            title: "No history for this game";
+            hint: "Rolimons has not tracked this one.";
+        }
+
+        if !root.loading && root.error == "" && root.points.length > 0: VerticalLayout {
+            spacing: Space.xs;
+
+            HorizontalLayout {
+                Text {
+                    text: root.peak_label;
+                    color: Theme.text_mute;
+                    font-size: Type.micro;
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            plot := Rectangle {
+                height: 150px;
+
+                Rectangle {
+                    y: parent.height - Theme.hairline;
+                    height: Theme.hairline;
+                    background: Theme.line;
+                }
+
+                for p[i] in root.points: Rectangle {
+                    // One column per point, filling the width. Sized from the
+                    // count rather than a fixed width so a 7-day view and an
+                    // all-time view both span the plot.
+                    property <length> colw: plot.width / max(1, root.points.length);
+
+                    x: p.x * (plot.width - self.width);
+                    // No gap: at this density any spacing shows up as vertical
+                    // striping across the whole plot. Butted together the
+                    // columns read as one filled area, and each is still its own
+                    // hover target.
+                    width: max(1px, self.colw);
+                    height: max(1px, plot.height * p.height * root.grow);
+                    y: plot.height - self.height;
+
+                    background: cta.has-hover ? Theme.text : Theme.accent;
+                    // Lighter than the app's usual accent use: this is a large
+                    // filled area, and at full strength it dominates the page
+                    // rather than informing it.
+                    opacity: cta.has-hover ? 1.0 : 0.62;
+                    animate background, opacity { duration: Motion.instant; easing: Motion.ease; }
+
+                    cta := TouchArea {
+                        mouse-cursor: default;
+                        changed has-hover => {
+                            root.hover = self.has-hover ? p.label : "";
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.stats.length > 0: HorizontalLayout {
+            spacing: Space.md;
+            for s in root.stats: Rectangle {
+                horizontal-stretch: 1;
+                height: 54px;
+                background: Theme.bg_2;
+                border-radius: Theme.radius;
+                border-width: Theme.hairline;
+                border-color: Theme.line;
+                VerticalLayout {
+                    padding: Space.sm;
+                    alignment: center;
+                    spacing: 1px;
+                    Text {
+                        text: s.value;
+                        color: Theme.text;
+                        font-size: Type.lead;
+                        font-weight: Type.w_bold;
+                        overflow: elide;
+                        wrap: no-wrap;
+                    }
+                    Text {
+                        text: s.label;
+                        color: Theme.text_mute;
+                        font-size: Type.micro;
+                        overflow: elide;
+                        wrap: no-wrap;
+                    }
+                }
+            }
+        }
+
+        Text {
+            text: "Historical data from rolimons.com";
+            color: Theme.text_mute;
+            font-size: Type.micro;
+        }
+    }
+}

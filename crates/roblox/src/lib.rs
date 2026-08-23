@@ -13,6 +13,7 @@
 //!   * Sub-places come from `develop.roblox.com/v1/universes/{id}/places` and
 //!     that endpoint needs no auth.
 
+pub mod rolimons;
 pub mod discovery;
 pub mod auth;
 pub mod avatar;

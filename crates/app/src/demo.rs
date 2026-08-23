@@ -138,6 +138,7 @@ pub fn seed(ui: &MainWindow) {
     seed_profile(ui);
     seed_graph(ui);
     seed_group(ui);
+    seed_history(ui);
 
     // ROJOIN_REQUESTS=1 opens the requests panel so it can be rendered.
     if std::env::var("ROJOIN_REQUESTS").is_ok_and(|v| v == "1") {
@@ -418,4 +419,41 @@ fn seed_group(ui: &MainWindow) {
             })
             .collect(),
     ));
+}
+
+/// A plausible player-history series, so the Rolimons chart can be rendered
+/// headless. Shaped like a real game: a daily rhythm plus a weekly one.
+fn seed_history(ui: &MainWindow) {
+    use rojoin_roblox::rolimons::History;
+
+    let now = chrono::Utc::now().timestamp();
+    let n = 1_200i64;
+    let mut h = History::default();
+
+    for i in 0..n {
+        let t = now - (n - i) * 1800;
+        // A daily rhythm plus a slower weekly one. Frequencies kept low on
+        // purpose: real data arrives bucketed, so a high-frequency wave here
+        // would flatter the chart with detail it will never actually get.
+        let day = ((i as f64 * 0.035).sin() * 0.30 + 1.0).max(0.2);
+        let week = ((i as f64 * 0.006).cos() * 0.22 + 1.0).max(0.2);
+        h.timestamps.push(t);
+        h.players.push(Some((9_000.0 * day * week) as i64));
+    }
+    h.avg_playtime = vec![Some(14.2)];
+    h.visits = vec![Some(8_013_287_123)];
+    h.upvotes = vec![Some(5_791_138)];
+    h.downvotes = vec![Some(810_349)];
+    h.favorites = vec![Some(18_635_759)];
+
+    let m = ad::build_history(&h, 1, now);
+    ui.set_history_points(ad::model(m.points));
+    ui.set_history_stats(ad::model(m.stats));
+    ui.set_history_peak(m.peak.into());
+    ui.set_history_range(m.range.into());
+    ui.set_history_window(1);
+
+    if std::env::var("ROJOIN_HISTORY").is_ok_and(|v| v == "1") {
+        ui.set_game_tab(2);
+    }
 }

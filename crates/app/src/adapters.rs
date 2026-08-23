@@ -939,3 +939,210 @@ mod time_ago_unix_tests {
         assert_eq!(time_ago_unix(now + 5000, now), "just now");
     }
 }
+
+// ------------------------------------------------------------- history ---
+
+/// The player-history chart, ready for Slint.
+pub struct HistoryModel {
+    pub points: Vec<crate::HistoryPoint>,
+    pub stats: Vec<crate::HistoryStat>,
+    pub peak: String,
+    pub range: String,
+}
+
+/// How many columns to draw.
+///
+/// Fine enough that the result reads as a trend rather than a bar chart, while
+/// each column is still ~7px at a typical window width — wide enough to hover
+/// deliberately.
+const HISTORY_COLUMNS: usize = 150;
+
+/// Days covered by each range choice. `0` means everything there is.
+pub fn history_window_days(choice: i32) -> i64 {
+    match choice {
+        0 => 7,
+        2 => 365,
+        3 => 0,
+        _ => 30,
+    }
+}
+
+/// Build the chart for one window of a game's history.
+///
+/// Heights are normalised against the window's own peak rather than an absolute
+/// scale: a game with 300 players and one with 300,000 should both fill the plot,
+/// because the question being asked is "what is the shape of this game's day",
+/// not "how does it compare to Jailbreak".
+pub fn build_history(
+    h: &rojoin_roblox::rolimons::History,
+    choice: i32,
+    now: i64,
+) -> HistoryModel {
+    use rojoin_roblox::rolimons;
+
+    let days = history_window_days(choice);
+    let window = if days == 0 { h.covered_days().max(1) } else { days };
+    let series = h.recent_players(window, now);
+    let buckets = rolimons::bucket_players(&series, HISTORY_COLUMNS);
+
+    let peak = buckets.iter().map(|b| b.players).max().unwrap_or(0);
+    let ceiling = peak.max(1) as f32;
+
+    let points: Vec<crate::HistoryPoint> = buckets
+        .iter()
+        .enumerate()
+        .map(|(i, b)| crate::HistoryPoint {
+            // Position by index: the buckets are already evenly spaced in time,
+            // and empty ones were dropped, so spacing by timestamp would leave
+            // ragged gaps that read as missing columns rather than quiet periods.
+            x: if buckets.len() > 1 {
+                i as f32 / (buckets.len() - 1) as f32
+            } else {
+                0.0
+            },
+            height: b.players as f32 / ceiling,
+            label: format!("{} · {} players", day_stamp(b.at), compact(b.players)).into(),
+        })
+        .collect();
+
+    let mut stats = Vec::new();
+    if let Some(p) = h.latest_players() {
+        stats.push(crate::HistoryStat { label: "Playing now".into(), value: compact(p).into() });
+    }
+    if let Some((_, p)) = h.peak(window, now) {
+        stats.push(crate::HistoryStat { label: "Peak".into(), value: compact(p).into() });
+    }
+    if let Some(m) = h.latest_avg_playtime() {
+        stats.push(crate::HistoryStat {
+            label: "Avg session".into(),
+            value: format!("{m:.0}m").into(),
+        });
+    }
+    if let Some(v) = h.latest_visits() {
+        stats.push(crate::HistoryStat { label: "Visits".into(), value: compact(v).into() });
+    }
+    if let Some(r) = h.latest_rating() {
+        stats.push(crate::HistoryStat { label: "Rating".into(), value: format!("{r}%").into() });
+    }
+
+    let covered = h.covered_days();
+    HistoryModel {
+        points,
+        stats,
+        peak: if peak > 0 {
+            format!("peak {} in this window", compact(peak))
+        } else {
+            String::new()
+        },
+        range: match days {
+            0 => format!("all {} days on record", covered),
+            7 => "last 7 days".into(),
+            365 => "last year".into(),
+            n => format!("last {n} days"),
+        },
+    }
+}
+
+/// "14 Aug" or "14 Aug 2024" when it is not this year — a bare day and month is
+/// ambiguous once the window covers years.
+fn day_stamp(unix: i64) -> String {
+    use chrono::{Datelike, Local, TimeZone};
+
+    let Some(dt) = Local.timestamp_opt(unix, 0).single() else { return String::new() };
+    let this_year = Local::now().year();
+    if dt.year() == this_year {
+        dt.format("%-d %b %H:%M").to_string()
+    } else {
+        dt.format("%-d %b %Y").to_string()
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    use rojoin_roblox::rolimons::History;
+
+    fn series(n: i64, now: i64) -> History {
+        History {
+            timestamps: (0..n).map(|i| now - (n - i) * 3600).collect(),
+            players: (0..n).map(|i| Some(1000 + i * 10)).collect(),
+            visits: vec![Some(5_000_000)],
+            upvotes: vec![Some(900)],
+            downvotes: vec![Some(100)],
+            avg_playtime: vec![Some(12.4)],
+            favorites: vec![Some(1234)],
+        }
+    }
+
+    #[test]
+    fn window_choices_map_to_days() {
+        assert_eq!(history_window_days(0), 7);
+        assert_eq!(history_window_days(1), 30);
+        assert_eq!(history_window_days(2), 365);
+        assert_eq!(history_window_days(3), 0, "0 means everything");
+        assert_eq!(history_window_days(99), 30, "unknown falls back to the default");
+    }
+
+    #[test]
+    fn heights_are_normalised_into_the_plot() {
+        let now = 1_700_000_000;
+        let m = build_history(&series(500, now), 1, now);
+        assert!(!m.points.is_empty());
+        assert!(m.points.iter().all(|p| p.height >= 0.0 && p.height <= 1.0));
+        assert!(m.points.iter().any(|p| p.height > 0.99), "the peak fills the plot");
+    }
+
+    #[test]
+    fn x_positions_span_the_plot_in_order() {
+        let now = 1_700_000_000;
+        let m = build_history(&series(500, now), 1, now);
+        assert!((m.points.first().unwrap().x - 0.0).abs() < 0.001);
+        assert!((m.points.last().unwrap().x - 1.0).abs() < 0.001);
+        assert!(m.points.windows(2).all(|w| w[0].x <= w[1].x));
+    }
+
+    #[test]
+    fn a_long_series_is_capped_at_the_column_count() {
+        let now = 1_700_000_000;
+        let m = build_history(&series(5000, now), 3, now);
+        assert!(m.points.len() <= HISTORY_COLUMNS, "got {}", m.points.len());
+    }
+
+    #[test]
+    fn a_single_sample_does_not_divide_by_zero() {
+        let now = 1_700_000_000;
+        let m = build_history(&series(1, now), 1, now);
+        assert_eq!(m.points.len(), 1);
+        assert_eq!(m.points[0].x, 0.0);
+    }
+
+    #[test]
+    fn an_empty_history_yields_an_empty_chart_not_a_panic() {
+        let m = build_history(&History::default(), 1, 1_700_000_000);
+        assert!(m.points.is_empty());
+        assert!(m.peak.is_empty());
+    }
+
+    #[test]
+    fn the_stat_tiles_carry_what_the_page_provides() {
+        let now = 1_700_000_000;
+        let m = build_history(&series(100, now), 1, now);
+        let labels: Vec<String> = m.stats.iter().map(|s| s.label.to_string()).collect();
+        assert!(labels.contains(&"Playing now".to_string()));
+        assert!(labels.contains(&"Peak".to_string()));
+        assert!(labels.contains(&"Rating".to_string()));
+        // 900 up of 1000 total.
+        let rating = m.stats.iter().find(|s| s.label == "Rating").unwrap();
+        assert_eq!(rating.value.to_string(), "90%");
+    }
+
+    #[test]
+    fn a_game_with_no_votes_simply_has_no_rating_tile() {
+        let now = 1_700_000_000;
+        let mut h = series(50, now);
+        h.upvotes.clear();
+        h.downvotes.clear();
+        let m = build_history(&h, 1, now);
+        assert!(m.stats.iter().all(|s| s.label != "Rating"));
+    }
+}
