@@ -133,6 +133,9 @@ pub(crate) struct App {
     bio_busy: std::sync::atomic::AtomicBool,
     /// The destructive action the confirmation dialog is asking about.
     pending: Mutex<Option<Pending>>,
+    /// Members of the group on screen, so the sort toggle needs no refetch.
+    group_members: Mutex<Vec<(rojoin_roblox::models::UserSearchResult, String, i32)>>,
+    group_member_avatars: Mutex<std::collections::HashMap<i64, String>>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -205,6 +208,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         avatar_busy: std::sync::atomic::AtomicBool::new(false),
         bio_busy: std::sync::atomic::AtomicBool::new(false),
         pending: Mutex::new(None),
+        group_members: Mutex::new(Vec::new()),
+        group_member_avatars: Mutex::new(Default::default()),
     });
     *app.bridge.lock().unwrap() = Some(bridge.clone());
     *app.imgs.lock().unwrap() = Some(imgs.clone());
@@ -3404,6 +3409,13 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
     {
         let app = app.clone();
         let weak = ui.as_weak();
+        ui.on_sort_group_members(move || {
+            render_group_members(&weak.unwrap(), &app);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
         ui.on_confirm_cancel(move || {
             let ui = weak.unwrap();
             *app.pending.lock().unwrap() = None;
@@ -4116,6 +4128,66 @@ fn run_pending(ui: &MainWindow, app: &Arc<App>, what: Pending) {
     }
 }
 
+/// Push the group's member list into the UI, in the chosen order.
+///
+/// Sorting happens here rather than being refetched: the rows are already in
+/// hand, and "by name" on a rank-ordered fetch is a local reordering.
+fn render_group_members(ui: &MainWindow, app: &Arc<App>) {
+    let people = app.group_members.lock().unwrap().clone();
+    let avatars = app.group_member_avatars.lock().unwrap().clone();
+
+    let mut rows: Vec<(rojoin_roblox::models::UserSearchResult, String, i32)> = people;
+    if ui.get_group_member_sort() == 1 {
+        rows.sort_by(|a, b| a.0.display_name.to_lowercase().cmp(&b.0.display_name.to_lowercase()));
+    } else {
+        // Highest rank first, then alphabetically inside a rank so the order is
+        // stable rather than however the pages happened to arrive.
+        rows.sort_by(|a, b| {
+            b.2.cmp(&a.2)
+                .then(a.0.display_name.to_lowercase().cmp(&b.0.display_name.to_lowercase()))
+        });
+    }
+
+    let model: Vec<MemberRow> = rows
+        .iter()
+        .map(|(u, role, rank)| MemberRow {
+            id: u.id.to_string().into(),
+            name: u.display_name.clone().into(),
+            username: u.name.clone().into(),
+            role: role.clone().into(),
+            rank: *rank,
+            thumb: slint::Image::default(),
+        })
+        .collect();
+    ui.set_group_members(ad::model(model));
+
+    if let Some(imgs) = app.imgs.lock().unwrap().clone() {
+        for (i, (u, _, _)) in rows.iter().enumerate() {
+            if let Some(url) = avatars.get(&u.id).cloned() {
+                let id = u.id.to_string();
+                imgs.load(&url, move |ui, img| {
+                    set_member_thumb(&ui.get_group_members(), i, &id, img)
+                });
+            }
+        }
+    }
+}
+
+fn set_member_thumb(
+    model: &slint::ModelRc<MemberRow>,
+    index: usize,
+    expect_id: &str,
+    img: slint::Image,
+) {
+    use slint::Model;
+    let Some(mut row) = model.row_data(index) else { return };
+    if row.id != expect_id {
+        return;
+    }
+    row.thumb = img;
+    model.set_row_data(index, row);
+}
+
 fn render_graph(ui: &MainWindow, app: &Arc<App>) {
     let cfg = app.config.lock().unwrap();
     ui.set_show_graph(cfg.settings.show_playtime_graph);
@@ -4402,9 +4474,12 @@ fn open_group(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
     push_view(ui, app, 3);
     ui.set_group_loading(true);
     ui.set_group_games(ad::model(Vec::new()));
+    ui.set_group_members(ad::model(Vec::<MemberRow>::new()));
+    ui.set_group_member_total(Default::default());
 
     let client = app.client.clone();
     let imgs2 = imgs.clone();
+    let app2 = app.clone();
     let me = *app.me.lock().unwrap();
     let gen = SESSION_GEN.load(Ordering::SeqCst);
 
@@ -4422,6 +4497,37 @@ fn open_group(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
                 or_default("ratings", games::votes(&client, &game_universes).await)
             };
 
+            // The rank ladder, and members from the top down. Listing
+            // `/groups/{id}/users` returns members in no particular order, so
+            // sorting one page of several thousand by rank would be ranking an
+            // arbitrary sample.
+            let roles = or_default("group roles", groups::roles(&client, group_id).await);
+            let mut members: Vec<(rojoin_roblox::models::UserSearchResult, String, i32)> =
+                Vec::new();
+            for role in roles.iter().filter(|r| r.member_count > 0) {
+                if members.len() >= 40 {
+                    break;
+                }
+                match groups::role_members(&client, group_id, role.id, 25).await {
+                    Ok(people) => members.extend(
+                        people
+                            .into_iter()
+                            .map(|u| (u, role.name.clone(), role.rank)),
+                    ),
+                    Err(e) => {
+                        tracing::debug!(role = %role.name, error = %e, "role members unavailable")
+                    }
+                }
+            }
+            members.truncate(40);
+
+            let member_avatars = if members.is_empty() {
+                Default::default()
+            } else {
+                let ids: Vec<i64> = members.iter().map(|(u, _, _)| u.id).collect();
+                or_default("member avatars", thumbnails::headshots(&client, &ids).await)
+            };
+
             let icon = thumbnails::group_icons(&client, &[group_id])
                 .await
                 .ok()
@@ -4436,7 +4542,18 @@ fn open_group(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
             let universe_ids: Vec<i64> = games_list.iter().map(|d| d.id).collect();
             let art = or_default("game art", thumbnails::game_art(&client, &universe_ids).await);
 
-            Ok(GroupLoad { group, membership, games: games_list, votes, icon, owner_avatar, art })
+            Ok(GroupLoad {
+                group,
+                membership,
+                games: games_list,
+                votes,
+                roles,
+                members,
+                member_avatars,
+                icon,
+                owner_avatar,
+                art,
+            })
         },
         move |ui, result| {
             if gen != SESSION_GEN.load(Ordering::SeqCst) {
@@ -4503,6 +4620,16 @@ fn open_group(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Imag
                 .collect();
             ui.set_group_games(ad::model(tiles));
 
+            *app2.group_members.lock().unwrap() = load.members.clone();
+            *app2.group_member_avatars.lock().unwrap() = load.member_avatars.clone();
+            let total: i64 = load.roles.iter().map(|r| r.member_count).sum();
+            ui.set_group_member_total(if total > 0 {
+                ad::compact(total).into()
+            } else {
+                Default::default()
+            });
+            render_group_members(&ui, &app2);
+
             for (i, d) in load.games.iter().enumerate() {
                 if let Some(url) = load.art.get(&d.id).cloned() {
                     let id = d.root_place_id.to_string();
@@ -4520,6 +4647,10 @@ struct GroupLoad {
     membership: Option<groups::Membership>,
     games: Vec<rojoin_roblox::models::GameDetail>,
     votes: Vec<rojoin_roblox::models::Votes>,
+    roles: Vec<groups::Role>,
+    /// Member, their role name, and its rank.
+    members: Vec<(rojoin_roblox::models::UserSearchResult, String, i32)>,
+    member_avatars: std::collections::HashMap<i64, String>,
     icon: Option<String>,
     owner_avatar: Option<String>,
     art: std::collections::HashMap<i64, String>,

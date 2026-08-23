@@ -137,6 +137,7 @@ pub fn seed(ui: &MainWindow) {
 
     seed_profile(ui);
     seed_graph(ui);
+    seed_group(ui);
 
     // ROJOIN_REQUESTS=1 opens the requests panel so it can be rendered.
     if std::env::var("ROJOIN_REQUESTS").is_ok_and(|v| v == "1") {
@@ -390,4 +391,31 @@ fn seed_graph(ui: &MainWindow) {
     ui.set_graph_total(g.total.into());
     ui.set_graph_range(g.range.into());
     ui.set_graph_empty(g.empty);
+}
+
+/// A group with members, so the rank list can be rendered headless.
+fn seed_group(ui: &MainWindow) {
+    let people: &[(&str, &str, &str, &str, i32)] = &[
+        ("1", "Badimo", "badimo", "Owner", 255),
+        ("2", "asimo3089", "asimo3089", "Developer", 200),
+        ("3", "bad_cc", "badcc", "Developer", 200),
+        ("4", "Helper One", "helperone", "Moderator", 100),
+        ("5", "Helper Two", "helpertwo", "Moderator", 100),
+        ("6", "Someone", "someone", "Member", 1),
+    ];
+    ui.set_group_member_total(ad::compact(184_302).into());
+    ui.set_group_members(ad::model(
+        people
+            .iter()
+            .enumerate()
+            .map(|(i, (id, name, user, role, rank))| crate::MemberRow {
+                id: (*id).into(),
+                name: (*name).into(),
+                username: (*user).into(),
+                role: (*role).into(),
+                rank: *rank,
+                thumb: swatch(i + 40, 64, 64),
+            })
+            .collect(),
+    ));
 }

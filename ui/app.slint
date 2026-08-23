@@ -1,6 +1,6 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Btn, IconBtn, Segmented, Spinner, EmptyState, Toast, ConfirmDialog } from "components.slint";
-import { GameTile, WearItem, SubPlace, ServerRow, DetailItem, GameDetailData, FriendRow, GroupRow, MacroRow, MacroStepRow, RequestRow } from "types.slint";
+import { GameTile, WearItem, SubPlace, ServerRow, DetailItem, GameDetailData, FriendRow, GroupRow, MacroRow, MacroStepRow, RequestRow, MemberRow } from "types.slint";
 import { Sidebar, TopBar, NavEntry, ExpiredBanner, AccountMismatchBanner } from "shell.slint";
 import { ClientScreen, FlagRow } from "client.slint";
 import { SignInScreen, SignInPhase } from "signin.slint";
@@ -100,6 +100,10 @@ export component MainWindow inherits Window {
     callback delete_cache();
     callback delete_everything();
     callback hide_recent(string);
+    in property <[MemberRow]> group_members;
+    in property <string> group_member_total;
+    in-out property <int> group_member_sort: 0;
+    callback sort_group_members();
     in property <bool> profile_is_me: false;
     in property <bool> saving_bio: false;
     in property <string> bio_status;
@@ -547,6 +551,11 @@ export component MainWindow inherits Window {
                         }
 
                         if root.view_kind == 3: GroupScreen {
+                            members: root.group_members;
+                            member_total: root.group_member_total;
+                            member_sort <=> root.group_member_sort;
+                            open_member(id) => { root.open_player(id); }
+                            sort_changed(i) => { root.group_member_sort = i; root.sort_group_members(); }
                             width: 100%;
                             height: 100%;
                             group: root.group;

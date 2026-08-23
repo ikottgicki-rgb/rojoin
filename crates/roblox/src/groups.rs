@@ -43,6 +43,10 @@ pub struct Role {
     pub id: i64,
     pub name: String,
     pub rank: i32,
+    /// Only the group's own roles listing carries this; a membership record
+    /// does not, so it is 0 there.
+    #[serde(default)]
+    pub member_count: i64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -118,4 +122,62 @@ mod tests {
         let g: Group = serde_json::from_str(r#"{"id":1,"name":"Ownerless"}"#).unwrap();
         assert!(g.owner.is_none());
     }
+}
+
+/// The group's rank ladder, highest rank first.
+///
+/// One cheap call that also carries each role's member count, which is worth
+/// showing on its own — and it is what makes a genuinely rank-ordered member
+/// list possible.
+pub async fn roles(client: &Client, group_id: i64) -> Result<Vec<Role>> {
+    #[derive(Deserialize, Default)]
+    #[serde(rename_all = "camelCase", default)]
+    struct Resp {
+        #[serde(deserialize_with = "crate::null_vec")]
+        roles: Vec<Role>,
+    }
+
+    let url = format!("{GROUPS}/groups/{group_id}/roles");
+    let mut resp: Resp = client.get_json(&url).await?;
+    resp.roles.sort_by_key(|r| std::cmp::Reverse(r.rank));
+    Ok(resp.roles)
+}
+
+/// Members holding one specific role.
+///
+/// Listing `/groups/{id}/users` instead returns members in no particular order,
+/// so sorting one page of a few thousand by rank would be sorting an arbitrary
+/// sample and calling it a ranking. Walking the ladder from the top gives a list
+/// that really is ordered by rank.
+pub async fn role_members(
+    client: &Client,
+    group_id: i64,
+    role_id: i64,
+    limit: u32,
+) -> Result<Vec<crate::models::UserSearchResult>> {
+    #[derive(Deserialize, Default)]
+    #[serde(rename_all = "camelCase", default)]
+    struct Row {
+        user_id: i64,
+        username: String,
+        display_name: String,
+        has_verified_badge: bool,
+    }
+
+    let limit = crate::page_limit(limit);
+    let url = format!(
+        "{GROUPS}/groups/{group_id}/roles/{role_id}/users?limit={limit}&sortOrder=Asc"
+    );
+    let page: crate::models::Page<Row> = client.get_json(&url).await?;
+
+    Ok(page
+        .data
+        .into_iter()
+        .map(|r| crate::models::UserSearchResult {
+            id: r.user_id,
+            name: r.username,
+            display_name: r.display_name,
+            has_verified_badge: r.has_verified_badge,
+        })
+        .collect())
 }

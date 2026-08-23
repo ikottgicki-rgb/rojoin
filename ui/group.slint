@@ -1,7 +1,7 @@
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Thumb, Avatar, Btn, IconBtn, Skeleton, EmptyState, MetaStat, Texture } from "components.slint";
+import { Thumb, Avatar, Btn, IconBtn, Skeleton, EmptyState, MetaStat, Segmented, Texture } from "components.slint";
 import { GameGrid } from "cards.slint";
-import { GameTile } from "types.slint";
+import { GameTile, MemberRow } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
 
 export struct GroupData {
@@ -33,6 +33,13 @@ export component GroupScreen inherits Rectangle {
     callback open_browser();
     callback copy_link();
     callback copy_id();
+
+    in property <[MemberRow]> members;
+    in property <string> member_total;
+    /// 0 = by rank (highest first) · 1 = by name
+    in-out property <int> member_sort: 0;
+    callback open_member(string);
+    callback sort_changed(int);
 
     background: Theme.bg_0;
 
@@ -238,7 +245,94 @@ export component GroupScreen inherits Rectangle {
                     }
                 }
 
-                if root.group.description == "" && root.group.shout == "" && root.games.length == 0:
+                if root.members.length > 0: VerticalLayout {
+                    spacing: Space.md;
+
+                    HorizontalLayout {
+                        spacing: Space.sm;
+                        Text {
+                            text: "Members";
+                            color: Theme.text;
+                            font-size: Type.lead;
+                            font-weight: Type.w_bold;
+                            vertical-alignment: center;
+                        }
+                        if root.member_total != "": Text {
+                            text: root.member_total + " members";
+                            color: Theme.text_mute;
+                            font-size: Type.caption;
+                            vertical-alignment: center;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Segmented {
+                            options: ["Rank", "Name"];
+                            current <=> root.member_sort;
+                            changed(i) => { root.sort_changed(i); }
+                        }
+                    }
+
+                    for m in root.members: Rectangle {
+                        height: 48px;
+                        background: mta.has-hover ? Theme.bg_2 : transparent;
+                        border-radius: Theme.radius;
+                        animate background { duration: Motion.instant; easing: Motion.ease; }
+
+                        mta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.open_member(m.id); }
+                        }
+
+                        HorizontalLayout {
+                            padding-left: Space.sm;
+                            padding-right: Space.sm;
+                            spacing: Space.sm;
+
+                            VerticalLayout {
+                                alignment: center;
+                                Avatar { source: m.thumb; size_px: 32px; }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 1px;
+                                horizontal-stretch: 1;
+                                Text {
+                                    text: m.name;
+                                    color: Theme.text;
+                                    font-size: Type.small;
+                                    font-weight: Type.w_medium;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                }
+                                Text {
+                                    text: "@" + m.username;
+                                    color: Theme.text_mute;
+                                    font-size: Type.caption;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 1px;
+                                Text {
+                                    text: m.role;
+                                    color: Theme.text_dim;
+                                    font-size: Type.caption;
+                                    horizontal-alignment: right;
+                                }
+                                Text {
+                                    text: "rank " + m.rank;
+                                    color: Theme.text_mute;
+                                    font-size: Type.micro;
+                                    horizontal-alignment: right;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.group.description == "" && root.group.shout == "" && root.games.length == 0
+                   && root.members.length == 0:
                 EmptyState {
                     height: 180px;
                     title: "Nothing to show";

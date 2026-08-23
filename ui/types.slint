@@ -145,3 +145,13 @@ export struct RequestRow {
     presence_label: string,
     thumb: image,
 }
+
+/// One person in a group, with the role they hold.
+export struct MemberRow {
+    id: string,
+    name: string,
+    username: string,
+    role: string,
+    rank: int,
+    thumb: image,
+}
