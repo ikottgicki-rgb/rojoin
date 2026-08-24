@@ -120,7 +120,8 @@ export component MainWindow inherits Window {
     in property <string> history_range;
     in property <bool> history_loading: false;
     in property <string> history_error;
-    in-out property <int> history_window: 1;
+    in property <[string]> history_ranges: ["All"];
+    in-out property <int> history_window: 0;
     callback history_range_changed(int);
     callback load_history();
     callback open_rolimons();
@@ -487,6 +488,7 @@ export component MainWindow inherits Window {
                             history_range: root.history_range;
                             history_loading: root.history_loading;
                             history_error: root.history_error;
+                            history_ranges: root.history_ranges;
                             history_window <=> root.history_window;
                             history_range_changed(i) => { root.history_range_changed(i); }
                             history_retry => { root.load_history(); }

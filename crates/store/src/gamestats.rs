@@ -25,6 +25,12 @@ use serde::{Deserialize, Serialize};
 pub struct Sample {
     /// Unix seconds.
     pub at: i64,
+    /// Universe this game belongs to.
+    ///
+    /// Carried on the sample so the background poll can refresh a game it has
+    /// seen before without a place-to-universe lookup per game per minute.
+    #[serde(default)]
+    pub universe_id: i64,
     pub playing: i64,
     pub visits: i64,
     pub upvotes: i64,
@@ -47,11 +53,13 @@ pub type Series = Vec<Sample>;
 
 /// Don't store a sample if the last one is newer than this.
 ///
-/// Opening a game page three times in a minute is one data point, not three, and
-/// without this the series would be dense where someone happened to click a lot
-/// and sparse everywhere else — which is exactly the uneven sampling that makes
-/// a chart lie.
-pub const MIN_GAP_SECS: i64 = 900;
+/// Two reasons. Opening a game page three times in a minute is one data point,
+/// not three, and without this the series would be dense wherever someone
+/// happened to click a lot and sparse everywhere else — the uneven sampling that
+/// makes a chart lie. And it bounds the file: the background poll runs every
+/// minute, so at a half-hour floor a dozen tracked games over ninety days come to
+/// roughly fifty thousand samples rather than a million and a half.
+pub const MIN_GAP_SECS: i64 = 1800;
 
 /// Add an observation, unless one was taken recently.
 ///
@@ -136,6 +144,49 @@ pub fn bucket(samples: &[Sample], columns: usize) -> Vec<Bucket> {
 /// Every game we have samples for, keyed by root place id as a string.
 pub type Store = HashMap<String, Series>;
 
+/// Where the samples live.
+///
+/// Its own file, not part of `config.json`. That file is rewritten whenever
+/// anything at all changes — a favourite toggled, a window resized — and this
+/// data grows without bound by comparison. Keeping them together would mean
+/// writing megabytes to disk on every trivial setting change, and risking the
+/// config on every write of the stats.
+pub fn path() -> std::path::PathBuf {
+    crate::config_dir().join("gamestats.json")
+}
+
+pub fn load() -> Store {
+    crate::read_json(&path())
+}
+
+pub fn save(store: &Store) -> crate::Result<()> {
+    crate::write_atomic(&path(), store)
+}
+
+/// Games worth refreshing in the background, newest activity first.
+///
+/// Returns `(root_place_id, universe_id)`, skipping anything whose universe was
+/// never recorded — there is nothing to look it up by.
+pub fn tracked(store: &Store, limit: usize) -> Vec<(i64, i64)> {
+    let mut games: Vec<(i64, i64, i64)> = store
+        .iter()
+        .filter_map(|(place, series)| {
+            let last = series.last()?;
+            let place = place.parse::<i64>().ok()?;
+            if last.universe_id == 0 {
+                return None;
+            }
+            Some((place, last.universe_id, last.at))
+        })
+        .collect();
+
+    // Most recently seen first, so a cap drops the games nobody has looked at
+    // in weeks rather than whichever the hash map happened to yield.
+    games.sort_by_key(|(_, _, at)| std::cmp::Reverse(*at));
+    games.truncate(limit);
+    games.into_iter().map(|(p, u, _)| (p, u)).collect()
+}
+
 /// The span a series covers, in days.
 pub fn covered_days(series: &[Sample]) -> i64 {
     match (series.first(), series.last()) {
@@ -149,7 +200,7 @@ mod tests {
     use super::*;
 
     fn sample(at: i64, playing: i64) -> Sample {
-        Sample { at, playing, visits: 1_000, upvotes: 90, downvotes: 10 }
+        Sample { at, universe_id: 7, playing, visits: 1_000, upvotes: 90, downvotes: 10 }
     }
 
     #[test]
@@ -251,5 +302,34 @@ mod tests {
     fn covered_days_reports_the_real_span() {
         let s = vec![sample(0, 1), sample(10 * 86_400, 2)];
         assert_eq!(covered_days(&s), 10);
+    }
+
+    #[test]
+    fn tracked_prefers_the_most_recently_seen_games() {
+        let mut store = Store::new();
+        store.insert("100".into(), vec![sample(1_000, 5)]);
+        store.insert("200".into(), vec![sample(9_000, 5)]);
+        store.insert("300".into(), vec![sample(5_000, 5)]);
+
+        let out = tracked(&store, 2);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].0, 200, "newest first");
+        assert_eq!(out[1].0, 300);
+    }
+
+    #[test]
+    fn a_game_with_no_known_universe_cannot_be_refreshed() {
+        let mut store = Store::new();
+        let mut s = sample(1_000, 5);
+        s.universe_id = 0;
+        store.insert("100".into(), vec![s]);
+        assert!(tracked(&store, 10).is_empty(), "nothing to look it up by");
+    }
+
+    #[test]
+    fn an_empty_series_is_not_tracked() {
+        let mut store = Store::new();
+        store.insert("100".into(), Vec::new());
+        assert!(tracked(&store, 10).is_empty());
     }
 }

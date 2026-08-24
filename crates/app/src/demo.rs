@@ -433,7 +433,10 @@ fn seed_history(ui: &MainWindow, app: &std::sync::Arc<crate::App>) {
     use rojoin_store::gamestats::Sample;
 
     let now = chrono::Utc::now().timestamp();
-    let n = 1_200i64;
+    // ROJOIN_YOUNG=1 seeds a few minutes instead of weeks, to check that the
+    // range buttons do not offer windows the data cannot fill.
+    let young = std::env::var("ROJOIN_YOUNG").is_ok_and(|v| v == "1");
+    let n = if young { 4 } else { 1_200 };
     let samples: Vec<Sample> = (0..n)
         .map(|i| {
             // Frequencies kept low on purpose: real data arrives bucketed, so a
@@ -442,7 +445,8 @@ fn seed_history(ui: &MainWindow, app: &std::sync::Arc<crate::App>) {
             let day = ((i as f64 * 0.035).sin() * 0.30 + 1.0).max(0.2);
             let week = ((i as f64 * 0.006).cos() * 0.22 + 1.0).max(0.2);
             Sample {
-                at: now - (n - i) * 1800,
+                at: now - (n - i) * if young { 60 } else { 1800 },
+                universe_id: 245662005,
                 playing: (9_000.0 * day * week) as i64,
                 visits: 8_013_287_123,
                 upvotes: 5_791_138,
@@ -455,18 +459,23 @@ fn seed_history(ui: &MainWindow, app: &std::sync::Arc<crate::App>) {
     // the store, so seeding the properties directly would be wiped the moment
     // the tab opened — and would not exercise the real path.
     {
-        let mut cfg = app.config.lock().unwrap();
-        let series = cfg.game_stats.entry("606849621".to_string()).or_default();
-        *series = samples.clone();
+        let mut store = app.stats.lock().unwrap();
+        store.insert("606849621".to_string(), samples.clone());
     }
     *app.current_place.lock().unwrap() = 606849621;
 
-    let m = ad::build_history(&samples, 1, now);
+    let m = ad::build_history(&samples, 30, now);
     ui.set_history_points(ad::model(m.points));
     ui.set_history_stats(ad::model(m.stats));
     ui.set_history_peak(m.peak.into());
     ui.set_history_range(m.range.into());
-    ui.set_history_window(1);
+    ui.set_history_ranges(ad::strings(
+        ad::history_ranges(rojoin_store::gamestats::covered_days(&samples))
+            .iter()
+            .map(|(l, _)| l.clone())
+            .collect(),
+    ));
+    ui.set_history_window(0);
 
     if std::env::var("ROJOIN_HISTORY").is_ok_and(|v| v == "1") {
         ui.set_game_tab(2);

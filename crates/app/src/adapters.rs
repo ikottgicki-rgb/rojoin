@@ -957,14 +957,43 @@ pub struct HistoryModel {
 /// deliberately.
 const HISTORY_COLUMNS: usize = 150;
 
-/// Days covered by each range choice. `0` means everything there is.
-pub fn history_window_days(choice: i32) -> i64 {
-    match choice {
-        0 => 7,
-        2 => 365,
-        3 => 0,
-        _ => 30,
+/// The range buttons worth offering, given how much history exists.
+///
+/// Fixed choices were wrong: a game watched for a minute would still offer "1
+/// year", which draws an empty plot and reads as a broken chart rather than as a
+/// young one. A range only appears once there is enough data for it to differ
+/// from the next one down, and "All" is always last so there is always a way to
+/// see everything.
+///
+/// Returns `(label, days)` where `0` days means everything on record.
+pub fn history_ranges(covered_days: i64) -> Vec<(String, i64)> {
+    let mut out: Vec<(String, i64)> = Vec::new();
+
+    if covered_days >= 2 {
+        out.push(("24h".into(), 1));
     }
+    if covered_days >= 10 {
+        out.push(("7d".into(), 7));
+    }
+    if covered_days >= 40 {
+        out.push(("30d".into(), 30));
+    }
+    if covered_days >= 400 {
+        out.push(("1y".into(), 365));
+    }
+
+    // Named for what it is: "All" over two hours of samples invites the
+    // question of where the rest went.
+    out.push((
+        match covered_days {
+            0 => "So far".into(),
+            1 => "Today".into(),
+            d if d < 10 => format!("{d}d"),
+            _ => "All".into(),
+        },
+        0,
+    ));
+    out
 }
 
 /// Build the chart for one window of a game's history.
@@ -975,12 +1004,11 @@ pub fn history_window_days(choice: i32) -> i64 {
 /// the biggest game on the platform.
 pub fn build_history(
     samples: &[rojoin_store::gamestats::Sample],
-    choice: i32,
+    days: i64,
     now: i64,
 ) -> HistoryModel {
     use rojoin_store::gamestats;
 
-    let days = history_window_days(choice);
     let covered = gamestats::covered_days(samples);
     let window = if days == 0 { covered.max(1) } else { days };
     let series = gamestats::recent(samples, window, now);
@@ -1044,9 +1072,9 @@ pub fn build_history(
             String::new()
         },
         range: match days {
-            0 if covered > 0 => format!("everything we have seen · {covered} days"),
-            0 => "everything we have seen".into(),
-            7 => "last 7 days".into(),
+            0 if covered >= 2 => format!("everything so far · {covered} days"),
+            0 => "everything so far".into(),
+            1 => "last 24 hours".into(),
             365 => "last year".into(),
             n => format!("last {n} days"),
         },
@@ -1076,6 +1104,7 @@ mod history_tests {
         (0..n)
             .map(|i| Sample {
                 at: now - (n - i) * 3600,
+                universe_id: 7,
                 playing: 1000 + i * 10,
                 visits: 5_000_000,
                 upvotes: 900,
@@ -1085,18 +1114,54 @@ mod history_tests {
     }
 
     #[test]
-    fn window_choices_map_to_days() {
-        assert_eq!(history_window_days(0), 7);
-        assert_eq!(history_window_days(1), 30);
-        assert_eq!(history_window_days(2), 365);
-        assert_eq!(history_window_days(3), 0, "0 means everything");
-        assert_eq!(history_window_days(99), 30, "unknown falls back to the default");
+    fn a_brand_new_game_offers_only_everything() {
+        // The bug this replaces: a minute of data still offered "1 year".
+        let r = history_ranges(0);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].0, "So far");
+        assert_eq!(r[0].1, 0);
+    }
+
+    #[test]
+    fn ranges_appear_as_the_data_earns_them() {
+        assert_eq!(history_ranges(1).len(), 1, "a day");
+        assert_eq!(history_ranges(3).len(), 2, "24h + all");
+        assert_eq!(history_ranges(15).len(), 3, "+ 7d");
+        assert_eq!(history_ranges(60).len(), 4, "+ 30d");
+        assert_eq!(history_ranges(500).len(), 5, "+ 1y");
+    }
+
+    #[test]
+    fn a_year_is_never_offered_without_a_year_of_data() {
+        for d in [0, 1, 30, 100, 399] {
+            assert!(
+                !history_ranges(d).iter().any(|(l, _)| l == "1y"),
+                "offered 1y with {d} days"
+            );
+        }
+        assert!(history_ranges(400).iter().any(|(l, _)| l == "1y"));
+    }
+
+    #[test]
+    fn everything_is_always_reachable() {
+        for d in [0, 1, 5, 50, 5000] {
+            let r = history_ranges(d);
+            assert_eq!(r.last().unwrap().1, 0, "no way to see all of {d} days");
+        }
+    }
+
+    #[test]
+    fn the_all_button_is_named_for_how_little_there_is() {
+        assert_eq!(history_ranges(0).last().unwrap().0, "So far");
+        assert_eq!(history_ranges(1).last().unwrap().0, "Today");
+        assert_eq!(history_ranges(5).last().unwrap().0, "5d");
+        assert_eq!(history_ranges(500).last().unwrap().0, "All");
     }
 
     #[test]
     fn heights_are_normalised_into_the_plot() {
         let now = 1_700_000_000;
-        let m = build_history(&series(500, now), 1, now);
+        let m = build_history(&series(500, now), 30, now);
         assert!(!m.points.is_empty());
         assert!(m.points.iter().all(|p| p.height >= 0.0 && p.height <= 1.0));
         assert!(m.points.iter().any(|p| p.height > 0.99), "the peak fills the plot");
@@ -1105,7 +1170,7 @@ mod history_tests {
     #[test]
     fn x_positions_span_the_plot_in_order() {
         let now = 1_700_000_000;
-        let m = build_history(&series(500, now), 1, now);
+        let m = build_history(&series(500, now), 30, now);
         assert!((m.points.first().unwrap().x - 0.0).abs() < 0.001);
         assert!((m.points.last().unwrap().x - 1.0).abs() < 0.001);
         assert!(m.points.windows(2).all(|w| w[0].x <= w[1].x));
@@ -1114,21 +1179,21 @@ mod history_tests {
     #[test]
     fn a_long_series_is_capped_at_the_column_count() {
         let now = 1_700_000_000;
-        let m = build_history(&series(5000, now), 3, now);
+        let m = build_history(&series(5000, now), 0, now);
         assert!(m.points.len() <= HISTORY_COLUMNS, "got {}", m.points.len());
     }
 
     #[test]
     fn a_single_sample_does_not_divide_by_zero() {
         let now = 1_700_000_000;
-        let m = build_history(&series(1, now), 1, now);
+        let m = build_history(&series(1, now), 30, now);
         assert_eq!(m.points.len(), 1);
         assert_eq!(m.points[0].x, 0.0);
     }
 
     #[test]
     fn an_empty_history_yields_an_empty_chart_not_a_panic() {
-        let m = build_history(&[], 1, 1_700_000_000);
+        let m = build_history(&[], 30, 1_700_000_000);
         assert!(m.points.is_empty());
         assert!(m.peak.is_empty());
     }
@@ -1136,7 +1201,7 @@ mod history_tests {
     #[test]
     fn the_stat_tiles_carry_what_we_have_observed() {
         let now = 1_700_000_000;
-        let m = build_history(&series(100, now), 1, now);
+        let m = build_history(&series(100, now), 30, now);
         let labels: Vec<String> = m.stats.iter().map(|s| s.label.to_string()).collect();
         assert!(labels.contains(&"Playing".to_string()));
         assert!(labels.contains(&"Peak seen".to_string()));
@@ -1153,7 +1218,7 @@ mod history_tests {
             x.upvotes = 0;
             x.downvotes = 0;
         }
-        let m = build_history(&s, 1, now);
+        let m = build_history(&s, 30, now);
         assert!(m.stats.iter().all(|st| st.label != "Rating"));
     }
 }

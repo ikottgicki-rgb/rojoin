@@ -223,7 +223,8 @@ export component GameScreen inherits Rectangle {
     in property <string> history_range;
     in property <bool> history_loading: false;
     in property <string> history_error;
-    in-out property <int> history_window: 1;
+    in property <[string]> history_ranges: ["All"];
+    in-out property <int> history_window: 0;
     callback history_range_changed(int);
     callback history_retry();
     callback open_rolimons();
@@ -710,6 +711,7 @@ export component GameScreen inherits Rectangle {
                     range_label: root.history_range;
                     loading: root.history_loading;
                     error: root.history_error;
+                    ranges: root.history_ranges;
                     range <=> root.history_window;
                     range_changed(i) => { root.history_range_changed(i); }
                     retry => { root.history_retry(); }

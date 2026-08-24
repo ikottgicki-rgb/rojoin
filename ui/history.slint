@@ -30,8 +30,15 @@ export component PlayerHistory inherits Rectangle {
     in property <string> range_label;
     in property <bool> loading: false;
     in property <string> error;
-    /// 0 = 7d · 1 = 30d · 2 = 1y · 3 = all
-    in-out property <int> range: 1;
+    /// Fewest columns worth drawing. Below this the plot is a couple of solid
+    /// blocks at near-identical heights, which looks broken rather than young —
+    /// so the numbers are shown and the chart waits.
+    property <int> min_columns: 8;
+    /// Range buttons, built from how much data exists — a "1 year" option over
+    /// a minute of samples draws an empty plot and reads as broken.
+    in property <[string]> ranges: ["All"];
+    /// Index into `ranges`.
+    in-out property <int> range: 0;
     callback range_changed(int);
     callback retry();
     /// Opens the game's Rolimons page in a browser. A link, not a fetch —
@@ -72,8 +79,10 @@ export component PlayerHistory inherits Rectangle {
 
             VerticalLayout {
                 alignment: center;
-                Segmented {
-                    options: ["7d", "30d", "1y", "All"];
+                // Hidden when there is only one choice: a lone button that
+                // cannot be unselected is decoration.
+                if root.ranges.length > 1: Segmented {
+                    options: root.ranges;
                     current <=> root.range;
                     changed(i) => { root.range_changed(i); }
                 }
@@ -132,7 +141,32 @@ export component PlayerHistory inherits Rectangle {
             }
         }
 
-        if !root.loading && root.error == "" && root.points.length > 0: VerticalLayout {
+        if !root.loading && root.error == "" && root.points.length > 0
+           && root.points.length < root.min_columns: Rectangle {
+            height: 96px;
+            VerticalLayout {
+                alignment: center;
+                spacing: Space.xxs;
+                Text {
+                    text: "Still collecting";
+                    color: Theme.text_dim;
+                    font-size: Type.body;
+                    font-weight: Type.w_medium;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "The chart appears once there are a few hours of readings. "
+                          + "Favourites update in the background while RoJoin runs.";
+                    color: Theme.text_mute;
+                    font-size: Type.caption;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                    max-width: 420px;
+                }
+            }
+        }
+
+        if !root.loading && root.error == "" && root.points.length >= root.min_columns: VerticalLayout {
             spacing: Space.xs;
 
             HorizontalLayout {

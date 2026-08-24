@@ -135,6 +135,10 @@ pub(crate) struct App {
     bio_busy: std::sync::atomic::AtomicBool,
     /// The destructive action the confirmation dialog is asking about.
     pending: Mutex<Option<Pending>>,
+    /// Observed game statistics, in their own file rather than config.json.
+    stats: Mutex<rojoin_store::gamestats::Store>,
+    /// Favourite games to refresh in the background, as (root place, universe).
+    favorite_games: Mutex<Vec<(i64, i64)>>,
     /// Members of the group on screen, so the sort toggle needs no refetch.
     group_members: Mutex<Vec<(rojoin_roblox::models::UserSearchResult, String, i32)>>,
     group_member_avatars: Mutex<std::collections::HashMap<i64, String>>,
@@ -210,6 +214,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         avatar_busy: std::sync::atomic::AtomicBool::new(false),
         bio_busy: std::sync::atomic::AtomicBool::new(false),
         pending: Mutex::new(None),
+        stats: Mutex::new(rojoin_store::gamestats::load()),
+        favorite_games: Mutex::new(Vec::new()),
         group_members: Mutex::new(Vec::new()),
         group_member_avatars: Mutex::new(Default::default()),
     });
@@ -4390,11 +4396,17 @@ fn set_member_thumb(
 /// rendering game pages — so this is synchronous and needs no loading state.
 fn render_history(ui: &MainWindow, app: &Arc<App>) {
     let place = *app.current_place.lock().unwrap();
-    let cfg = app.config.lock().unwrap();
-    let samples = cfg.game_stats(place).to_vec();
-    drop(cfg);
+    let samples = app.stats.lock().unwrap().get(&place.to_string()).cloned().unwrap_or_default();
 
-    let m = ad::build_history(&samples, ui.get_history_window(), chrono::Utc::now().timestamp());
+    // Only offer ranges the data can actually fill — a "1 year" button over a
+    // minute of samples draws an empty plot and looks broken.
+    let ranges = ad::history_ranges(rojoin_store::gamestats::covered_days(&samples));
+    let idx = (ui.get_history_window() as usize).min(ranges.len().saturating_sub(1));
+    ui.set_history_ranges(ad::strings(ranges.iter().map(|(l, _)| l.clone()).collect()));
+    ui.set_history_window(idx as i32);
+
+    let days = ranges.get(idx).map(|(_, d)| *d).unwrap_or(0);
+    let m = ad::build_history(&samples, days, chrono::Utc::now().timestamp());
     ui.set_history_points(ad::model(m.points));
     ui.set_history_stats(ad::model(m.stats));
     ui.set_history_peak(m.peak.into());
@@ -4408,18 +4420,34 @@ fn render_history(ui: &MainWindow, app: &Arc<App>) {
 /// Called when a game page finishes loading, from figures already fetched to
 /// render it — so a trend accumulates as a side effect of browsing, at no extra
 /// request. Throttled in the store, so opening a page repeatedly is one point.
-fn record_game_stats(app: &Arc<App>, place: i64, detail: &rojoin_roblox::models::GameDetail, votes: Option<&rojoin_roblox::models::Votes>) {
+fn record_game_stats(
+    app: &Arc<App>,
+    place: i64,
+    universe: i64,
+    playing: i64,
+    visits: i64,
+    votes: Option<&rojoin_roblox::models::Votes>,
+) {
+    if place == 0 {
+        return;
+    }
     let sample = rojoin_store::gamestats::Sample {
         at: chrono::Utc::now().timestamp(),
-        playing: detail.playing,
-        visits: detail.visits,
+        universe_id: universe,
+        playing,
+        visits,
         upvotes: votes.map(|v| v.up_votes).unwrap_or(0),
         downvotes: votes.map(|v| v.down_votes).unwrap_or(0),
     };
 
-    let mut cfg = app.config.lock().unwrap();
-    if cfg.record_game_stats(place, sample) {
-        let _ = cfg.save();
+    let keep = app.config.lock().unwrap().prune_window_days();
+    let mut store = app.stats.lock().unwrap();
+    let series = store.entry(place.to_string()).or_default();
+
+    if rojoin_store::gamestats::record(series, sample, keep) {
+        if let Err(e) = rojoin_store::gamestats::save(&store) {
+            tracing::warn!(error = %e, "could not save game statistics");
+        }
     }
 }
 
@@ -4913,6 +4941,7 @@ fn load_favorites(_ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: 
 
     let client = app.client.clone();
     let imgs2 = imgs.clone();
+    let app_fav = app.clone();
     let gen = SESSION_GEN.load(Ordering::SeqCst);
 
     bridge.call_res(
@@ -4933,6 +4962,15 @@ fn load_favorites(_ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: 
                 .map(|d| ad::tile_from_detail(d, None, true))
                 .collect();
             ui.set_favorites(ad::model(tiles));
+
+            // Hand the background poll the games to keep an eye on, so the
+            // history chart fills in for favourites without anyone having to
+            // open their pages.
+            *app_fav.favorite_games.lock().unwrap() = games
+                .iter()
+                .filter(|d| d.root_place_id != 0)
+                .map(|d| (d.root_place_id, d.id))
+                .collect();
 
             // Now that the real answer is known, correct the star on every
             // other grid showing the same game.
@@ -5369,6 +5407,11 @@ fn open_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
     ui.set_history_peak(Default::default());
     ui.set_history_error(Default::default());
     ui.set_history_loading(false);
+    // Past the end on purpose: render_history clamps to the last range, which is
+    // always "everything". Opening a game should show the whole picture rather
+    // than its narrowest slice, and the clamp means this needs no knowledge of
+    // how many ranges this particular game has earned.
+    ui.set_history_window(99);
     if ui.get_view_kind() == 0 {
         *app.return_section.lock().unwrap() = ui.get_section();
     }
@@ -5433,7 +5476,9 @@ fn open_game(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Image
                     record_game_stats(
                         &app2,
                         load.detail.root_place_id,
-                        &load.detail,
+                        load.universe_id,
+                        load.detail.playing,
+                        load.detail.visits,
                         load.votes.as_ref(),
                     );
 

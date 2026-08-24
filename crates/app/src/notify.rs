@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rojoin_roblox::{friends, users, Client};
+use rojoin_roblox::{friends, games, users, Client};
 
 /// Slow on purpose. Presence is not urgent, and a tight loop here is the
 /// fastest way to get the whole account throttled.
@@ -62,6 +62,104 @@ impl Watcher {
             }
 
             self.sweep_playtime().await;
+            self.sweep_game_stats().await;
+        }
+    }
+
+    /// Refresh the statistics of favourite and recently-viewed games.
+    ///
+    /// This is what stops the history chart being a flat line until you happen
+    /// to open a game page. Two batched calls cover the lot — details and votes
+    /// both take a list of universe ids — so watching a dozen games costs the
+    /// same as watching one.
+    ///
+    /// The store throttles what it keeps, so polling every minute does not mean
+    /// storing every minute: samples land at most every half hour, which bounds
+    /// the file while still drawing a usable curve.
+    async fn sweep_game_stats(&self) {
+        use rojoin_store::gamestats;
+
+        /// Enough to cover someone's favourites without turning the poll into a
+        /// crawl of every game they have ever opened.
+        const MAX_TRACKED: usize = 12;
+
+        let mut games: Vec<(i64, i64)> = self.app.favorite_games.lock().unwrap().clone();
+        {
+            let store = self.app.stats.lock().unwrap();
+            for entry in gamestats::tracked(&store, MAX_TRACKED) {
+                if !games.iter().any(|(p, _)| *p == entry.0) {
+                    games.push(entry);
+                }
+            }
+        }
+        games.truncate(MAX_TRACKED);
+        if games.is_empty() {
+            return;
+        }
+
+        // Skip the round trip entirely if nothing is due to be stored yet.
+        let now = chrono::Utc::now().timestamp();
+        let due: Vec<(i64, i64)> = {
+            let store = self.app.stats.lock().unwrap();
+            games
+                .into_iter()
+                .filter(|(place, _)| {
+                    store
+                        .get(&place.to_string())
+                        .and_then(|s| s.last())
+                        .map(|last| now - last.at >= gamestats::MIN_GAP_SECS)
+                        .unwrap_or(true)
+                })
+                .collect()
+        };
+        if due.is_empty() {
+            return;
+        }
+
+        let universes: Vec<i64> = due.iter().map(|(_, u)| *u).collect();
+        let details = match games::details(&self.client, &universes).await {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::debug!(error = %e, "could not refresh game statistics");
+                return;
+            }
+        };
+        let votes = games::votes(&self.client, &universes).await.unwrap_or_default();
+
+        let keep = match self.app.config.lock() {
+            Ok(c) => c.prune_window_days(),
+            Err(_) => return,
+        };
+
+        let mut store = self.app.stats.lock().unwrap();
+        let mut stored = 0usize;
+
+        for d in &details {
+            // Key on the root place, matching what the game page records, or the
+            // same game would accumulate two separate series.
+            let place = if d.root_place_id != 0 { d.root_place_id } else { continue };
+            let v = votes.iter().find(|v| v.id == d.id);
+
+            let sample = gamestats::Sample {
+                at: now,
+                universe_id: d.id,
+                playing: d.playing,
+                visits: d.visits,
+                upvotes: v.map(|v| v.up_votes).unwrap_or(0),
+                downvotes: v.map(|v| v.down_votes).unwrap_or(0),
+            };
+
+            if gamestats::record(store.entry(place.to_string()).or_default(), sample, keep) {
+                stored += 1;
+            }
+        }
+
+        if stored > 0 {
+            if let Err(e) = gamestats::save(&store) {
+                tracing::warn!(error = %e, "could not save game statistics");
+            } else {
+                tracing::info!(games = stored, "recorded game statistics");
+            }
         }
     }
 
