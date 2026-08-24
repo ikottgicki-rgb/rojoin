@@ -829,7 +829,12 @@ fn load_friends(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &Im
                     let kind = p.map(|p| p.kind).unwrap_or(friends::PresenceKind::Offline);
                     RequestRow {
                         id: u.id.to_string().into(),
-                        name: u.display_name.clone().into(),
+                        // Never render an empty row: an id is always something.
+                        name: if u.display_name.trim().is_empty() {
+                            format!("User {}", u.id).into()
+                        } else {
+                            u.display_name.clone().into()
+                        },
                         username: u.name.clone().into(),
                         description: u
                             .description
@@ -1057,6 +1062,32 @@ async fn fetch_friends(
 
     let presence = or_default("friend presence", friends::presence(client, &list.ids).await);
     let requests = or_default("friend requests", friends::requests(client, 25).await);
+
+    // Some accounts come back from the requests endpoint with an id but no
+    // name — the row then renders as a bare "@" with an avatar beside it. Rather
+    // than depend on that payload carrying names, resolve anything missing
+    // through the users endpoint, which is the same call the friends list uses.
+    let mut requests = requests;
+    let unnamed: Vec<i64> = requests
+        .iter()
+        .filter(|u| u.display_name.trim().is_empty() || u.name.trim().is_empty())
+        .map(|u| u.id)
+        .collect();
+
+    if !unnamed.is_empty() {
+        tracing::info!(count = unnamed.len(), "resolving requesters with no name");
+        let resolved = or_default("requester names", users::batch(client, &unnamed).await);
+        for u in &mut requests {
+            if let Some(found) = resolved.iter().find(|r| r.id == u.id) {
+                if u.display_name.trim().is_empty() {
+                    u.display_name = found.display_name.clone();
+                }
+                if u.name.trim().is_empty() {
+                    u.name = found.name.clone();
+                }
+            }
+        }
+    }
 
     let request_ids: Vec<i64> = requests.iter().map(|u| u.id).collect();
     let request_presence = if request_ids.is_empty() {

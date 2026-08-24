@@ -483,10 +483,13 @@ export component FriendsScreen inherits Rectangle {
                                         }
                                     }
 
+                                    // Presence, not a description: the requests
+                                    // endpoint carries no bio, and fetching one
+                                    // costs a request per person — twenty-five
+                                    // of them for a panel nobody asked to wait
+                                    // for. The full profile is one click away.
                                     Text {
-                                        text: r.description != "" ? r.description
-                                              : (r.presence_label != "" ? r.presence_label
-                                                                        : "No description.");
+                                        text: r.presence_label != "" ? r.presence_label : "Offline";
                                         color: Theme.text_mute;
                                         font-size: Type.caption;
                                         overflow: elide;
@@ -494,32 +497,30 @@ export component FriendsScreen inherits Rectangle {
                                     }
                                 }
 
-                                // Answer without leaving. The chevron still
-                                // opens the profile for anyone who wants a
-                                // proper look first.
+                                // Fixed width, so a long name can never squeeze
+                                // the decline button down to nothing — which is
+                                // exactly what happened when this shared the
+                                // row's flexible space. The chevron is gone for
+                                // the same reason: the whole row already opens
+                                // the profile, so it was spending width to
+                                // repeat itself.
                                 VerticalLayout {
                                     alignment: center;
                                     HorizontalLayout {
-                                        spacing: Space.xxs;
+                                        width: 116px;
+                                        spacing: Space.xs;
+                                        alignment: end;
                                         Btn {
                                             label: "Accept";
+                                            pad_h: Space.md;
                                             primary: true;
                                             clicked => { root.accept(r.id); }
                                         }
                                         IconBtn {
                                             glyph: "×";
-                                            size_px: 28px;
+                                            size_px: 30px;
                                             clicked => { root.decline(r.id); }
                                         }
-                                    }
-                                }
-
-                                VerticalLayout {
-                                    alignment: center;
-                                    Text {
-                                        text: "›";
-                                        color: Theme.text_mute;
-                                        font-size: Type.body;
                                     }
                                 }
                             }

@@ -221,7 +221,7 @@ fn seed_friends(ui: &MainWindow) {
     ui.set_friend_rows(ad::model(rows));
 
     let requests: &[(&str, &str, &str, &str, i32, &str)] = &[
-        ("101", "NewPerson", "newperson", "Builder. Mostly obbies.", 2, "Playing Doors"),
+        ("101", "SomebodyWithAVeryLongDisplayName", "averylongusernamehere", "", 2, "Playing Doors"),
         ("102", "SomeoneElse", "someoneelse", "", 1, "Online"),
         ("103", "Quiet", "quietone", "Just here for the trains.", 0, ""),
     ];
