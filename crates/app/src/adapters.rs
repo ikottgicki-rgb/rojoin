@@ -987,6 +987,12 @@ mod time_ago_unix_tests {
 /// The player-history chart, ready for Slint.
 pub struct HistoryModel {
     pub points: Vec<crate::HistoryPoint>,
+    /// The same series as an SVG path, for the line rendering.
+    ///
+    /// Built here rather than in Slint because Slint has no way to accumulate a
+    /// path from a model — and a string of commands costs nothing to hand over.
+    pub line: String,
+    pub mine_line: String,
     /// Your own playtime, on the same time buckets as `points`.
     pub mine: Vec<crate::HistoryPoint>,
     /// Empty when you have never played it.
@@ -1120,6 +1126,8 @@ pub fn build_history(
     }
 
     HistoryModel {
+        line: line_path(&points),
+        mine_line: line_path(&mine),
         points,
         mine,
         mine_label: if mine_total > 0 {
@@ -1141,6 +1149,29 @@ pub fn build_history(
             n => format!("last {n} days"),
         },
     }
+}
+
+/// Turn normalised points into an SVG path in a 0..100 box.
+///
+/// The viewbox is fixed so the Path element can scale it to whatever size the
+/// plot happens to be, which keeps the geometry out of the layout entirely.
+fn line_path(points: &[crate::HistoryPoint]) -> String {
+    if points.len() < 2 {
+        return String::new();
+    }
+
+    let mut d = String::with_capacity(points.len() * 16);
+    for (i, p) in points.iter().enumerate() {
+        let x = p.x * 100.0;
+        // Inverted: y grows downwards in a path, upwards in a chart.
+        let y = (1.0 - p.height.clamp(0.0, 1.0)) * 100.0;
+        if i == 0 {
+            d.push_str(&format!("M {x:.2} {y:.2}"));
+        } else {
+            d.push_str(&format!(" L {x:.2} {y:.2}"));
+        }
+    }
+    d
 }
 
 /// Seconds of your own play inside each of `buckets`.

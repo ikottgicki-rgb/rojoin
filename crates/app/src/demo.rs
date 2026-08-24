@@ -506,6 +506,8 @@ fn seed_history(ui: &MainWindow, app: &std::sync::Arc<crate::App>) {
     ui.set_history_points(ad::model(m.points));
     ui.set_history_mine(ad::model(m.mine));
     ui.set_history_mine_label(m.mine_label.into());
+    ui.set_history_line(m.line.into());
+    ui.set_history_mine_line(m.mine_line.into());
     ui.set_history_stats(ad::model(m.stats));
     ui.set_history_peak(m.peak.into());
     ui.set_history_range(m.range.into());
@@ -516,6 +518,11 @@ fn seed_history(ui: &MainWindow, app: &std::sync::Arc<crate::App>) {
             .collect(),
     ));
     ui.set_history_window(0);
+    if std::env::var("ROJOIN_LINE").is_ok_and(|v| v == "1") {
+        // Into the config, since render_history reads the style from there.
+        app.config.lock().unwrap().settings.history_style = 1;
+        ui.set_history_style(1);
+    }
 
     if std::env::var("ROJOIN_HISTORY").is_ok_and(|v| v == "1") {
         ui.set_game_tab(2);

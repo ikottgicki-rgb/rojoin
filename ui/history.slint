@@ -28,6 +28,12 @@ export component PlayerHistory inherits Rectangle {
     /// Your own playtime for this game, on the same buckets as `points`.
     in property <[HistoryPoint]> mine;
     in property <string> mine_label;
+    /// The same data as paths, for the line rendering.
+    in property <string> line;
+    in property <string> mine_line;
+    /// 0 = bars · 1 = line
+    in-out property <int> style: 0;
+    callback style_changed(int);
     in property <[HistoryStat]> stats;
     in property <string> peak_label;
     in property <string> range_label;
@@ -84,6 +90,15 @@ export component PlayerHistory inherits Rectangle {
                 alignment: center;
                 // Hidden when there is only one choice: a lone button that
                 // cannot be unselected is decoration.
+                Segmented {
+                    options: ["Bars", "Line"];
+                    current <=> root.style;
+                    changed(i) => { root.style_changed(i); }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
                 if root.ranges.length > 1: Segmented {
                     options: root.ranges;
                     current <=> root.range;
@@ -191,20 +206,28 @@ export component PlayerHistory inherits Rectangle {
                 }
 
                 for p[i] in root.points: Rectangle {
-                    // One column per point, filling the width. Sized from the
-                    // count rather than a fixed width so a 7-day view and an
-                    // all-time view both span the plot.
+                    // Bar width from the count, capped, and then *packed* rather
+                    // than spread across the plot. Spreading a handful of capped
+                    // bars edge to edge left them as lonely spikes with vast
+                    // gaps; packed and centred they read as one chart.
                     property <length> colw: plot.width / max(1, root.points.length);
+                    property <length> barw: max(1px, min(self.colw, 22px));
+                    property <length> gap: self.barw >= 8px ? 2px : 0px;
+                    property <length> stride: self.barw + self.gap;
+                    // Left-aligned: a part-filled chart should grow rightwards
+                    // from the axis like a chart that is filling up, not float in
+                    // the middle of the plot.
+                    // Same loop for both styles. A bar fills from the axis to
+                    // the value; a "line" is a short cap left at the value, which
+                    // traces the identical curve without any path geometry — and
+                    // a near-flat SVG path came out invisible when tried.
+                    property <length> top: plot.height
+                        - plot.height * p.height * root.grow;
 
-                    x: p.x * (plot.width - self.width);
-                    // Capped: with only a handful of samples an uncapped column
-                    // is a slab a hundred pixels wide, which reads as a block of
-                    // colour rather than a reading. Below the cap they butt
-                    // together into a filled area; above it they space out into
-                    // discrete bars, which is the honest look for sparse data.
-                    width: max(1px, min(self.colw, 22px));
-                    height: max(1px, plot.height * p.height * root.grow);
-                    y: plot.height - self.height;
+                    x: i * self.stride;
+                    width: self.barw;
+                    height: root.style == 0 ? max(1px, plot.height - self.top) : 3px;
+                    y: root.style == 0 ? self.top : max(0px, self.top - 1px);
 
                     background: cta.has-hover ? Theme.text : Theme.accent;
                     // Lighter than the app's usual accent use: this is a large
@@ -245,14 +268,23 @@ export component PlayerHistory inherits Rectangle {
                     background: Theme.line;
                 }
 
-                for p in root.mine: Rectangle {
-                    property <length> colw: mineplot.width / max(1, root.mine.length);
 
-                    x: p.x * (mineplot.width - self.width);
-                    width: max(1px, min(self.colw, 22px));
-                    height: max(p.height > 0.0 ? 2px : 0px,
-                                mineplot.height * p.height * root.grow);
-                    y: mineplot.height - self.height;
+                for p[i] in root.mine: Rectangle {
+                    // Identical geometry to the plot above, so the two strips
+                    // stay column-for-column aligned.
+                    property <length> colw: mineplot.width / max(1, root.mine.length);
+                    property <length> barw: max(1px, min(self.colw, 22px));
+                    property <length> gap: self.barw >= 8px ? 2px : 0px;
+                    property <length> stride: self.barw + self.gap;
+                    property <length> top: mineplot.height
+                        - mineplot.height * p.height * root.grow;
+
+                    x: i * self.stride;
+                    width: self.barw;
+                    height: root.style == 0
+                        ? max(p.height > 0.0 ? 2px : 0px, mineplot.height - self.top)
+                        : (p.height > 0.0 ? 3px : 0px);
+                    y: root.style == 0 ? self.top : max(0px, self.top - 1px);
 
                     // A different hue from the player series on purpose, so the
                     // two strips are never mistaken for the same measurement.

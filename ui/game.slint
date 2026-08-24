@@ -220,6 +220,10 @@ export component GameScreen inherits Rectangle {
     in property <[HistoryPoint]> history_points;
     in property <[HistoryPoint]> history_mine;
     in property <string> history_mine_label;
+    in property <string> history_line;
+    in property <string> history_mine_line;
+    in-out property <int> history_style: 0;
+    callback history_style_changed(int);
     in property <[HistoryStat]> history_stats;
     in property <string> history_peak;
     in property <string> history_range;
@@ -670,6 +674,10 @@ export component GameScreen inherits Rectangle {
                     points: root.history_points;
                     mine: root.history_mine;
                     mine_label: root.history_mine_label;
+                    line: root.history_line;
+                    mine_line: root.history_mine_line;
+                    style <=> root.history_style;
+                    style_changed(i) => { root.history_style_changed(i); }
                     stats: root.history_stats;
                     peak_label: root.history_peak;
                     range_label: root.history_range;

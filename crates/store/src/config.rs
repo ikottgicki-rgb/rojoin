@@ -207,6 +207,9 @@ pub struct Settings {
     /// Start with the session. On by default.
     #[serde(default = "yes")]
     pub autostart: bool,
+    /// History chart style: 0 bars, 1 line.
+    #[serde(default)]
+    pub history_style: i32,
     /// Has the autostart default been acted on yet?
     ///
     /// "On by default" has to mean the entry gets written once, without also
@@ -252,6 +255,7 @@ impl Default for Settings {
             track_friend_playtime: true,
             close_to_tray: true,
             autostart: true,
+            history_style: 0,
             autostart_applied: false,
         }
     }

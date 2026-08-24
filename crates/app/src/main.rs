@@ -3589,6 +3589,19 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
     {
         let app = app.clone();
         let weak = ui.as_weak();
+        ui.on_history_style_changed(move |style| {
+            let ui = weak.unwrap();
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.settings.history_style = style;
+                let _ = cfg.save();
+            }
+            render_history(&ui, &app);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
         ui.on_history_range_changed(move |_| {
             // Re-slices the cached series; no refetch.
             render_history(&weak.unwrap(), &app);
@@ -4427,6 +4440,9 @@ fn render_history(ui: &MainWindow, app: &Arc<App>) {
     ui.set_history_points(ad::model(m.points));
     ui.set_history_mine(ad::model(m.mine));
     ui.set_history_mine_label(m.mine_label.into());
+    ui.set_history_line(m.line.into());
+    ui.set_history_mine_line(m.mine_line.into());
+    ui.set_history_style(app.config.lock().unwrap().settings.history_style);
     ui.set_history_stats(ad::model(m.stats));
     ui.set_history_peak(m.peak.into());
     ui.set_history_range(m.range.into());
