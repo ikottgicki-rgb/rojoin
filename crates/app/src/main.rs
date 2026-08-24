@@ -3589,6 +3589,13 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
     {
         let app = app.clone();
         let weak = ui.as_weak();
+        ui.on_history_who_changed(move |_| {
+            render_history(&weak.unwrap(), &app);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
         ui.on_history_style_changed(move |style| {
             let ui = weak.unwrap();
             {
@@ -4429,21 +4436,43 @@ fn render_history(ui: &MainWindow, app: &Arc<App>) {
     let universe = *app.current_universe.lock().unwrap();
     let samples = app.stats.lock().unwrap().get(&place.to_string()).cloned().unwrap_or_default();
 
-    // Your own sessions for this game, so the chart can show when *you* played
-    // alongside how busy it was. Matched on universe, falling back to the root
-    // place for sessions recorded before the universe was known.
-    let sessions: Vec<rojoin_store::playtime::PlaySession> = app
-        .config
-        .lock()
-        .unwrap()
-        .sessions()
-        .iter()
-        .filter(|s| {
-            (universe != 0 && s.universe_id == universe)
-                || (place != 0 && s.root_place_id == place)
-        })
-        .cloned()
-        .collect();
+    // Who can be compared on this game: you, plus any pinned friend we have seen
+    // playing it. Built as a list so the picker only offers people with data —
+    // an empty strip for a friend who has never touched the game is noise.
+    let matches = |s: &rojoin_store::playtime::PlaySession| {
+        (universe != 0 && s.universe_id == universe)
+            || (place != 0 && s.root_place_id == place)
+    };
+
+    let mut who: Vec<(String, Vec<rojoin_store::playtime::PlaySession>)> = Vec::new();
+    {
+        let cfg = app.config.lock().unwrap();
+        who.push((
+            "You".to_string(),
+            cfg.sessions().iter().filter(|s| matches(s)).cloned().collect(),
+        ));
+
+        if let Some(data) = cfg.data() {
+            let names = app.names.lock().unwrap();
+            for (uid, series) in &data.friend_sessions {
+                let theirs: Vec<_> = series.iter().filter(|s| matches(s)).cloned().collect();
+                if theirs.is_empty() {
+                    continue;
+                }
+                let label = names
+                    .users
+                    .get(uid)
+                    .map(|u| u.display_name.clone())
+                    .unwrap_or_else(|| format!("User {uid}"));
+                who.push((label, theirs));
+            }
+        }
+    }
+
+    let pick = (ui.get_history_who() as usize).min(who.len().saturating_sub(1));
+    ui.set_history_whos(ad::strings(who.iter().map(|(l, _)| l.clone()).collect()));
+    ui.set_history_who(pick as i32);
+    let sessions = who.get(pick).map(|(_, v)| v.clone()).unwrap_or_default();
 
     // Only offer ranges the data can actually fill — a "1 year" button over a
     // minute of samples draws an empty plot and looks broken.
@@ -4456,7 +4485,18 @@ fn render_history(ui: &MainWindow, app: &Arc<App>) {
     let m = ad::build_history(&samples, &sessions, days, chrono::Utc::now().timestamp());
     ui.set_history_points(ad::model(m.points));
     ui.set_history_mine(ad::model(m.mine));
-    ui.set_history_mine_label(m.mine_label.into());
+    ui.set_history_mine_label(
+        if m.mine_label.is_empty() {
+            Default::default()
+        } else {
+            let name = who.get(pick).map(|(l, _)| l.as_str()).unwrap_or("You");
+            if name == "You" {
+                m.mine_label.clone().into()
+            } else {
+                m.mine_label.replacen("you played", &format!("{name} played"), 1).into()
+            }
+        },
+    );
     ui.set_history_line(m.line.into());
     ui.set_history_mine_line(m.mine_line.into());
     ui.set_history_style(app.config.lock().unwrap().settings.history_style);

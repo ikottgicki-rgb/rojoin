@@ -34,6 +34,10 @@ export component PlayerHistory inherits Rectangle {
     /// 0 = bars · 1 = line
     in-out property <int> style: 0;
     callback style_changed(int);
+    /// Who the second strip belongs to: you, or a pinned friend with data here.
+    in property <[string]> whos: ["You"];
+    in-out property <int> who: 0;
+    callback who_changed(int);
     in property <[HistoryStat]> stats;
     in property <string> peak_label;
     in property <string> range_label;
@@ -253,10 +257,23 @@ export component PlayerHistory inherits Rectangle {
            && root.points.length >= root.min_columns: VerticalLayout {
             spacing: 2px;
 
-            Text {
-                text: root.mine_label;
-                color: Theme.text_mute;
-                font-size: Type.micro;
+            HorizontalLayout {
+                spacing: Space.sm;
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.mine_label;
+                        color: Theme.text_mute;
+                        font-size: Type.micro;
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                // Only when there is somebody to compare against.
+                if root.whos.length > 1: Segmented {
+                    options: root.whos;
+                    current <=> root.who;
+                    changed(i) => { root.who_changed(i); }
+                }
             }
 
             mineplot := Rectangle {

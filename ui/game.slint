@@ -224,6 +224,9 @@ export component GameScreen inherits Rectangle {
     in property <string> history_mine_line;
     in-out property <int> history_style: 0;
     callback history_style_changed(int);
+    in property <[string]> history_whos: ["You"];
+    in-out property <int> history_who: 0;
+    callback history_who_changed(int);
     in property <[HistoryStat]> history_stats;
     in property <string> history_peak;
     in property <string> history_range;
@@ -678,6 +681,9 @@ export component GameScreen inherits Rectangle {
                     mine_line: root.history_mine_line;
                     style <=> root.history_style;
                     style_changed(i) => { root.history_style_changed(i); }
+                    whos: root.history_whos;
+                    who <=> root.history_who;
+                    who_changed(i) => { root.history_who_changed(i); }
                     stats: root.history_stats;
                     peak_label: root.history_peak;
                     range_label: root.history_range;

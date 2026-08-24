@@ -128,6 +128,9 @@ export component MainWindow inherits Window {
     in property <string> history_mine_line;
     in-out property <int> history_style: 0;
     callback history_style_changed(int);
+    in property <[string]> history_whos: ["You"];
+    in-out property <int> history_who: 0;
+    callback history_who_changed(int);
     in property <[HistoryStat]> history_stats;
     in property <string> history_peak;
     in property <string> history_range;
@@ -502,6 +505,9 @@ export component MainWindow inherits Window {
                             history_mine_line: root.history_mine_line;
                             history_style <=> root.history_style;
                             history_style_changed(i) => { root.history_style_changed(i); }
+                            history_whos: root.history_whos;
+                            history_who <=> root.history_who;
+                            history_who_changed(i) => { root.history_who_changed(i); }
                             history_stats: root.history_stats;
                             history_peak: root.history_peak;
                             history_range: root.history_range;
