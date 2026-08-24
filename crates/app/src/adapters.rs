@@ -987,6 +987,10 @@ mod time_ago_unix_tests {
 /// The player-history chart, ready for Slint.
 pub struct HistoryModel {
     pub points: Vec<crate::HistoryPoint>,
+    /// Your own playtime, on the same time buckets as `points`.
+    pub mine: Vec<crate::HistoryPoint>,
+    /// Empty when you have never played it.
+    pub mine_label: String,
     pub stats: Vec<crate::HistoryStat>,
     pub peak: String,
     pub range: String,
@@ -1046,6 +1050,7 @@ pub fn history_ranges(covered_days: i64) -> Vec<(String, i64)> {
 /// the biggest game on the platform.
 pub fn build_history(
     samples: &[rojoin_store::gamestats::Sample],
+    sessions: &[rojoin_store::playtime::PlaySession],
     days: i64,
     now: i64,
 ) -> HistoryModel {
@@ -1075,6 +1080,15 @@ pub fn build_history(
             label: format!("{} · {} playing", day_stamp(b.at), compact(b.playing)).into(),
         })
         .collect();
+
+    // Your own playtime, bucketed onto exactly the same boundaries so the two
+    // series share an x axis. Deliberately its own scale and its own strip
+    // rather than overlaid on the player counts — minutes and concurrent players
+    // are different units, and drawing them against one axis would invite a
+    // comparison that means nothing.
+    let mine = project_sessions(&buckets, sessions);
+    let mine_total: u64 = mine_seconds(&buckets, sessions).iter().sum();
+    let mine_peak = mine_seconds(&buckets, sessions).into_iter().max().unwrap_or(0);
 
     let latest = series.last().or_else(|| samples.last());
     let mut stats = Vec::new();
@@ -1107,6 +1121,12 @@ pub fn build_history(
 
     HistoryModel {
         points,
+        mine,
+        mine_label: if mine_total > 0 {
+            format!("you played {} · busiest {}", fmt_duration(mine_total), fmt_duration(mine_peak))
+        } else {
+            String::new()
+        },
         stats,
         peak: if peak > 0 {
             format!("peak {} in this window", compact(peak))
@@ -1121,6 +1141,71 @@ pub fn build_history(
             n => format!("last {n} days"),
         },
     }
+}
+
+/// Seconds of your own play inside each of `buckets`.
+///
+/// Bucket width is taken from the gap between consecutive bucket starts, so this
+/// lines up with whatever granularity the player chart chose rather than
+/// assuming one.
+fn mine_seconds(
+    buckets: &[rojoin_store::gamestats::Bucket],
+    sessions: &[rojoin_store::playtime::PlaySession],
+) -> Vec<u64> {
+    if buckets.is_empty() {
+        return Vec::new();
+    }
+
+    let width = if buckets.len() > 1 {
+        (buckets[1].at - buckets[0].at).max(1)
+    } else {
+        3600
+    };
+
+    buckets
+        .iter()
+        .map(|b| {
+            let (from, to) = (b.at, b.at + width);
+            sessions
+                .iter()
+                .map(|s| {
+                    // Overlap of the session with this bucket, so a session
+                    // spanning several buckets is shared between them rather
+                    // than counted whole in each.
+                    let a = s.start.max(from);
+                    let z = s.end.min(to);
+                    (z - a).max(0) as u64
+                })
+                .sum()
+        })
+        .collect()
+}
+
+/// The same, as drawable columns normalised against your own busiest bucket.
+fn project_sessions(
+    buckets: &[rojoin_store::gamestats::Bucket],
+    sessions: &[rojoin_store::playtime::PlaySession],
+) -> Vec<crate::HistoryPoint> {
+    let secs = mine_seconds(buckets, sessions);
+    let peak = secs.iter().copied().max().unwrap_or(0);
+    if peak == 0 {
+        return Vec::new();
+    }
+
+    buckets
+        .iter()
+        .zip(secs.iter())
+        .enumerate()
+        .map(|(i, (b, s))| crate::HistoryPoint {
+            x: if buckets.len() > 1 {
+                i as f32 / (buckets.len() - 1) as f32
+            } else {
+                0.0
+            },
+            height: *s as f32 / peak as f32,
+            label: format!("{} · you played {}", day_stamp(b.at), fmt_duration(*s)).into(),
+        })
+        .collect()
 }
 
 /// "14 Aug" or "14 Aug 2024" when it is not this year — a bare day and month is
@@ -1203,7 +1288,7 @@ mod history_tests {
     #[test]
     fn heights_are_normalised_into_the_plot() {
         let now = 1_700_000_000;
-        let m = build_history(&series(500, now), 30, now);
+        let m = build_history(&series(500, now), &[], 30, now);
         assert!(!m.points.is_empty());
         assert!(m.points.iter().all(|p| p.height >= 0.0 && p.height <= 1.0));
         assert!(m.points.iter().any(|p| p.height > 0.99), "the peak fills the plot");
@@ -1212,7 +1297,7 @@ mod history_tests {
     #[test]
     fn x_positions_span_the_plot_in_order() {
         let now = 1_700_000_000;
-        let m = build_history(&series(500, now), 30, now);
+        let m = build_history(&series(500, now), &[], 30, now);
         assert!((m.points.first().unwrap().x - 0.0).abs() < 0.001);
         assert!((m.points.last().unwrap().x - 1.0).abs() < 0.001);
         assert!(m.points.windows(2).all(|w| w[0].x <= w[1].x));
@@ -1221,21 +1306,21 @@ mod history_tests {
     #[test]
     fn a_long_series_is_capped_at_the_column_count() {
         let now = 1_700_000_000;
-        let m = build_history(&series(5000, now), 0, now);
+        let m = build_history(&series(5000, now), &[], 0, now);
         assert!(m.points.len() <= HISTORY_COLUMNS, "got {}", m.points.len());
     }
 
     #[test]
     fn a_single_sample_does_not_divide_by_zero() {
         let now = 1_700_000_000;
-        let m = build_history(&series(1, now), 30, now);
+        let m = build_history(&series(1, now), &[], 30, now);
         assert_eq!(m.points.len(), 1);
         assert_eq!(m.points[0].x, 0.0);
     }
 
     #[test]
     fn an_empty_history_yields_an_empty_chart_not_a_panic() {
-        let m = build_history(&[], 30, 1_700_000_000);
+        let m = build_history(&[], &[], 30, 1_700_000_000);
         assert!(m.points.is_empty());
         assert!(m.peak.is_empty());
     }
@@ -1243,7 +1328,7 @@ mod history_tests {
     #[test]
     fn the_stat_tiles_carry_what_we_have_observed() {
         let now = 1_700_000_000;
-        let m = build_history(&series(100, now), 30, now);
+        let m = build_history(&series(100, now), &[], 30, now);
         let labels: Vec<String> = m.stats.iter().map(|s| s.label.to_string()).collect();
         assert!(labels.contains(&"Playing".to_string()));
         assert!(labels.contains(&"Peak seen".to_string()));
@@ -1260,7 +1345,7 @@ mod history_tests {
             x.upvotes = 0;
             x.downvotes = 0;
         }
-        let m = build_history(&s, 30, now);
+        let m = build_history(&s, &[], 30, now);
         assert!(m.stats.iter().all(|st| st.label != "Rating"));
     }
 }

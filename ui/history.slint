@@ -25,6 +25,9 @@ export struct HistoryStat {
 /// would need positioning and clipping.
 export component PlayerHistory inherits Rectangle {
     in property <[HistoryPoint]> points;
+    /// Your own playtime for this game, on the same buckets as `points`.
+    in property <[HistoryPoint]> mine;
+    in property <string> mine_label;
     in property <[HistoryStat]> stats;
     in property <string> peak_label;
     in property <string> range_label;
@@ -194,11 +197,12 @@ export component PlayerHistory inherits Rectangle {
                     property <length> colw: plot.width / max(1, root.points.length);
 
                     x: p.x * (plot.width - self.width);
-                    // No gap: at this density any spacing shows up as vertical
-                    // striping across the whole plot. Butted together the
-                    // columns read as one filled area, and each is still its own
-                    // hover target.
-                    width: max(1px, self.colw);
+                    // Capped: with only a handful of samples an uncapped column
+                    // is a slab a hundred pixels wide, which reads as a block of
+                    // colour rather than a reading. Below the cap they butt
+                    // together into a filled area; above it they space out into
+                    // discrete bars, which is the honest look for sparse data.
+                    width: max(1px, min(self.colw, 22px));
                     height: max(1px, plot.height * p.height * root.grow);
                     y: plot.height - self.height;
 
@@ -210,6 +214,53 @@ export component PlayerHistory inherits Rectangle {
                     animate background, opacity { duration: Motion.instant; easing: Motion.ease; }
 
                     cta := TouchArea {
+                        mouse-cursor: default;
+                        changed has-hover => {
+                            root.hover = self.has-hover ? p.label : "";
+                        }
+                    }
+                }
+            }
+        }
+
+        // Your own playtime, on its own strip sharing the x axis. Not overlaid:
+        // minutes and concurrent players are different units, and one axis for
+        // both would invite a comparison that means nothing.
+        if !root.loading && root.error == "" && root.mine.length > 0
+           && root.points.length >= root.min_columns: VerticalLayout {
+            spacing: 2px;
+
+            Text {
+                text: root.mine_label;
+                color: Theme.text_mute;
+                font-size: Type.micro;
+            }
+
+            mineplot := Rectangle {
+                height: 40px;
+
+                Rectangle {
+                    y: parent.height - Theme.hairline;
+                    height: Theme.hairline;
+                    background: Theme.line;
+                }
+
+                for p in root.mine: Rectangle {
+                    property <length> colw: mineplot.width / max(1, root.mine.length);
+
+                    x: p.x * (mineplot.width - self.width);
+                    width: max(1px, min(self.colw, 22px));
+                    height: max(p.height > 0.0 ? 2px : 0px,
+                                mineplot.height * p.height * root.grow);
+                    y: mineplot.height - self.height;
+
+                    // A different hue from the player series on purpose, so the
+                    // two strips are never mistaken for the same measurement.
+                    background: mta.has-hover ? #FFFFFF : #E0A82E;
+                    opacity: mta.has-hover ? 1.0 : 0.75;
+                    animate background, opacity { duration: Motion.instant; easing: Motion.ease; }
+
+                    mta := TouchArea {
                         mouse-cursor: default;
                         changed has-hover => {
                             root.hover = self.has-hover ? p.label : "";

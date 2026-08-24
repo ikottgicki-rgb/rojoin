@@ -4396,7 +4396,24 @@ fn set_member_thumb(
 /// rendering game pages — so this is synchronous and needs no loading state.
 fn render_history(ui: &MainWindow, app: &Arc<App>) {
     let place = *app.current_place.lock().unwrap();
+    let universe = *app.current_universe.lock().unwrap();
     let samples = app.stats.lock().unwrap().get(&place.to_string()).cloned().unwrap_or_default();
+
+    // Your own sessions for this game, so the chart can show when *you* played
+    // alongside how busy it was. Matched on universe, falling back to the root
+    // place for sessions recorded before the universe was known.
+    let sessions: Vec<rojoin_store::playtime::PlaySession> = app
+        .config
+        .lock()
+        .unwrap()
+        .sessions()
+        .iter()
+        .filter(|s| {
+            (universe != 0 && s.universe_id == universe)
+                || (place != 0 && s.root_place_id == place)
+        })
+        .cloned()
+        .collect();
 
     // Only offer ranges the data can actually fill — a "1 year" button over a
     // minute of samples draws an empty plot and looks broken.
@@ -4406,8 +4423,10 @@ fn render_history(ui: &MainWindow, app: &Arc<App>) {
     ui.set_history_window(idx as i32);
 
     let days = ranges.get(idx).map(|(_, d)| *d).unwrap_or(0);
-    let m = ad::build_history(&samples, days, chrono::Utc::now().timestamp());
+    let m = ad::build_history(&samples, &sessions, days, chrono::Utc::now().timestamp());
     ui.set_history_points(ad::model(m.points));
+    ui.set_history_mine(ad::model(m.mine));
+    ui.set_history_mine_label(m.mine_label.into());
     ui.set_history_stats(ad::model(m.stats));
     ui.set_history_peak(m.peak.into());
     ui.set_history_range(m.range.into());

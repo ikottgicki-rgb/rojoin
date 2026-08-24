@@ -115,6 +115,8 @@ export component MainWindow inherits Window {
     in property <[DetailItem]> settings_hits;
     callback settings_search_changed(string);
     in property <[HistoryPoint]> history_points;
+    in property <[HistoryPoint]> history_mine;
+    in property <string> history_mine_label;
     in property <[HistoryStat]> history_stats;
     in property <string> history_peak;
     in property <string> history_range;
@@ -483,6 +485,8 @@ export component MainWindow inherits Window {
 
                         if root.view_kind == 1: GameScreen {
                             history_points: root.history_points;
+                            history_mine: root.history_mine;
+                            history_mine_label: root.history_mine_label;
                             history_stats: root.history_stats;
                             history_peak: root.history_peak;
                             history_range: root.history_range;

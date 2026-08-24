@@ -470,14 +470,42 @@ fn seed_history(ui: &MainWindow, app: &std::sync::Arc<crate::App>) {
     // Into the store, not straight onto the UI: the History tab renders from
     // the store, so seeding the properties directly would be wiped the moment
     // the tab opened — and would not exercise the real path.
+    // A couple of play sessions, so the "when you played" strip has something.
+    let mine = vec![
+        rojoin_store::playtime::PlaySession {
+            universe_id: 245662005,
+            root_place_id: 606849621,
+            name: "Jailbreak".into(),
+            start: now - 40 * 3600,
+            end: now - 38 * 3600,
+        },
+        rojoin_store::playtime::PlaySession {
+            universe_id: 245662005,
+            root_place_id: 606849621,
+            name: "Jailbreak".into(),
+            start: now - 9 * 3600,
+            end: now - 8 * 3600 - 600,
+        },
+    ];
     {
         let mut store = app.stats.lock().unwrap();
         store.insert("606849621".to_string(), samples.clone());
     }
+    // Into the config too, for the same reason: the History tab rebuilds both
+    // series from stored data, so seeding the UI alone is wiped on first render.
+    {
+        let mut cfg = app.config.lock().unwrap();
+        if cfg.active_account.is_none() {
+            cfg.active_account = Some("1".into());
+        }
+        cfg.data_mut().sessions = mine.clone();
+    }
     *app.current_place.lock().unwrap() = 606849621;
 
-    let m = ad::build_history(&samples, 30, now);
+    let m = ad::build_history(&samples, &mine, 30, now);
     ui.set_history_points(ad::model(m.points));
+    ui.set_history_mine(ad::model(m.mine));
+    ui.set_history_mine_label(m.mine_label.into());
     ui.set_history_stats(ad::model(m.stats));
     ui.set_history_peak(m.peak.into());
     ui.set_history_range(m.range.into());
