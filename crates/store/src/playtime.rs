@@ -206,6 +206,93 @@ pub fn daily(sessions: &[PlaySession], days: u32, now: i64) -> Vec<DayBucket> {
         .collect()
 }
 
+/// How long a span the recorded sessions actually cover, in seconds.
+pub fn span_secs(sessions: &[PlaySession]) -> i64 {
+    let first = sessions.iter().map(|s| s.start).min();
+    let last = sessions.iter().map(|s| s.end).max();
+    match (first, last) {
+        (Some(a), Some(b)) => (b - a).max(0),
+        _ => 0,
+    }
+}
+
+/// Bucket sessions by *hour* rather than by day, for a history too short to
+/// plot as days.
+///
+/// One fourteen-minute session drawn on a ninety-day axis is a single hairline
+/// against eighty-nine empty columns — technically correct and completely
+/// useless. Below a couple of days the same data reads properly as hours.
+pub fn hourly(sessions: &[PlaySession], hours: i64, now: i64) -> Vec<DayBucket> {
+    let hours = hours.max(1);
+    let this_hour = now - now.rem_euclid(3600);
+    let first = this_hour - (hours - 1) * 3600;
+
+    let mut grid: HashMap<i64, HashMap<i64, u64>> = HashMap::new();
+    let mut names: HashMap<i64, (String, i64)> = HashMap::new();
+
+    for s in sessions {
+        if s.end < first || s.start > now {
+            continue;
+        }
+        names
+            .entry(s.universe_id)
+            .or_insert((s.name.clone(), s.root_place_id));
+
+        // Credit each hour its own overlap, so a session spanning the hour mark
+        // is split rather than landing wholly in one bucket.
+        let mut hour = (s.start.max(first) / 3600) * 3600;
+        while hour <= (s.end / 3600) * 3600 {
+            let end = hour + 3600;
+            let from = s.start.max(hour);
+            let to = s.end.min(end);
+            if to > from && hour >= first {
+                *grid.entry(hour).or_default().entry(s.universe_id).or_insert(0) +=
+                    (to - from) as u64;
+            }
+            hour = end;
+        }
+    }
+
+    (0..hours)
+        .map(|i| {
+            let at = first + i * 3600;
+            let mut games: Vec<GameSlice> = grid
+                .get(&at)
+                .map(|per_game| {
+                    per_game
+                        .iter()
+                        .map(|(universe, secs)| {
+                            let (name, root) = names.get(universe).cloned().unwrap_or_default();
+                            GameSlice {
+                                universe_id: *universe,
+                                root_place_id: root,
+                                name,
+                                secs: *secs,
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            games.sort_by(|a, b| b.secs.cmp(&a.secs).then(a.universe_id.cmp(&b.universe_id)));
+
+            DayBucket {
+                midnight: at,
+                label: hour_label(at),
+                total_secs: games.iter().map(|g| g.secs).sum(),
+                games,
+            }
+        })
+        .collect()
+}
+
+fn hour_label(at: i64) -> String {
+    Local
+        .timestamp_opt(at, 0)
+        .single()
+        .map(|d| d.format("%H:%M").to_string())
+        .unwrap_or_default()
+}
+
 /// Total time per game across the whole list, largest first.
 pub fn totals(sessions: &[PlaySession]) -> Vec<GameSlice> {
     let mut per_game: HashMap<i64, GameSlice> = HashMap::new();
@@ -481,5 +568,47 @@ mod tests {
     fn a_session_never_reports_negative_time() {
         let s = PlaySession { start: 500, end: 100, ..Default::default() };
         assert_eq!(s.secs(), 0);
+    }
+
+    #[test]
+    fn span_reports_what_the_sessions_actually_cover() {
+        let t = base();
+        assert_eq!(span_secs(&[]), 0);
+        assert_eq!(span_secs(&[session(1, t, 600)]), 600);
+        assert_eq!(span_secs(&[session(1, t, 600), session(2, t + 7200, 600)]), 7800);
+    }
+
+    #[test]
+    fn hourly_puts_a_short_session_in_its_own_hour() {
+        let now = base() + 10 * 3600 + 1800;
+        // 14 minutes, half an hour ago.
+        let s = [session(1, now - 1800, 840)];
+        let out = hourly(&s, 6, now);
+        assert_eq!(out.len(), 6);
+        assert_eq!(out.iter().map(|b| b.total_secs).sum::<u64>(), 840);
+        assert!(out.iter().filter(|b| b.total_secs > 0).count() <= 2);
+    }
+
+    #[test]
+    fn hourly_splits_a_session_across_the_hour_mark() {
+        let hour = base() + 5 * 3600;
+        // Starts 20 minutes before the mark, runs 40 minutes.
+        let s = [session(1, hour - 1200, 2400)];
+        let out = hourly(&s, 4, hour + 3000);
+        let touched: Vec<u64> = out.iter().map(|b| b.total_secs).filter(|t| *t > 0).collect();
+        assert_eq!(touched.len(), 2, "should straddle two hours: {touched:?}");
+        assert_eq!(touched.iter().sum::<u64>(), 2400);
+    }
+
+    #[test]
+    fn hourly_labels_are_clock_times() {
+        let out = hourly(&[], 3, base() + 9 * 3600);
+        assert!(out.iter().all(|b| b.label.contains(':')), "{:?}", out[0].label);
+    }
+
+    #[test]
+    fn hourly_keeps_every_hour_in_the_window() {
+        let out = hourly(&[], 12, base() + 20 * 3600);
+        assert_eq!(out.len(), 12, "empty hours are still columns");
     }
 }

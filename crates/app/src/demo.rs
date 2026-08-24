@@ -387,8 +387,20 @@ fn fake_sessions(now: i64, spread: i64) -> Vec<rojoin_store::playtime::PlaySessi
 
 fn seed_graph(ui: &MainWindow) {
     let now = chrono::Utc::now().timestamp();
-    // Deterministic but uneven, so the columns do not all look the same.
-    let sessions = fake_sessions(now, 7);
+    // ROJOIN_ONESESSION=1 reproduces one short session — the case that used to
+    // be drawn across ninety empty days.
+    let sessions = if std::env::var("ROJOIN_ONESESSION").is_ok_and(|v| v == "1") {
+        vec![rojoin_store::playtime::PlaySession {
+            universe_id: 245662005,
+            root_place_id: 606849621,
+            name: "Deepwoken".into(),
+            start: now - 1800,
+            end: now - 960,
+        }]
+    } else {
+        // Deterministic but uneven, so the columns do not all look the same.
+        fake_sessions(now, 7)
+    };
     let g = ad::build_graph(&sessions, 14, now);
     ui.set_show_graph(true);
     ui.set_graph_segments(ad::model(g.segments));

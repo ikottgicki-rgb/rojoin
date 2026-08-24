@@ -653,14 +653,40 @@ const TINTS: usize = 6;
 /// its rank within each day. That is the difference between a chart you can read
 /// and a kaleidoscope: a game keeps one colour from one column to the next, so
 /// the eye can follow it.
+/// Build the chart, choosing a window that fits the data.
+///
+/// The window used to be the retention setting — ninety days, always. One
+/// fourteen-minute session then drew a single hairline against eighty-nine empty
+/// columns, with the day labels crushed into an unreadable smear, and it looked
+/// like the chart was broken rather than that the history was young. Worse, it
+/// implied ninety days of *not playing* before a session that was the only thing
+/// ever recorded.
+///
+/// So the span comes from the sessions themselves: under two days it is drawn as
+/// hours, otherwise as days, capped at what retention keeps.
 pub fn build_graph(
     sessions: &[rojoin_store::playtime::PlaySession],
-    days: u32,
+    retention_days: u32,
     now: i64,
 ) -> GraphModel {
     use rojoin_store::playtime;
 
-    let buckets = playtime::daily(sessions, days, now);
+    let span = playtime::span_secs(sessions);
+    let hourly = !sessions.is_empty() && span < 2 * 86_400;
+
+    let buckets = if hourly {
+        // Round up to a sensible number of hours, so a fourteen-minute session
+        // gets a few hours of context rather than one lonely column.
+        let hours = ((span / 3600) + 4).clamp(6, 48);
+        playtime::hourly(sessions, hours, now)
+    } else {
+        let days = if sessions.is_empty() {
+            7
+        } else {
+            (((span / 86_400) + 2) as u32).min(retention_days.max(1))
+        };
+        playtime::daily(sessions, days, now)
+    };
     let ceiling = playtime::axis_ceiling_secs(&buckets);
     let overall = playtime::totals(sessions);
 
@@ -698,10 +724,19 @@ pub fn build_graph(
         }
     }
 
+    // Label every Nth column. Ninety of them at once produced "W... T... S...S..."
+    // across the axis, which is noise pretending to be information.
+    let stride = (buckets.len() / 12).max(1);
+
     let day_rows: Vec<crate::GraphDay> = buckets
         .iter()
-        .map(|b| crate::GraphDay {
-            label: b.label.clone().into(),
+        .enumerate()
+        .map(|(i, b)| crate::GraphDay {
+            label: if i % stride == 0 || buckets.len() <= 12 {
+                b.label.clone().into()
+            } else {
+                Default::default()
+            },
             total: fmt_duration(b.total_secs).into(),
             played: b.total_secs > 0,
         })
@@ -726,7 +761,14 @@ pub fn build_graph(
         legend,
         ceiling: fmt_duration(ceiling).into(),
         total: format!("{} total", fmt_duration(played)),
-        range: format!("last {days} days"),
+        range: if hourly {
+            let hours = buckets.len();
+            format!("last {hours} hours")
+        } else if buckets.len() == 1 {
+            "today".into()
+        } else {
+            format!("last {} days", buckets.len())
+        },
         empty: played == 0,
     }
 }
@@ -1382,5 +1424,103 @@ mod settings_search_tests {
             let named = SETTINGS_CATEGORIES[hit.kind as usize];
             assert_eq!(hit.subtitle.to_string(), named);
         }
+    }
+
+    use rojoin_store::playtime::PlaySession;
+
+    /// A single short session used to be plotted on a fixed ninety-day axis:
+    /// one hairline, eighty-nine empty columns, and an implication that the user
+    /// had spent three months not playing.
+    #[test]
+    fn one_short_session_is_drawn_as_hours_not_as_ninety_days() {
+        let now = 1_700_000_000;
+        let s = [PlaySession {
+            universe_id: 1,
+            root_place_id: 10,
+            name: "Deepwoken".into(),
+            start: now - 1800,
+            end: now - 960,
+        }];
+
+        let g = build_graph(&s, 90, now);
+        assert!(g.days.len() <= 48, "got {} columns", g.days.len());
+        assert!(g.range.contains("hours"), "range said {:?}", g.range);
+        assert!(!g.empty);
+        assert!(g.segments.iter().any(|seg| seg.name == "Deepwoken"));
+    }
+
+    #[test]
+    fn a_long_history_is_still_drawn_as_days() {
+        let now = 1_700_000_000;
+        let s: Vec<PlaySession> = (0..20)
+            .map(|i| PlaySession {
+                universe_id: 1,
+                root_place_id: 10,
+                name: "G".into(),
+                start: now - (20 - i) * 86_400,
+                end: now - (20 - i) * 86_400 + 3600,
+            })
+            .collect();
+
+        let g = build_graph(&s, 90, now);
+        assert!(g.range.contains("days"), "range said {:?}", g.range);
+        assert!(g.days.len() >= 20 && g.days.len() <= 23, "got {}", g.days.len());
+    }
+
+    #[test]
+    fn the_window_never_exceeds_what_retention_keeps() {
+        let now = 1_700_000_000;
+        let s: Vec<PlaySession> = (0..200)
+            .map(|i| PlaySession {
+                universe_id: 1,
+                root_place_id: 10,
+                name: "G".into(),
+                start: now - (200 - i) * 86_400,
+                end: now - (200 - i) * 86_400 + 600,
+            })
+            .collect();
+
+        let g = build_graph(&s, 30, now);
+        assert!(g.days.len() <= 30, "got {} with 30-day retention", g.days.len());
+    }
+
+    #[test]
+    fn crowded_axes_drop_most_of_their_labels() {
+        let now = 1_700_000_000;
+        let s: Vec<PlaySession> = (0..60)
+            .map(|i| PlaySession {
+                universe_id: 1,
+                root_place_id: 10,
+                name: "G".into(),
+                start: now - (60 - i) * 86_400,
+                end: now - (60 - i) * 86_400 + 600,
+            })
+            .collect();
+
+        let g = build_graph(&s, 90, now);
+        let labelled = g.days.iter().filter(|d| !d.label.is_empty()).count();
+        assert!(labelled <= 14, "{labelled} labels is a smear");
+        assert!(labelled >= 2, "should still be readable, got {labelled}");
+    }
+
+    #[test]
+    fn a_dozen_columns_keep_every_label() {
+        let now = 1_700_000_000;
+        let s = [PlaySession {
+            universe_id: 1,
+            root_place_id: 10,
+            name: "G".into(),
+            start: now - 5 * 86_400,
+            end: now - 5 * 86_400 + 600,
+        }];
+        let g = build_graph(&s, 90, now);
+        assert!(g.days.iter().all(|d| !d.label.is_empty()));
+    }
+
+    #[test]
+    fn no_sessions_still_yields_an_axis_rather_than_nothing() {
+        let g = build_graph(&[], 90, 1_700_000_000);
+        assert!(g.empty);
+        assert!(!g.days.is_empty(), "an empty chart still needs an axis");
     }
 }
