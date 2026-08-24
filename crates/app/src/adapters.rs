@@ -1640,3 +1640,161 @@ mod settings_search_tests {
         assert!(!g.days.is_empty(), "an empty chart still needs an axis");
     }
 }
+
+// -------------------------------------------------------- stored data ----
+
+/// A row in the stored-data browser.
+pub struct StoredRow {
+    /// `game:<place>`, `friend:<userid>`, or `mine:<place>` — the delete scope.
+    pub key: String,
+    pub name: String,
+    pub detail: String,
+    pub bytes: usize,
+}
+
+/// Everything RoJoin has recorded, with what it costs on disk.
+///
+/// Sizes are measured by serialising each series rather than guessed from a row
+/// count: the point of the browser is deciding what to delete, and a figure that
+/// is merely proportional to the truth is no use for that.
+pub fn stored_rows(
+    stats: &rojoin_store::gamestats::Store,
+    sessions: &[rojoin_store::playtime::PlaySession],
+    friend_sessions: &std::collections::HashMap<String, Vec<rojoin_store::playtime::PlaySession>>,
+    names: &std::collections::HashMap<String, String>,
+) -> Vec<StoredRow> {
+    let mut rows: Vec<StoredRow> = Vec::new();
+
+    for (place, series) in stats {
+        if series.is_empty() {
+            continue;
+        }
+        let name = series
+            .iter()
+            .rev()
+            .find_map(|_| None::<String>)
+            .unwrap_or_else(|| names.get(place).cloned().unwrap_or_else(|| format!("Place {place}")));
+
+        rows.push(StoredRow {
+            key: format!("game:{place}"),
+            name,
+            detail: format!("{} readings", series.len()),
+            bytes: serde_json::to_vec(series).map(|v| v.len()).unwrap_or(0),
+        });
+    }
+
+    // Your own playtime, grouped by game so it can be deleted per game.
+    let mut mine: std::collections::HashMap<i64, Vec<&rojoin_store::playtime::PlaySession>> =
+        Default::default();
+    for s in sessions {
+        mine.entry(s.root_place_id).or_default().push(s);
+    }
+    for (place, group) in mine {
+        let total: u64 = group.iter().map(|s| s.secs()).sum();
+        let label = group
+            .iter()
+            .find(|s| !s.name.trim().is_empty())
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| format!("Place {place}"));
+
+        rows.push(StoredRow {
+            key: format!("mine:{place}"),
+            name: format!("Your playtime · {label}"),
+            detail: format!("{} sessions · {}", group.len(), fmt_duration(total)),
+            bytes: group
+                .iter()
+                .map(|s| serde_json::to_vec(s).map(|v| v.len()).unwrap_or(0))
+                .sum(),
+        });
+    }
+
+    for (user, series) in friend_sessions {
+        if series.is_empty() {
+            continue;
+        }
+        let total: u64 = series.iter().map(|s| s.secs()).sum();
+        rows.push(StoredRow {
+            key: format!("friend:{user}"),
+            name: format!(
+                "Friend · {}",
+                names.get(user).cloned().unwrap_or_else(|| format!("User {user}"))
+            ),
+            detail: format!("{} sessions · {}", series.len(), fmt_duration(total)),
+            bytes: serde_json::to_vec(series).map(|v| v.len()).unwrap_or(0),
+        });
+    }
+
+    rows
+}
+
+/// Bytes as something readable.
+pub fn fmt_bytes(n: usize) -> String {
+    match n {
+        n if n < 1024 => format!("{n} B"),
+        n if n < 1024 * 1024 => format!("{:.1} KB", n as f64 / 1024.0),
+        n => format!("{:.1} MB", n as f64 / (1024.0 * 1024.0)),
+    }
+}
+
+#[cfg(test)]
+mod stored_tests {
+    use super::*;
+    use rojoin_store::gamestats::{Sample, Store};
+    use rojoin_store::playtime::PlaySession;
+
+    #[test]
+    fn bytes_read_the_way_people_expect() {
+        assert_eq!(fmt_bytes(512), "512 B");
+        assert_eq!(fmt_bytes(2048), "2.0 KB");
+        assert_eq!(fmt_bytes(5 * 1024 * 1024), "5.0 MB");
+    }
+
+    #[test]
+    fn every_kind_of_stored_data_gets_a_row() {
+        let mut stats = Store::new();
+        stats.insert(
+            "100".into(),
+            vec![Sample { at: 1, universe_id: 7, playing: 5, ..Default::default() }],
+        );
+
+        let mine = vec![PlaySession {
+            universe_id: 7,
+            root_place_id: 100,
+            name: "Game".into(),
+            start: 0,
+            end: 600,
+        }];
+        let mut friends = std::collections::HashMap::new();
+        friends.insert("42".to_string(), mine.clone());
+
+        let rows = stored_rows(&stats, &mine, &friends, &Default::default());
+        let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+        assert!(keys.contains(&"game:100"));
+        assert!(keys.contains(&"mine:100"));
+        assert!(keys.contains(&"friend:42"));
+        assert!(rows.iter().all(|r| r.bytes > 0), "every row needs a real size");
+    }
+
+    #[test]
+    fn empty_series_are_not_listed() {
+        let mut stats = Store::new();
+        stats.insert("100".into(), Vec::new());
+        let mut friends = std::collections::HashMap::new();
+        friends.insert("42".to_string(), Vec::new());
+        assert!(stored_rows(&stats, &[], &friends, &Default::default()).is_empty());
+    }
+
+    #[test]
+    fn your_playtime_is_grouped_per_game_so_it_can_be_deleted_per_game() {
+        let s = |place, secs| PlaySession {
+            universe_id: 1,
+            root_place_id: place,
+            name: "G".into(),
+            start: 0,
+            end: secs,
+        };
+        let rows = stored_rows(&Store::new(), &[s(100, 60), s(100, 60), s(200, 60)], &Default::default(), &Default::default());
+        assert_eq!(rows.len(), 2, "two games, not three sessions");
+        assert!(rows.iter().any(|r| r.key == "mine:100" && r.detail.contains('2')));
+    }
+}

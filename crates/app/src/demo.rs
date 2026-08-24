@@ -140,6 +140,15 @@ pub fn seed(ui: &MainWindow, app: &std::sync::Arc<crate::App>) {
     seed_group(ui);
     seed_history(ui, app);
 
+    // Seeding happens after the settings screen first rendered, so refresh the
+    // browser from the data that now exists.
+    crate::render_stored(ui, app);
+
+    // ROJOIN_STORED=1 opens the stored-data browser.
+    if std::env::var("ROJOIN_STORED").is_ok_and(|v| v == "1") {
+        ui.set_stored_open(true);
+    }
+
     // ROJOIN_SETTINGS_SEARCH=<query> renders the settings search results.
     if let Ok(q) = std::env::var("ROJOIN_SETTINGS_SEARCH") {
         ui.set_settings_search(q.clone().into());

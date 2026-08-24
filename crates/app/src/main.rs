@@ -3643,6 +3643,20 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
     {
         let app = app.clone();
         let weak = ui.as_weak();
+        ui.on_sort_stored(move |_| {
+            render_stored(&weak.unwrap(), &app);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
+        ui.on_delete_stored(move |key| {
+            delete_stored(&weak.unwrap(), &app, key.as_str());
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
         ui.on_delete_playtime(move || {
             let ui = weak.unwrap();
             ask(
@@ -3904,6 +3918,9 @@ fn wire_more_settings(ui: &MainWindow, app: &Arc<App>) {
 }
 
 fn render_settings(ui: &MainWindow, app: &Arc<App>) {
+    // Filled here so opening the browser is instant rather than blank for a beat.
+    render_stored(ui, app);
+
     let cfg = app.config.lock().unwrap();
 
     // Read straight off the guard this function already holds — calling
@@ -4484,6 +4501,84 @@ fn record_game_stats(
             tracing::warn!(error = %e, "could not save game statistics");
         }
     }
+}
+
+/// Fill the stored-data browser.
+fn render_stored(ui: &MainWindow, app: &Arc<App>) {
+    let stats = app.stats.lock().unwrap().clone();
+    let (sessions, friend_sessions) = {
+        let cfg = app.config.lock().unwrap();
+        (
+            cfg.sessions().to_vec(),
+            cfg.data().map(|d| d.friend_sessions.clone()).unwrap_or_default(),
+        )
+    };
+
+    // Names we already have, so a row says "Deepwoken" rather than a place id.
+    let names: std::collections::HashMap<String, String> = app
+        .names
+        .lock()
+        .unwrap()
+        .users
+        .iter()
+        .map(|(id, u)| (id.clone(), u.display_name.clone()))
+        .collect();
+
+    let mut rows = ad::stored_rows(&stats, &sessions, &friend_sessions, &names);
+
+    if ui.get_stored_sort() == 1 {
+        rows.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    } else {
+        // Biggest first: the browser exists to find what is worth deleting.
+        rows.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    }
+
+    let total: usize = rows.iter().map(|r| r.bytes).sum();
+    ui.set_stored_total(
+        format!("{} across {} entries", ad::fmt_bytes(total), rows.len()).into(),
+    );
+    ui.set_stored_rows(ad::model(
+        rows.into_iter()
+            .map(|r| DetailItem {
+                id: r.key.into(),
+                name: r.name.into(),
+                subtitle: format!("{} · {}", r.detail, ad::fmt_bytes(r.bytes)).into(),
+                thumb: slint::Image::default(),
+                kind: 0,
+            })
+            .collect(),
+    ));
+}
+
+/// Delete one row of stored data.
+fn delete_stored(ui: &MainWindow, app: &Arc<App>, key: &str) {
+    let Some((kind, id)) = key.split_once(':') else { return };
+
+    match kind {
+        "game" => {
+            let mut store = app.stats.lock().unwrap();
+            store.remove(id);
+            let _ = rojoin_store::gamestats::save(&store);
+        }
+        "mine" => {
+            let Ok(place) = id.parse::<i64>() else { return };
+            let mut cfg = app.config.lock().unwrap();
+            cfg.data_mut().sessions.retain(|s| s.root_place_id != place);
+            let _ = cfg.save();
+        }
+        "friend" => {
+            let mut cfg = app.config.lock().unwrap();
+            cfg.data_mut().friend_sessions.remove(id);
+            let _ = cfg.save();
+        }
+        _ => return,
+    }
+
+    render_stored(ui, app);
+    render_graph(ui, app);
+    render_history(ui, app);
+    ui.set_toast_text("Deleted".into());
+    ui.set_toast_nonce(ui.get_toast_nonce() + 1);
 }
 
 fn render_graph(ui: &MainWindow, app: &Arc<App>) {

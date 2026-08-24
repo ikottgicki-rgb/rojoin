@@ -203,6 +203,16 @@ export component SettingsScreen inherits Rectangle {
     callback delete_playtime();
     callback delete_cache();
     callback delete_everything();
+    /// The stored-data browser: `name` the row, `subtitle` its detail and size,
+    /// `id` the delete key.
+    in property <[DetailItem]> stored_rows;
+    in property <string> stored_total;
+    in-out property <bool> stored_open: false;
+    /// 0 = by size · 1 = by name
+    in-out property <int> stored_sort: 0;
+    callback open_stored();
+    callback sort_stored(int);
+    callback delete_stored(string);
     callback clear_caches();
     callback toggle_home_section(int);
 
@@ -1049,6 +1059,17 @@ export component SettingsScreen inherits Rectangle {
                         }
                         Rectangle { height: Theme.hairline; background: Theme.danger.with-alpha(0.3); }
 
+                        Row {
+                            title: "Browse stored data";
+                            hint: "Every recording, what it costs on disk, and delete anything individually.";
+                            VerticalLayout {
+                                alignment: center;
+                                Btn {
+                                    label: "Open";
+                                    clicked => { root.open_stored(); }
+                                }
+                            }
+                        }
                         Row {
                             title: "Delete playtime history";
                             hint: "Every recorded session, yours and your friends'. The graph starts over.";

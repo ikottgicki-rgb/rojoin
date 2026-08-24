@@ -1,3 +1,4 @@
+import { ListView } from "std-widgets.slint";
 import { HistoryPoint, HistoryStat } from "history.slint";
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Btn, IconBtn, Segmented, Spinner, EmptyState, Toast, ConfirmDialog } from "components.slint";
@@ -100,6 +101,12 @@ export component MainWindow inherits Window {
     callback delete_playtime();
     callback delete_cache();
     callback delete_everything();
+    in property <[DetailItem]> stored_rows;
+    in property <string> stored_total;
+    in-out property <bool> stored_open: false;
+    in-out property <int> stored_sort: 0;
+    callback sort_stored(int);
+    callback delete_stored(string);
     callback hide_recent(string);
     in property <[MemberRow]> group_members;
     in property <string> group_member_total;
@@ -800,6 +807,12 @@ export component MainWindow inherits Window {
                             delete_playtime => { root.delete_playtime(); }
                             delete_cache => { root.delete_cache(); }
                             delete_everything => { root.delete_everything(); }
+                            stored_rows: root.stored_rows;
+                            stored_total: root.stored_total;
+                            stored_sort <=> root.stored_sort;
+                            open_stored => { root.stored_open = true; }
+                            sort_stored(i) => { root.sort_stored(i); }
+                            delete_stored(k) => { root.delete_stored(k); }
                             switch_account(id) => { root.switch_account(id); }
                             remove_account(id) => { root.remove_account(id); }
                             add_account => { root.add_account(); }
@@ -877,6 +890,124 @@ export component MainWindow inherits Window {
             add_step(k) => { root.editor_add(k); }
             capture_hotkey => { root.editor_capture(); }
             reset => { root.editor_reset(); }
+        }
+    }
+
+    // The stored-data browser. Its own overlay rather than a Settings section:
+    // it is a table with its own sorting and its own destructive actions, and
+    // cramming that into a settings row would make both worse.
+    if root.stored_open: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000CC;
+
+        TouchArea { clicked => { root.stored_open = false; } }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(680px, parent.width - Space.xl * 2);
+            height: min(560px, parent.height - Space.xl * 2);
+            background: Theme.bg_1;
+            border-radius: Theme.radius;
+            border-width: Theme.hairline;
+            border-color: Theme.line_strong;
+
+            TouchArea {}
+
+            VerticalLayout {
+                padding: Space.lg;
+                spacing: Space.md;
+
+                HorizontalLayout {
+                    spacing: Space.sm;
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 1px;
+                        Text {
+                            text: "Stored data";
+                            color: Theme.text;
+                            font-size: Type.lead;
+                            font-weight: Type.w_bold;
+                        }
+                        Text {
+                            text: root.stored_total;
+                            color: Theme.text_mute;
+                            font-size: Type.caption;
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    VerticalLayout {
+                        alignment: center;
+                        Segmented {
+                            options: ["Size", "Name"];
+                            current <=> root.stored_sort;
+                            changed(i) => { root.sort_stored(i); }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        IconBtn {
+                            glyph: "×";
+                            size_px: 28px;
+                            clicked => { root.stored_open = false; }
+                        }
+                    }
+                }
+
+                if root.stored_rows.length == 0: EmptyState {
+                    vertical-stretch: 1;
+                    title: "Nothing recorded yet";
+                    hint: "Play something with RoJoin open and it will show up here.";
+                }
+
+                if root.stored_rows.length > 0: ListView {
+                    vertical-stretch: 1;
+                    for r in root.stored_rows: Rectangle {
+                        height: 52px;
+                        background: srow.has-hover ? Theme.bg_2 : transparent;
+                        border-radius: Theme.radius;
+                        animate background { duration: Motion.instant; easing: Motion.ease; }
+
+                        srow := TouchArea { }
+
+                        HorizontalLayout {
+                            padding-left: Space.md;
+                            padding-right: Space.md;
+                            spacing: Space.sm;
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 1px;
+                                horizontal-stretch: 1;
+                                Text {
+                                    text: r.name;
+                                    color: Theme.text;
+                                    font-size: Type.small;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                }
+                                Text {
+                                    text: r.subtitle;
+                                    color: Theme.text_mute;
+                                    font-size: Type.caption;
+                                    overflow: elide;
+                                    wrap: no-wrap;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Btn {
+                                    label: "Delete";
+                                    danger: true;
+                                    pad_h: Space.md;
+                                    clicked => { root.delete_stored(r.id); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
