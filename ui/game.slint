@@ -1,6 +1,6 @@
 import { PlayerHistory, HistoryPoint, HistoryStat } from "history.slint";
 import { Theme, Space, Type, Motion, Layout } from "theme.slint";
-import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, MetaStat, Skeleton, EmptyState, Spinner, BusySlot, Texture, HelpDot } from "components.slint";
+import { Thumb, Avatar, Btn, IconBtn, Chip, Segmented, MetaStat, Skeleton, EmptyState, Spinner, BusySlot, Texture } from "components.slint";
 import { GameGrid, ItemGrid } from "cards.slint";
 import { GameTile, GameDetailData, SubPlace, ServerRow, DetailItem } from "types.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -409,87 +409,47 @@ export component GameScreen inherits Rectangle {
                             }
                         }
 
-                        // Each of these gets a "?" because none of them says
-                        // what it actually does: favouriting writes to your
-                        // Roblox account, notifying does not, and four bare
-                        // glyphs are anyone's guess.
-                        HorizontalLayout {
-                            spacing: 3px;
-                            Btn {
-                                label: root.game.favorited ? "★ Favourited" : "☆ Favourite";
-                                height: 36px;
-                                clicked => { root.toggle_favorite(); }
-                            }
-                            VerticalLayout {
-                                alignment: start;
-                                padding-top: 2px;
-                                HelpDot {
-                                    text: "Favourites this game on your Roblox account, "
-                                          + "exactly as the website would. It shows up "
-                                          + "everywhere you are signed in.";
-                                }
-                            }
+                        Btn {
+                            label: root.game.favorited ? "★ Favourited" : "☆ Favourite";
+                            height: 36px;
+                            tip: "Favourites this game on your Roblox account, exactly "
+                                 + "as the website would. It shows up everywhere you are "
+                                 + "signed in.";
+                            clicked => { root.toggle_favorite(); }
                         }
-
-                        HorizontalLayout {
-                            spacing: 3px;
-                            Btn {
-                                label: root.game.notify ? "◉ Notifying" : "○ Notify";
-                                height: 36px;
-                                clicked => { root.toggle_notify(); }
-                            }
-                            VerticalLayout {
-                                alignment: start;
-                                padding-top: 2px;
-                                HelpDot {
-                                    text: "Tells RoJoin to notify you when a friend "
-                                          + "starts playing this. Only while RoJoin is "
-                                          + "running, and nothing is sent to Roblox.";
-                                }
-                            }
+                        Btn {
+                            label: root.game.notify ? "◉ Notifying" : "○ Notify";
+                            height: 36px;
+                            tip: "Tells RoJoin to notify you when a friend starts playing "
+                                 + "this. Only while RoJoin is running, and nothing is "
+                                 + "sent to Roblox.";
+                            clicked => { root.toggle_notify(); }
                         }
-
-                        HorizontalLayout {
-                            spacing: 3px;
-                            IconBtn { glyph: "⧉"; size_px: 36px; clicked => { root.copy_link(); } }
-                            VerticalLayout {
-                                alignment: start;
-                                padding-top: 2px;
-                                HelpDot { text: "Copies a roblox.com link to this game."; }
-                            }
+                        IconBtn {
+                            glyph: "⧉";
+                            size_px: 36px;
+                            tip: "Copy a roblox.com link to this game.";
+                            clicked => { root.copy_link(); }
                         }
-                        HorizontalLayout {
-                            spacing: 3px;
-                            IconBtn { glyph: "#"; size_px: 36px; clicked => { root.copy_id(); } }
-                            VerticalLayout {
-                                alignment: start;
-                                padding-top: 2px;
-                                HelpDot { text: "Copies this game's place id."; }
-                            }
+                        IconBtn {
+                            glyph: "#";
+                            size_px: 36px;
+                            tip: "Copy this game's place id.";
+                            clicked => { root.copy_id(); }
                         }
-                        HorizontalLayout {
-                            spacing: 3px;
-                            IconBtn { glyph: "⊞"; size_px: 36px; clicked => { root.make_shortcut(); } }
-                            VerticalLayout {
-                                alignment: start;
-                                padding-top: 2px;
-                                HelpDot {
-                                    text: "Puts a shortcut on your desktop that launches "
-                                          + "straight into this game.";
-                                }
-                            }
+                        IconBtn {
+                            glyph: "⊞";
+                            size_px: 36px;
+                            tip: "Put a shortcut on your desktop that launches straight "
+                                 + "into this game.";
+                            clicked => { root.make_shortcut(); }
                         }
-                        HorizontalLayout {
-                            spacing: 3px;
-                            IconBtn { glyph: "↗"; size_px: 36px; clicked => { root.open_browser(); } }
-                            VerticalLayout {
-                                alignment: start;
-                                padding-top: 2px;
-                                HelpDot {
-                                    text: "Opens this game's page on roblox.com in your browser.";
-                                    align_right: true;
-                                }
-                            }
+                        IconBtn {
+                            glyph: "↗";
+                            size_px: 36px;
+                            tip: "Open this game's page on roblox.com in your browser.";
+                            tip_right: true;
+                            clicked => { root.open_browser(); }
                         }
                     }
 

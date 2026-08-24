@@ -146,6 +146,10 @@ export component Avatar inherits Rectangle {
 
 export component Btn inherits Rectangle {
     in property <string> label;
+    /// Explanation shown on hover. Empty means the label speaks for itself.
+    in property <string> tip;
+    /// Anchor the tooltip's right edge, for controls near the window edge.
+    in property <bool> tip_right: false;
     in property <bool> primary: false;
     /// Destructive. Red label and border, filled only on hover — a wall of
     /// solid red buttons reads as an error state rather than a set of choices.
@@ -187,10 +191,43 @@ export component Btn inherits Rectangle {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
+
+    // Hovering the control itself explains it, so nothing extra sits in the row.
+    // A "?" beside every button was worse than the confusion it fixed: six of
+    // them turned an action bar into a puzzle.
+    if root.tip != "" && ta.has-hover: Rectangle {
+        x: root.tip_right ? root.width - self.width : 0px;
+        y: root.height + 4px;
+        width: 250px;
+        height: tiptext.preferred-height + Space.sm * 2;
+
+        background: Theme.bg_4;
+        border-radius: Theme.radius;
+        border-width: Theme.hairline;
+        border-color: Theme.line_strong;
+
+        opacity: 0;
+        animate opacity { duration: Motion.fast; easing: Motion.ease; }
+        init => { self.opacity = 1.0; }
+
+        tiptext := Text {
+            x: Space.sm;
+            y: Space.sm;
+            width: parent.width - Space.sm * 2;
+            text: root.tip;
+            color: Theme.text;
+            font-size: Type.caption;
+            wrap: word-wrap;
+        }
+    }
+
 }
 
 export component IconBtn inherits Rectangle {
     in property <string> glyph;
+    /// Explanation shown on hover. A bare glyph almost always needs one.
+    in property <string> tip;
+    in property <bool> tip_right: false;
     in property <bool> active: false;
     in property <length> size_px: 30px;
     callback clicked();
@@ -213,6 +250,36 @@ export component IconBtn inherits Rectangle {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
+
+    // Hovering the control itself explains it, so nothing extra sits in the row.
+    // A "?" beside every button was worse than the confusion it fixed: six of
+    // them turned an action bar into a puzzle.
+    if root.tip != "" && ta.has-hover: Rectangle {
+        x: root.tip_right ? root.width - self.width : 0px;
+        y: root.height + 4px;
+        width: 250px;
+        height: tiptext.preferred-height + Space.sm * 2;
+
+        background: Theme.bg_4;
+        border-radius: Theme.radius;
+        border-width: Theme.hairline;
+        border-color: Theme.line_strong;
+
+        opacity: 0;
+        animate opacity { duration: Motion.fast; easing: Motion.ease; }
+        init => { self.opacity = 1.0; }
+
+        tiptext := Text {
+            x: Space.sm;
+            y: Space.sm;
+            width: parent.width - Space.sm * 2;
+            text: root.tip;
+            color: Theme.text;
+            font-size: Type.caption;
+            wrap: word-wrap;
+        }
+    }
+
 }
 
 export component Chip inherits Rectangle {
