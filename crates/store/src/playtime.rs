@@ -134,8 +134,14 @@ pub struct DayBucket {
 /// rather than being credited entirely to whichever end happens to win.
 pub fn daily(sessions: &[PlaySession], days: u32, now: i64) -> Vec<DayBucket> {
     let days = days.max(1) as i64;
-    let today = local_midnight(now);
-    let first = today - (days - 1) * 86_400;
+
+    // Walk *calendar* days rather than adding 86 400 seconds. Buckets are keyed
+    // on local midnight, and a flat day of seconds stops landing on local
+    // midnight the moment the window crosses a daylight-saving change — every
+    // bucket on the far side then failed its lookup and read as zero. A
+    // sixty-day window in November lost forty-six of its days that way.
+    let midnights = local_midnights(now, days);
+    let first = midnights.first().copied().unwrap_or_else(|| local_midnight(now));
 
     // day midnight -> universe -> secs
     let mut grid: HashMap<i64, HashMap<i64, u64>> = HashMap::new();
@@ -171,9 +177,10 @@ pub fn daily(sessions: &[PlaySession], days: u32, now: i64) -> Vec<DayBucket> {
         }
     }
 
-    (0..days)
-        .map(|i| {
-            let midnight = first + i * 86_400;
+    midnights
+        .iter()
+        .map(|midnight| {
+            let midnight = *midnight;
             let mut games: Vec<GameSlice> = grid
                 .get(&midnight)
                 .map(|per_game| {
@@ -333,6 +340,28 @@ pub fn latest(sessions: &[PlaySession], limit: usize) -> Vec<&PlaySession> {
 /// The longest single session in the list.
 pub fn longest(sessions: &[PlaySession]) -> Option<&PlaySession> {
     sessions.iter().max_by_key(|s| s.secs())
+}
+
+/// The last `days` local midnights, oldest first, including today's.
+///
+/// Calendar arithmetic on purpose: see the note in `daily`.
+fn local_midnights(now: i64, days: i64) -> Vec<i64> {
+    let Some(today) = Local.timestamp_opt(now, 0).single().map(|d| d.date_naive()) else {
+        // No local calendar available: fall back to flat days rather than
+        // returning nothing.
+        let base = local_midnight(now);
+        return (0..days).map(|i| base - (days - 1 - i) * 86_400).collect();
+    };
+
+    (0..days)
+        .filter_map(|i| {
+            let date = today.checked_sub_signed(chrono::Duration::days(days - 1 - i))?;
+            let naive = date.and_hms_opt(0, 0, 0)?;
+            // `earliest` rather than `single`: a midnight that repeats under a
+            // fall-back change is still a real midnight.
+            Local.from_local_datetime(&naive).earliest().map(|d| d.timestamp())
+        })
+        .collect()
 }
 
 /// Local midnight for the day containing `unix`.
@@ -628,5 +657,40 @@ mod tests {
     fn hourly_keeps_every_hour_in_the_window() {
         let out = hourly(&[], 12, base() + 20 * 3600);
         assert_eq!(out.len(), 12, "empty hours are still columns");
+    }
+
+    /// A window spanning a daylight-saving change used to lose every day on the
+    /// far side of it: buckets keyed on local midnight, emitted by adding a flat
+    /// 86 400 seconds, stopped agreeing after the clocks moved. Sixty days in
+    /// November came out as fourteen with data and forty-six blanks.
+    #[test]
+    fn a_window_across_a_dst_change_keeps_all_of_its_days() {
+        // 2023-11-14, which is past Europe's October change.
+        let now = 1_700_000_000;
+        let sessions: Vec<PlaySession> = (0..60)
+            .map(|i| session(1, now - (60 - i) * 86_400, 600))
+            .collect();
+
+        let out = daily(&sessions, 62, now);
+        assert_eq!(out.len(), 62, "window length");
+
+        let with_play = out.iter().filter(|b| b.total_secs > 0).count();
+        assert!(
+            with_play >= 58,
+            "only {with_play} of 60 sessions landed in a bucket"
+        );
+    }
+
+    #[test]
+    fn every_emitted_bucket_really_is_a_local_midnight() {
+        let now = 1_700_000_000;
+        for b in daily(&[], 70, now) {
+            assert_eq!(
+                b.midnight,
+                local_midnight(b.midnight),
+                "bucket {} is not a local midnight",
+                b.label
+            );
+        }
     }
 }

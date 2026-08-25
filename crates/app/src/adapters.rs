@@ -1626,7 +1626,7 @@ mod settings_search_tests {
 
         let g = build_graph(&s, 90, 0, now);
         assert!(g.range.contains("days"), "range said {:?}", g.range);
-        assert!(g.days.len() <= 23, "got {}", g.days.len());
+        assert!(g.days.len() >= 20 && g.days.len() <= 23, "got {}", g.days.len());
         // Leading empties are trimmed now, so the chart opens on real data.
         assert!(g.days.first().unwrap().played, "chart starts on an empty column");
     }
