@@ -110,6 +110,10 @@ export component MainWindow inherits Window {
     in-out property <int> stored_sort: 0;
     callback sort_stored(int);
     callback delete_stored(string);
+    in property <bool> update_ready: false;
+    in property <string> update_version;
+    callback update_later();
+    callback update_restart();
     callback hide_recent(string);
     in property <[MemberRow]> group_members;
     in property <string> group_member_total;
@@ -902,6 +906,59 @@ export component MainWindow inherits Window {
             add_step(k) => { root.editor_add(k); }
             capture_hotkey => { root.editor_capture(); }
             reset => { root.editor_reset(); }
+        }
+    }
+
+    // Sits above every screen and stays until answered. An update that has been
+    // downloaded but not yet run is invisible otherwise.
+    if root.update_ready: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: Space.lg;
+        width: min(520px, parent.width - Space.xl * 2);
+        height: ulay.preferred-height;
+        background: Theme.bg_4;
+        border-radius: Theme.radius;
+        border-width: Theme.hairline;
+        border-color: Theme.accent;
+
+        opacity: 0;
+        animate opacity { duration: Motion.normal; easing: Motion.ease; }
+        init => { self.opacity = 1.0; }
+
+        ulay := HorizontalLayout {
+            padding: Space.md;
+            spacing: Space.md;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 1px;
+                horizontal-stretch: 1;
+                Text {
+                    text: "Restart to finish updating";
+                    color: Theme.text;
+                    font-size: Type.body;
+                    font-weight: Type.w_bold;
+                }
+                Text {
+                    text: "Version " + root.update_version + " is downloaded and will run "
+                          + "once RoJoin restarts.";
+                    color: Theme.text_mute;
+                    font-size: Type.caption;
+                    wrap: word-wrap;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    spacing: Space.sm;
+                    Btn { label: "Later"; clicked => { root.update_later(); } }
+                    Btn {
+                        label: "Restart now";
+                        primary: true;
+                        clicked => { root.update_restart(); }
+                    }
+                }
+            }
         }
     }
 

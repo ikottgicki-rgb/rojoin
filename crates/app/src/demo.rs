@@ -144,6 +144,12 @@ pub fn seed(ui: &MainWindow, app: &std::sync::Arc<crate::App>) {
     // browser from the data that now exists.
     crate::render_stored(ui, app);
 
+    // ROJOIN_UPDATE=1 shows the restart-to-update banner.
+    if std::env::var("ROJOIN_UPDATE").is_ok_and(|v| v == "1") {
+        ui.set_update_version("1.0.2".into());
+        ui.set_update_ready(true);
+    }
+
     // ROJOIN_STORED=1 opens the stored-data browser.
     if std::env::var("ROJOIN_STORED").is_ok_and(|v| v == "1") {
         ui.set_stored_open(true);

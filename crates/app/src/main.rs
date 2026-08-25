@@ -1645,7 +1645,12 @@ fn maybe_auto_update(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>) {
             Ok(_) => {
                 tracing::info!(%version, "update staged");
                 let _ = weak.upgrade_in_event_loop(move |ui| {
-                    toast(&ui, &format!("Updated to {version} — restart to apply"));
+                    // A banner, not a toast. A three-second message about
+                    // something needing a restart is a message nobody sees: the
+                    // update sits there applied-but-not-running and the user has
+                    // no idea. This stays until it is answered.
+                    ui.set_update_version(version.clone().into());
+                    ui.set_update_ready(true);
                     ui.set_update_status(
                         format!("Version {version} installed. Restart to use it.").into(),
                     );
@@ -3667,6 +3672,34 @@ fn wire_settings(ui: &MainWindow, app: &Arc<App>, bridge: &Arc<Bridge>, imgs: &I
             ui.set_confirm_open(false);
             let Some(what) = app.pending.lock().unwrap().take() else { return };
             run_pending(&ui, &app, what);
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_update_later(move || {
+            weak.unwrap().set_update_ready(false);
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_update_restart(move || {
+            let ui = weak.unwrap();
+            match updater::relaunch() {
+                Ok(()) => {
+                    tracing::info!("handing over to the new build");
+                    let _ = slint::quit_event_loop();
+                }
+                Err(e) => {
+                    // Do not clear the banner: the restart has not happened, so
+                    // the thing it is asking for is still outstanding.
+                    tracing::error!(error = %e, "could not relaunch");
+                    ui.set_toast_text(
+                        format!("Could not restart automatically: {e}. Close and reopen RoJoin.")
+                            .into(),
+                    );
+                    ui.set_toast_nonce(ui.get_toast_nonce() + 1);
+                }
+            }
         });
     }
     {

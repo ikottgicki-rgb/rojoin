@@ -212,7 +212,7 @@ pub fn clean_previous_build() {
 /// under /tmp, not at the AppImage the user actually launched — writing there
 /// either fails or is silently discarded on unmount. The runtime exports
 /// `APPIMAGE` with the real path, so prefer it when present.
-fn target_path() -> std::io::Result<std::path::PathBuf> {
+pub fn target_path() -> std::io::Result<std::path::PathBuf> {
     if let Some(appimage) = std::env::var_os("APPIMAGE") {
         let path = std::path::PathBuf::from(appimage);
         if path.is_file() {
@@ -332,4 +332,35 @@ mod tests {
         }];
         assert!(wanted_asset(&assets).is_none());
     }
+}
+
+/// Start the freshly staged build and hand over to it.
+///
+/// The running process keeps its old file open, so the new binary only takes
+/// effect on a fresh launch — which is why an update needs a restart at all, and
+/// why the notice offering one has to stick around until it is answered.
+pub fn relaunch() -> std::io::Result<()> {
+    let exe = target_path()?;
+
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    // Detach, so the replacement is not a child that dies with us.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+    }
+
+    cmd.spawn()?;
+    Ok(())
 }
