@@ -214,6 +214,10 @@ impl Watcher {
             }
         };
 
+        // Checked once per sweep rather than per presence row: it is a process
+        // lookup, and only your own account is gated on it.
+        let client_running = rojoin_launcher::game_running();
+
         // Three polls of slack. One missed sweep — a hiccup, a throttle — should
         // not split a single sitting into two sessions.
         let gap = POLL.as_secs() as i64 * 3;
@@ -237,6 +241,18 @@ impl Watcher {
                 let root = p.root_place_id.or(p.place_id).unwrap_or(0);
 
                 if p.user_id == me {
+                    // Presence alone is not proof *you* are playing. Roblox keeps
+                    // reporting a stale "in game" after an unclean exit — suspend
+                    // the machine mid-session and it can persist for hours, which
+                    // invented a ten-minute session on a day nothing was played.
+                    // The local client either exists or it does not, so for your
+                    // own account that is the authority.
+                    if !client_running {
+                        tracing::debug!(
+                            "presence says in-game but no Roblox process; ignoring"
+                        );
+                        continue;
+                    }
                     cfg.observe_session(universe, root, &p.location, now, gap);
                     // Logged at info, not debug: without this there is no way to
                     // tell whether tracking is working short of waiting for a bar
