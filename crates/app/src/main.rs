@@ -4732,6 +4732,8 @@ fn render_graph(ui: &MainWindow, app: &Arc<App>) {
     ui.set_graph_segments(ad::model(g.segments));
     ui.set_graph_days(ad::model(g.days));
     ui.set_graph_legend(ad::model(g.legend));
+    ui.set_graph_share(ad::model(g.share));
+    ui.set_graph_share_total(g.share_total.into());
     ui.set_graph_ceiling(g.ceiling.into());
     ui.set_graph_total(g.total.into());
     ui.set_graph_range(g.range.into());

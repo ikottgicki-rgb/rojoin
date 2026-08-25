@@ -635,6 +635,9 @@ mod tests {
 
 /// Everything the playtime chart needs, already flattened for Slint.
 pub struct GraphModel {
+    /// Share of playtime per game, as ring wedges.
+    pub share: Vec<crate::ShareSlice>,
+    pub share_total: String,
     pub segments: Vec<crate::GraphSegment>,
     pub days: Vec<crate::GraphDay>,
     pub legend: Vec<crate::GraphLegend>,
@@ -824,6 +827,8 @@ pub fn build_graph(
     let played: u64 = buckets.iter().map(|b| b.total_secs).sum();
 
     GraphModel {
+        share: share_ring(&overall),
+        share_total: fmt_duration(played),
         segments,
         days: day_rows,
         legend,
@@ -1156,6 +1161,11 @@ pub fn build_history(
                 0.0
             },
             height: b.playing as f32 / ceiling,
+            prev: if i == 0 {
+                b.playing as f32 / ceiling
+            } else {
+                buckets[i - 1].playing as f32 / ceiling
+            },
             label: format!("{} · {} playing", day_stamp(b.at), compact(b.playing)).into(),
         })
         .collect();
@@ -1222,6 +1232,69 @@ pub fn build_history(
             n => format!("last {n} days"),
         },
     }
+}
+
+/// Build the playtime-share ring: one filled wedge per game.
+///
+/// A ring rather than a full pie — the hole gives the total somewhere to live,
+/// and thin slices stay legible against a hole instead of vanishing into a
+/// centre point. Anything under 2% is folded into "Other" rather than drawn as a
+/// sliver nobody can hover.
+fn share_ring(totals: &[rojoin_store::playtime::GameSlice]) -> Vec<crate::ShareSlice> {
+    let grand: u64 = totals.iter().map(|g| g.secs).sum();
+    if grand == 0 {
+        return Vec::new();
+    }
+
+    // Group the tail so the ring never has unhoverable slivers.
+    let mut shown: Vec<(String, u64)> = Vec::new();
+    let mut other = 0u64;
+    for g in totals {
+        let pct = g.secs as f64 / grand as f64;
+        if pct < 0.02 || shown.len() >= 6 {
+            other += g.secs;
+        } else {
+            shown.push((game_label(&g.name), g.secs));
+        }
+    }
+    if other > 0 {
+        shown.push(("Other".into(), other));
+    }
+
+    const CX: f64 = 50.0;
+    const CY: f64 = 50.0;
+    const OUTER: f64 = 46.0;
+    const INNER: f64 = 27.0;
+
+    let mut at = -std::f64::consts::FRAC_PI_2; // start at twelve o'clock
+    let mut out = Vec::new();
+
+    for (i, (name, secs)) in shown.iter().enumerate() {
+        let frac = *secs as f64 / grand as f64;
+        let sweep = frac * std::f64::consts::TAU;
+        let end = at + sweep;
+
+        let (x1, y1) = (CX + OUTER * at.cos(), CY + OUTER * at.sin());
+        let (x2, y2) = (CX + OUTER * end.cos(), CY + OUTER * end.sin());
+        let (x3, y3) = (CX + INNER * end.cos(), CY + INNER * end.sin());
+        let (x4, y4) = (CX + INNER * at.cos(), CY + INNER * at.sin());
+        // Arcs over half a turn need the large-arc flag, or they draw the short
+        // way round and the wedge comes out inverted.
+        let large = if sweep > std::f64::consts::PI { 1 } else { 0 };
+
+        out.push(crate::ShareSlice {
+            commands: format!(
+                "M {x1:.2} {y1:.2} A {OUTER} {OUTER} 0 {large} 1 {x2:.2} {y2:.2} \
+                 L {x3:.2} {y3:.2} A {INNER} {INNER} 0 {large} 0 {x4:.2} {y4:.2} Z"
+            )
+            .into(),
+            tint: i.min(5) as i32,
+            name: name.clone().into(),
+            percent: format!("{:.0}%", frac * 100.0).into(),
+        });
+        at = end;
+    }
+    out
 }
 
 /// Turn normalised points into an SVG path in a 0..100 box.
@@ -1307,6 +1380,11 @@ fn project_sessions(
                 0.0
             },
             height: *s as f32 / peak as f32,
+            prev: if i == 0 {
+                *s as f32 / peak as f32
+            } else {
+                secs[i - 1] as f32 / peak as f32
+            },
             label: format!("{} · you played {}", day_stamp(b.at), fmt_duration(*s)).into(),
         })
         .collect()

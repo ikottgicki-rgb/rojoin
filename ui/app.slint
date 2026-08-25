@@ -14,10 +14,10 @@ import { GroupScreen, GroupData } from "group.slint";
 import { AvatarScreen } from "avatar.slint";
 import { MacrosScreen, StepEditor } from "macros.slint";
 import { LibraryScreen, PlayStat } from "library.slint";
-import { GraphSegment, GraphDay, GraphLegend } from "graph.slint";
+import { GraphSegment, GraphDay, GraphLegend, ShareSlice } from "graph.slint";
 import { SettingsScreen, AccountRow } from "settings.slint";
 
-export { Theme, SignInPhase, ProfileData, GroupData, PlayStat, AccountRow, GraphSegment, GraphDay, GraphLegend, HistoryPoint, HistoryStat }
+export { Theme, SignInPhase, ProfileData, GroupData, PlayStat, AccountRow, GraphSegment, GraphDay, GraphLegend, ShareSlice, HistoryPoint, HistoryStat }
 
 export component MainWindow inherits Window {
     title: "RoJoin";
@@ -62,6 +62,8 @@ export component MainWindow inherits Window {
     in property <[GraphSegment]> graph_segments;
     in property <[GraphDay]> graph_days;
     in property <[GraphLegend]> graph_legend;
+    in property <[ShareSlice]> graph_share;
+    in property <string> graph_share_total;
     in property <string> graph_ceiling;
     in property <string> graph_total;
     in property <string> graph_range;
@@ -666,6 +668,8 @@ export component MainWindow inherits Window {
                             graph_segments: root.graph_segments;
                             graph_days: root.graph_days;
                             graph_legend: root.graph_legend;
+                            share: root.graph_share;
+                            share_total: root.graph_share_total;
                             graph_ceiling: root.graph_ceiling;
                             graph_total: root.graph_total;
                             graph_range: root.graph_range;

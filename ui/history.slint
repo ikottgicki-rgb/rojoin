@@ -9,6 +9,9 @@ import { Btn, Segmented, Spinner, EmptyState } from "components.slint";
 export struct HistoryPoint {
     x: float,
     height: float,
+    /// The previous point's height, so the line style can join consecutive
+    /// points — Slint cannot look backwards through a model from inside a `for`.
+    prev: float,
     label: string,      // "Fri 14 Aug · 12.4K players"
 }
 
@@ -246,7 +249,59 @@ export component PlayerHistory inherits Rectangle {
                             root.hover = self.has-hover ? p.label : "";
                         }
                     }
+
                 }
+
+                // A second loop, not children of the bars: the bar element is
+                // hidden in line mode, so anything nested inside it would be
+                // hidden too. A connector back to the previous value plus a dot
+                // on this one reads as a joined line, and needs no path geometry
+                // — which rendered invisible when tried.
+                if root.style == 1: Rectangle {
+                    width: 100%;
+                    height: 100%;
+
+                    for p[i] in root.points: Rectangle {
+                        property <length> colw: plot.width / max(1, root.points.length);
+                        property <length> barw: max(1px, min(self.colw, 22px));
+                        property <length> stride: self.barw + (self.barw >= 8px ? 2px : 0px);
+                        property <length> cx: i * self.stride + self.barw / 2;
+                        property <length> ptop: plot.height - plot.height * p.height * root.grow;
+                        property <length> prevtop: plot.height - plot.height * p.prev * root.grow;
+
+                        x: 0;
+                        y: 0;
+                        width: 100%;
+                        height: 100%;
+
+                        Rectangle {
+                            x: parent.cx - 1px;
+                            y: min(parent.ptop, parent.prevtop);
+                            width: 2px;
+                            height: max(1px, abs(parent.ptop - parent.prevtop));
+                            background: Theme.accent;
+                            opacity: 0.7;
+                        }
+
+                        Rectangle {
+                            x: parent.cx - 3px;
+                            y: parent.ptop - 3px;
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
+                            background: mk.has-hover ? Theme.text : Theme.accent;
+                            animate background { duration: Motion.instant; easing: Motion.ease; }
+
+                            mk := TouchArea {
+                                mouse-cursor: default;
+                                changed has-hover => {
+                                    root.hover = self.has-hover ? p.label : "";
+                                }
+                            }
+                        }
+                    }
+                }
+
             }
         }
 

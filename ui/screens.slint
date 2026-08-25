@@ -2,7 +2,7 @@ import { Theme, Space, Type, Motion, Layout } from "theme.slint";
 import { Thumb, Avatar, Btn, IconBtn, Chip, Badge, Skeleton, EmptyState, Spinner, BusySlot, MetaStat, Segmented, Texture } from "components.slint";
 import { GameGrid, GameListRow, ItemGrid } from "cards.slint";
 import { GameTile, DetailItem } from "types.slint";
-import { PlaytimeGraph, GraphSegment, GraphDay, GraphLegend } from "graph.slint";
+import { PlaytimeGraph, GraphSegment, GraphDay, GraphLegend, ShareSlice } from "graph.slint";
 import { ScrollView } from "std-widgets.slint";
 
 component SectionHead inherits HorizontalLayout {
@@ -50,6 +50,8 @@ export component HomeScreen inherits Rectangle {
     in property <[GraphSegment]> graph_segments;
     in property <[GraphDay]> graph_days;
     in property <[GraphLegend]> graph_legend;
+    in property <[ShareSlice]> share;
+    in property <string> share_total;
     in property <string> graph_ceiling;
     in property <string> graph_total;
     in property <string> graph_range;
@@ -93,7 +95,10 @@ export component HomeScreen inherits Rectangle {
             }
 
             if root.show_graph: Rectangle {
-                height: 232px;
+                // Tall enough for the chart, the axis and the share ring below
+                // it. The ring was overflowing into the tiles underneath at the
+                // old height.
+                height: 372px;
                 background: Theme.bg_1;
                 border-radius: Theme.radius;
                 border-width: Theme.hairline;
@@ -107,6 +112,8 @@ export component HomeScreen inherits Rectangle {
                     segments: root.graph_segments;
                     days: root.graph_days;
                     legend: root.graph_legend;
+                    share: root.share;
+                    share_total: root.share_total;
                     ceiling_label: root.graph_ceiling;
                     total_label: root.graph_total;
                     range_label: root.graph_range;

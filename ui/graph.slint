@@ -23,6 +23,17 @@ export struct GraphDay {
     played: bool,
 }
 
+/// One wedge of the playtime share ring.
+///
+/// The path is built in Rust: arc geometry is arithmetic, and doing it here would
+/// mean expressing trigonometry in a layout language.
+export struct ShareSlice {
+    commands: string,
+    tint: int,
+    name: string,
+    percent: string,
+}
+
 export struct GraphLegend {
     name: string,
     label: string,
@@ -44,6 +55,8 @@ export component PlaytimeGraph inherits Rectangle {
     in property <string> total_label;
     in property <string> range_label;
     in property <bool> empty: false;
+    in property <[ShareSlice]> share;
+    in property <string> share_total;
     /// Range buttons, offered only when the data can fill them.
     in property <[string]> ranges: ["All time"];
     in-out property <int> range_index: 0;
@@ -230,6 +243,69 @@ export component PlaytimeGraph inherits Rectangle {
                             overflow: elide;
                             wrap: no-wrap;
                         }
+                    }
+                }
+            }
+        }
+
+        // Share of playtime as a ring. Answers "what do I actually play" — a
+        // question the bars cannot, since they answer "when".
+        if !root.empty && root.share.length > 0: HorizontalLayout {
+            spacing: Space.lg;
+            alignment: start;
+
+            Rectangle {
+                width: 104px;
+                height: 104px;
+
+                for sl in root.share: Path {
+                    width: 100%;
+                    height: 100%;
+                    viewbox-width: 100;
+                    viewbox-height: 100;
+                    commands: sl.commands;
+                    fill: root.tint_of(sl.tint);
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.share_total;
+                        color: Theme.text;
+                        font-size: Type.caption;
+                        font-weight: Type.w_bold;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        text: "played";
+                        color: Theme.text_mute;
+                        font-size: Type.micro;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 3px;
+                for sl in root.share: HorizontalLayout {
+                    spacing: Space.xs;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 2px;
+                            background: root.tint_of(sl.tint);
+                        }
+                    }
+                    Text {
+                        text: sl.percent + "  " + sl.name;
+                        color: Theme.text_dim;
+                        font-size: Type.micro;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        wrap: no-wrap;
                     }
                 }
             }
