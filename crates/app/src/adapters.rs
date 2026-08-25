@@ -666,9 +666,12 @@ pub fn playtime_ranges(reach_secs: i64) -> Vec<(String, i64)> {
     if days >= 8 {
         out.push(("Month".into(), 30));
     }
-    if days >= 1 {
-        out.push(("All time".into(), 0));
-    }
+
+    // Always. Gating this on a day of history meant that after an evening's play
+    // the only option was "Today" — which, the next afternoon, showed three
+    // hours and no way at all to reach yesterday's session. There must always be
+    // a way to see everything.
+    out.push(("All time".into(), 0));
     out
 }
 
@@ -726,6 +729,9 @@ pub fn build_graph(
     // Blank columns before anything was ever recorded are not information.
     let buckets = playtime::trim_leading_empty(buckets);
     let ceiling = playtime::axis_ceiling_secs(&buckets);
+    // Across every session, used only to assign colours: a game keeps the same
+    // tint whichever window is on screen. The legend below deliberately uses a
+    // different total — see there.
     let overall = playtime::totals(sessions);
 
     // universe -> palette step, by overall rank.
@@ -782,6 +788,27 @@ pub fn build_graph(
             played: b.total_secs > 0,
         })
         .collect();
+
+    // Totals from the *window*, not from every session ever recorded. Summing
+    // everything put "Deepwoken 2h 50m" under a chart headed "10m total", which
+    // reads as one of the two numbers being wrong.
+    let overall: Vec<playtime::GameSlice> = {
+        let mut per_game: std::collections::HashMap<i64, playtime::GameSlice> = Default::default();
+        for b in &buckets {
+            for g in &b.games {
+                let slot = per_game.entry(g.universe_id).or_insert_with(|| playtime::GameSlice {
+                    universe_id: g.universe_id,
+                    root_place_id: g.root_place_id,
+                    name: g.name.clone(),
+                    secs: 0,
+                });
+                slot.secs += g.secs;
+            }
+        }
+        let mut v: Vec<_> = per_game.into_values().collect();
+        v.sort_by(|a, b| b.secs.cmp(&a.secs).then(a.universe_id.cmp(&b.universe_id)));
+        v
+    };
 
     let legend: Vec<crate::GraphLegend> = overall
         .iter()
