@@ -671,19 +671,28 @@ pub fn build_graph(
 ) -> GraphModel {
     use rojoin_store::playtime;
 
-    let span = playtime::span_secs(sessions);
-    let hourly = !sessions.is_empty() && span < 2 * 86_400;
+    // Measured from the oldest session to *now*, not the span between sessions.
+    // Span alone sized a window that need not contain the data: four hours of
+    // play yesterday evening produced a four-hour window ending today, so the
+    // sessions fell off the back of their own chart.
+    let reach = sessions
+        .iter()
+        .map(|s| s.start)
+        .min()
+        .map(|first| (now - first).max(0))
+        .unwrap_or(0);
+
+    let hourly = !sessions.is_empty() && reach < 2 * 86_400;
 
     let buckets = if hourly {
-        // Round up to a sensible number of hours, so a fourteen-minute session
-        // gets a few hours of context rather than one lonely column.
-        let hours = ((span / 3600) + 4).clamp(6, 48);
+        // Enough hours to reach the oldest session, plus a little context.
+        let hours = ((reach / 3600) + 2).clamp(6, 48);
         playtime::hourly(sessions, hours, now)
     } else {
         let days = if sessions.is_empty() {
             7
         } else {
-            (((span / 86_400) + 2) as u32).min(retention_days.max(1))
+            (((reach / 86_400) + 2) as u32).min(retention_days.max(1))
         };
         playtime::daily(sessions, days, now)
     };
@@ -1796,5 +1805,40 @@ mod stored_tests {
         let rows = stored_rows(&Store::new(), &[s(100, 60), s(100, 60), s(200, 60)], &Default::default(), &Default::default());
         assert_eq!(rows.len(), 2, "two games, not three sessions");
         assert!(rows.iter().any(|r| r.key == "mine:100" && r.detail.contains('2')));
+    }
+
+    /// Sessions from yesterday evening, viewed the next afternoon: the window
+    /// has to reach back to them rather than being sized by how long they lasted.
+    #[test]
+    fn a_window_always_reaches_the_data_it_is_drawn_for() {
+        let now = 1_700_000_000;
+        let yesterday_evening = now - 21 * 3600;
+        let s = [PlaySession {
+            universe_id: 1,
+            root_place_id: 10,
+            name: "Deepwoken".into(),
+            start: yesterday_evening,
+            end: yesterday_evening + 3600,
+        }];
+
+        let g = build_graph(&s, 90, now);
+        assert!(!g.empty, "the session fell outside its own chart");
+        let played: usize = g.days.iter().filter(|d| d.played).count();
+        assert!(played >= 1, "no column carries the session");
+    }
+
+    #[test]
+    fn something_older_than_two_days_switches_to_daily() {
+        let now = 1_700_000_000;
+        let s = [PlaySession {
+            universe_id: 1,
+            root_place_id: 10,
+            name: "G".into(),
+            start: now - 5 * 86_400,
+            end: now - 5 * 86_400 + 3600,
+        }];
+        let g = build_graph(&s, 90, now);
+        assert!(g.range.contains("days"), "range said {:?}", g.range);
+        assert!(!g.empty);
     }
 }

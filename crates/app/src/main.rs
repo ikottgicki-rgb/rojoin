@@ -234,8 +234,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .collect(),
     ));
-    ui.set_date_label(ad::today_label().into());
-    ui.set_greeting(ad::greeting(chrono::Local::now().format("%H").to_string().parse().unwrap_or(12)).into());
+    refresh_clock(&ui, &app);
+
+    // Everything derived from "now" has to be re-derived, or it is a snapshot
+    // taken at launch. RoJoin is designed to sit in the tray for days and to
+    // survive suspend, so a graph whose axis was computed at startup ends up
+    // plotting a window that has already passed — which is exactly how a
+    // fourteen-hour-old session appeared in the *future* on a "last 7 hours"
+    // axis, under a greeting that still said evening in the afternoon.
+    {
+        let app2 = app.clone();
+        let weak = ui.as_weak();
+        let timer = Box::leak(Box::new(slint::Timer::default()));
+        timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_secs(60),
+            move || {
+                if let Some(ui) = weak.upgrade() {
+                    refresh_clock(&ui, &app2);
+                    render_graph(&ui, &app2);
+                    render_history(&ui, &app2);
+                }
+            },
+        );
+    }
 
     wire_signin(&ui, &app, &bridge, &imgs);
     wire_nav(&ui, &app, &bridge);
@@ -4619,6 +4641,24 @@ fn delete_stored(ui: &MainWindow, app: &Arc<App>, key: &str) {
     render_history(ui, app);
     ui.set_toast_text("Deleted".into());
     ui.set_toast_nonce(ui.get_toast_nonce() + 1);
+}
+
+/// Re-derive everything that depends on the wall clock.
+///
+/// Called on a timer as well as at startup, because the app is meant to run for
+/// days: a greeting and a date fixed at launch are wrong by the next morning.
+fn refresh_clock(ui: &MainWindow, _app: &Arc<App>) {
+    ui.set_date_label(ad::today_label().into());
+    ui.set_greeting(
+        ad::greeting(
+            chrono::Local::now()
+                .format("%H")
+                .to_string()
+                .parse()
+                .unwrap_or(12),
+        )
+        .into(),
+    );
 }
 
 fn render_graph(ui: &MainWindow, app: &Arc<App>) {
