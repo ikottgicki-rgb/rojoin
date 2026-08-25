@@ -3836,6 +3836,19 @@ fn wire_more_settings(ui: &MainWindow, app: &Arc<App>) {
     {
         let app = app.clone();
         let weak = ui.as_weak();
+        ui.on_graph_range_changed(move |i| {
+            let ui = weak.unwrap();
+            {
+                let mut cfg = app.config.lock().unwrap();
+                cfg.settings.playtime_range = i;
+                let _ = cfg.save();
+            }
+            render_graph(&ui, &app);
+        });
+    }
+    {
+        let app = app.clone();
+        let weak = ui.as_weak();
         ui.on_set_show_playtime_graph(move |v| {
             let ui = weak.unwrap();
             {
@@ -4226,7 +4239,7 @@ fn render_profile_stats(ui: &MainWindow, app: &Arc<App>, user_id: i64) {
     }
 
     let now = chrono::Utc::now().timestamp();
-    let g = ad::build_graph(&sessions, window, now);
+    let g = ad::build_graph(&sessions, window, 0, now);
 
     ui.set_profile_has_stats(true);
     ui.set_profile_graph_segments(ad::model(g.segments));
@@ -4666,7 +4679,21 @@ fn render_graph(ui: &MainWindow, app: &Arc<App>) {
     ui.set_show_graph(cfg.settings.show_playtime_graph);
 
     let window = cfg.retention_days().unwrap_or(90).min(90);
-    let g = ad::build_graph(cfg.sessions(), window, chrono::Utc::now().timestamp());
+    let now = chrono::Utc::now().timestamp();
+
+    // Offer only the ranges the data has earned, and remember the choice.
+    let reach = cfg
+        .sessions()
+        .iter()
+        .map(|s| s.start)
+        .min()
+        .map(|first| (now - first).max(0))
+        .unwrap_or(0);
+    let ranges = ad::playtime_ranges(reach);
+    let pick = (cfg.settings.playtime_range as usize).min(ranges.len().saturating_sub(1));
+    let choice = ranges.get(pick).map(|(_, d)| *d).unwrap_or(0);
+
+    let g = ad::build_graph(cfg.sessions(), window, choice, now);
     drop(cfg);
 
     ui.set_graph_segments(ad::model(g.segments));
@@ -4676,6 +4703,8 @@ fn render_graph(ui: &MainWindow, app: &Arc<App>) {
     ui.set_graph_total(g.total.into());
     ui.set_graph_range(g.range.into());
     ui.set_graph_empty(g.empty);
+    ui.set_graph_ranges(ad::strings(ranges.iter().map(|(l, _)| l.clone()).collect()));
+    ui.set_graph_range_index(pick as i32);
 }
 
 fn render_library(ui: &MainWindow, app: &Arc<App>) {

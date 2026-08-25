@@ -54,6 +54,9 @@ export component HomeScreen inherits Rectangle {
     in property <string> graph_total;
     in property <string> graph_range;
     in property <bool> graph_empty: false;
+    in property <[string]> graph_ranges: ["All time"];
+    in-out property <int> graph_range_index: 0;
+    callback graph_range_changed(int);
 
     callback open(string);
     callback play(string);
@@ -108,6 +111,9 @@ export component HomeScreen inherits Rectangle {
                     total_label: root.graph_total;
                     range_label: root.graph_range;
                     empty: root.graph_empty;
+                    ranges: root.graph_ranges;
+                    range_index <=> root.graph_range_index;
+                    range_changed(i) => { root.graph_range_changed(i); }
                 }
             }
 

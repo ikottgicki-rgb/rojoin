@@ -207,6 +207,9 @@ pub struct Settings {
     /// Start with the session. On by default.
     #[serde(default = "yes")]
     pub autostart: bool,
+    /// Chosen playtime range, as an index into the offered list.
+    #[serde(default)]
+    pub playtime_range: i32,
     /// History chart style: 0 bars, 1 line.
     #[serde(default)]
     pub history_style: i32,
@@ -255,6 +258,7 @@ impl Default for Settings {
             track_friend_playtime: true,
             close_to_tray: true,
             autostart: true,
+            playtime_range: 0,
             history_style: 0,
             autostart_applied: false,
         }

@@ -1,4 +1,5 @@
 import { Theme, Space, Type, Motion } from "theme.slint";
+import { Segmented } from "components.slint";
 
 /// One coloured block in a stacked column.
 ///
@@ -43,6 +44,10 @@ export component PlaytimeGraph inherits Rectangle {
     in property <string> total_label;
     in property <string> range_label;
     in property <bool> empty: false;
+    /// Range buttons, offered only when the data can fill them.
+    in property <[string]> ranges: ["All time"];
+    in-out property <int> range_index: 0;
+    callback range_changed(int);
 
     /// Drives the grow-in. Animated from 0 so the columns rise out of the
     /// baseline instead of appearing fully formed.
@@ -89,6 +94,15 @@ export component PlaytimeGraph inherits Rectangle {
             }
 
             Rectangle { horizontal-stretch: 1; }
+
+            if root.ranges.length > 1: VerticalLayout {
+                alignment: center;
+                Segmented {
+                    options: root.ranges;
+                    current <=> root.range_index;
+                    changed(i) => { root.range_changed(i); }
+                }
+            }
 
             VerticalLayout {
                 alignment: center;

@@ -310,7 +310,7 @@ fn seed_profile_stats(ui: &MainWindow) {
 
     let now = chrono::Utc::now().timestamp();
     let sessions = fake_sessions(now, 11);
-    let g = ad::build_graph(&sessions, 14, now);
+    let g = ad::build_graph(&sessions, 14, 0, now);
 
     ui.set_profile_has_stats(true);
     ui.set_profile_graph_segments(ad::model(g.segments));
@@ -410,7 +410,7 @@ fn seed_graph(ui: &MainWindow) {
         // Deterministic but uneven, so the columns do not all look the same.
         fake_sessions(now, 7)
     };
-    let g = ad::build_graph(&sessions, 14, now);
+    let g = ad::build_graph(&sessions, 14, 0, now);
     ui.set_show_graph(true);
     ui.set_graph_segments(ad::model(g.segments));
     ui.set_graph_days(ad::model(g.days));

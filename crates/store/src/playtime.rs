@@ -360,6 +360,24 @@ fn day_label(midnight: i64) -> String {
         .unwrap_or_default()
 }
 
+/// Hours elapsed since local midnight, for a "today" view.
+pub fn hours_today(now: i64) -> i64 {
+    ((now - local_midnight(now)) / 3600 + 1).clamp(1, 24)
+}
+
+/// Drop leading buckets with nothing in them.
+///
+/// Interior gaps are kept — a quiet Tuesday between two busy days is real
+/// information — but empty columns *before* anything was ever recorded are just
+/// blank space claiming the app was watching when it was not.
+pub fn trim_leading_empty(mut buckets: Vec<DayBucket>) -> Vec<DayBucket> {
+    let first = buckets.iter().position(|b| b.total_secs > 0);
+    match first {
+        Some(0) | None => buckets,
+        Some(i) => buckets.split_off(i),
+    }
+}
+
 /// Days between two instants, for "tracking since" style copy.
 pub fn days_between(from: i64, to: i64) -> i64 {
     (local_midnight(to) - local_midnight(from)) / 86_400 + 1

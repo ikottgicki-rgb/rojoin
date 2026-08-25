@@ -66,6 +66,9 @@ export component MainWindow inherits Window {
     in property <string> graph_total;
     in property <string> graph_range;
     in property <bool> graph_empty: true;
+    in property <[string]> graph_ranges: ["All time"];
+    in-out property <int> graph_range_index: 0;
+    callback graph_range_changed(int);
     in property <bool> track_friend_playtime: true;
     in property <int> retention_choice: 1;
     in property <bool> profile_has_stats: false;
@@ -663,6 +666,9 @@ export component MainWindow inherits Window {
                             graph_total: root.graph_total;
                             graph_range: root.graph_range;
                             graph_empty: root.graph_empty;
+                            graph_ranges: root.graph_ranges;
+                            graph_range_index <=> root.graph_range_index;
+                            graph_range_changed(i) => { root.graph_range_changed(i); }
                             unpin(id) => { root.unpin_game(id); }
                             remove_recent(u) => { root.hide_recent(u); }
                             open(id) => { root.open_game(id); }

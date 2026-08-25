@@ -653,6 +653,25 @@ const TINTS: usize = 6;
 /// its rank within each day. That is the difference between a chart you can read
 /// and a kaleidoscope: a game keeps one colour from one column to the next, so
 /// the eye can follow it.
+/// Range buttons for the playtime graph, earned by how much has been recorded.
+///
+/// Returns `(label, days)` where `1` is today, and `0` means everything.
+pub fn playtime_ranges(reach_secs: i64) -> Vec<(String, i64)> {
+    let days = reach_secs / 86_400;
+    let mut out = vec![("Today".to_string(), 1i64)];
+
+    if days >= 2 {
+        out.push(("Week".into(), 7));
+    }
+    if days >= 8 {
+        out.push(("Month".into(), 30));
+    }
+    if days >= 1 {
+        out.push(("All time".into(), 0));
+    }
+    out
+}
+
 /// Build the chart, choosing a window that fits the data.
 ///
 /// The window used to be the retention setting — ninety days, always. One
@@ -667,6 +686,8 @@ const TINTS: usize = 6;
 pub fn build_graph(
     sessions: &[rojoin_store::playtime::PlaySession],
     retention_days: u32,
+    // `choice`: 1 = today, 0 = all time, otherwise a day count.
+    choice: i64,
     now: i64,
 ) -> GraphModel {
     use rojoin_store::playtime;
@@ -682,20 +703,28 @@ pub fn build_graph(
         .map(|first| (now - first).max(0))
         .unwrap_or(0);
 
-    let hourly = !sessions.is_empty() && reach < 2 * 86_400;
+    // "Today" is always hourly; otherwise hours only while the data is short
+    // enough that days would be a single column.
+    let hourly = choice == 1 || (!sessions.is_empty() && choice == 0 && reach < 2 * 86_400);
 
     let buckets = if hourly {
-        // Enough hours to reach the oldest session, plus a little context.
-        let hours = ((reach / 3600) + 2).clamp(6, 48);
+        let hours = if choice == 1 {
+            playtime::hours_today(now)
+        } else {
+            ((reach / 3600) + 2).clamp(6, 48)
+        };
         playtime::hourly(sessions, hours, now)
     } else {
-        let days = if sessions.is_empty() {
-            7
-        } else {
-            (((reach / 86_400) + 2) as u32).min(retention_days.max(1))
+        let days = match choice {
+            0 if sessions.is_empty() => 7,
+            0 => (((reach / 86_400) + 2) as u32).min(retention_days.max(1)),
+            n => (n as u32).min(retention_days.max(1)),
         };
         playtime::daily(sessions, days, now)
     };
+
+    // Blank columns before anything was ever recorded are not information.
+    let buckets = playtime::trim_leading_empty(buckets);
     let ceiling = playtime::axis_ceiling_secs(&buckets);
     let overall = playtime::totals(sessions);
 
@@ -735,7 +764,10 @@ pub fn build_graph(
 
     // Label every Nth column. Ninety of them at once produced "W... T... S...S..."
     // across the axis, which is noise pretending to be information.
-    let stride = (buckets.len() / 12).max(1);
+    // Rounded *up*: flooring gave sixteen columns a stride of one, so every
+    // one got a label — the smear this is meant to prevent, just at a smaller
+    // scale than the ninety-column case that prompted it.
+    let stride = ((buckets.len() + 11) / 12).max(1);
 
     let day_rows: Vec<crate::GraphDay> = buckets
         .iter()
@@ -813,7 +845,7 @@ mod graph_tests {
 
     #[test]
     fn an_empty_history_reports_empty() {
-        let g = build_graph(&[], 7, now());
+        let g = build_graph(&[], 7, 0, now());
         assert!(g.empty);
         assert!(g.segments.is_empty());
         assert_eq!(g.days.len(), 7, "the axis still spans the window");
@@ -827,6 +859,7 @@ mod graph_tests {
                 session(2, "Beta", now() - 3600, 1800),
             ],
             3,
+            0,
             now(),
         );
         assert!(!g.empty);
@@ -849,6 +882,7 @@ mod graph_tests {
                 session(1, "Alpha", now() - 3600, 1800),
             ],
             3,
+            0,
             now(),
         );
         let alpha: Vec<i32> = g
@@ -872,6 +906,7 @@ mod graph_tests {
                 session(1, "Big", now() - 3600, 7200),
             ],
             2,
+            0,
             now(),
         );
         let big = g.segments.iter().find(|s| s.name == "Big").unwrap();
@@ -884,7 +919,7 @@ mod graph_tests {
         let sessions: Vec<PlaySession> = (1..=9)
             .map(|i| session(i, &format!("G{i}"), now() - i * 600, 600 - i))
             .collect();
-        let g = build_graph(&sessions, 2, now());
+        let g = build_graph(&sessions, 2, 0, now());
         assert!(g.segments.iter().all(|s| s.tint < TINTS as i32));
         assert_eq!(g.legend.len(), TINTS, "legend stops at the palette size");
     }
@@ -893,13 +928,13 @@ mod graph_tests {
     fn a_hidden_game_is_labelled_rather_than_blank() {
         let mut s = session(0, "", now() - 3600, 1800);
         s.name = String::new();
-        let g = build_graph(&[s], 2, now());
+        let g = build_graph(&[s], 2, 0, now());
         assert!(g.segments.iter().any(|s| s.name == "Hidden game"));
     }
 
     #[test]
     fn zero_length_sessions_do_not_become_invisible_segments() {
-        let g = build_graph(&[session(1, "Alpha", now() - 60, 0)], 2, now());
+        let g = build_graph(&[session(1, "Alpha", now() - 60, 0)], 2, 0, now());
         assert!(g.segments.is_empty(), "a zero-length slice is not drawn");
     }
 }
@@ -929,6 +964,7 @@ mod graph_cap_tests {
                 session(3, "Gamma", now - 1800, 600),
             ],
             2,
+            0,
             now,
         );
         for day in 0..2 {
@@ -951,6 +987,7 @@ mod graph_cap_tests {
                 session(2, "Beta", now - 3600, 1800),
             ],
             1,
+            0,
             now,
         );
         let top = g.segments.iter().find(|s| s.top).unwrap();
@@ -965,7 +1002,7 @@ mod graph_cap_tests {
     #[test]
     fn every_slice_knows_its_day_for_the_hover_readout() {
         let now = 1_700_000_000;
-        let g = build_graph(&[session(1, "Alpha", now - 3600, 1800)], 3, now);
+        let g = build_graph(&[session(1, "Alpha", now - 3600, 1800)], 3, 0, now);
         assert!(g.segments.iter().all(|s| !s.day_label.is_empty()));
     }
 }
@@ -1567,7 +1604,7 @@ mod settings_search_tests {
             end: now - 960,
         }];
 
-        let g = build_graph(&s, 90, now);
+        let g = build_graph(&s, 90, 0, now);
         assert!(g.days.len() <= 48, "got {} columns", g.days.len());
         assert!(g.range.contains("hours"), "range said {:?}", g.range);
         assert!(!g.empty);
@@ -1587,9 +1624,11 @@ mod settings_search_tests {
             })
             .collect();
 
-        let g = build_graph(&s, 90, now);
+        let g = build_graph(&s, 90, 0, now);
         assert!(g.range.contains("days"), "range said {:?}", g.range);
-        assert!(g.days.len() >= 20 && g.days.len() <= 23, "got {}", g.days.len());
+        assert!(g.days.len() <= 23, "got {}", g.days.len());
+        // Leading empties are trimmed now, so the chart opens on real data.
+        assert!(g.days.first().unwrap().played, "chart starts on an empty column");
     }
 
     #[test]
@@ -1605,7 +1644,7 @@ mod settings_search_tests {
             })
             .collect();
 
-        let g = build_graph(&s, 30, now);
+        let g = build_graph(&s, 30, 0, now);
         assert!(g.days.len() <= 30, "got {} with 30-day retention", g.days.len());
     }
 
@@ -1622,9 +1661,16 @@ mod settings_search_tests {
             })
             .collect();
 
-        let g = build_graph(&s, 90, now);
+        let g = build_graph(&s, 90, 0, now);
+        // Roughly one label per dozen columns, whatever the column count works
+        // out to after trimming.
         let labelled = g.days.iter().filter(|d| !d.label.is_empty()).count();
-        assert!(labelled <= 14, "{labelled} labels is a smear");
+        let columns = g.days.len();
+        // The rule is "about a dozen labels, whatever the column count".
+        assert!(
+            labelled <= 12,
+            "{labelled} labels across {columns} columns is a smear"
+        );
         assert!(labelled >= 2, "should still be readable, got {labelled}");
     }
 
@@ -1638,13 +1684,13 @@ mod settings_search_tests {
             start: now - 5 * 86_400,
             end: now - 5 * 86_400 + 600,
         }];
-        let g = build_graph(&s, 90, now);
+        let g = build_graph(&s, 90, 0, now);
         assert!(g.days.iter().all(|d| !d.label.is_empty()));
     }
 
     #[test]
     fn no_sessions_still_yields_an_axis_rather_than_nothing() {
-        let g = build_graph(&[], 90, 1_700_000_000);
+        let g = build_graph(&[], 90, 0, 1_700_000_000);
         assert!(g.empty);
         assert!(!g.days.is_empty(), "an empty chart still needs an axis");
     }
@@ -1821,7 +1867,7 @@ mod stored_tests {
             end: yesterday_evening + 3600,
         }];
 
-        let g = build_graph(&s, 90, now);
+        let g = build_graph(&s, 90, 0, now);
         assert!(!g.empty, "the session fell outside its own chart");
         let played: usize = g.days.iter().filter(|d| d.played).count();
         assert!(played >= 1, "no column carries the session");
@@ -1837,7 +1883,7 @@ mod stored_tests {
             start: now - 5 * 86_400,
             end: now - 5 * 86_400 + 3600,
         }];
-        let g = build_graph(&s, 90, now);
+        let g = build_graph(&s, 90, 0, now);
         assert!(g.range.contains("days"), "range said {:?}", g.range);
         assert!(!g.empty);
     }
